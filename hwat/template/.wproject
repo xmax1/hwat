@@ -1,0 +1,27 @@
+
+base_project_dir: ~/projects
+base_server_project_dir: ~/projects
+project_exp_dirname: exp
+project_cfg_dirname: cfg
+
+"""
+- project_all
+    - .wproject
+    - maybe_put_all_your_data_here_idk
+    - some_other_project
+        - ...
+    - your_new_project
+        - exp
+            - some_exp
+            - exp_name
+                - exp_id
+                    - results_and_data_dump
+                - wanalysis.ipynb
+        - cfg
+            - pyfig_demo.py
+            - pyfig_some_other_user.py
+        - code
+            - mod (useful model templates from walle)
+        - run.py
+        - sweep.py
+"""
