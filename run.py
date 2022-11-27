@@ -1,7 +1,12 @@
 import wandb
 from pyfig import Pyfig
 
-c = Pyfig(remote=False, sweep=False)
+
+
+c = Pyfig(sweep=True)
+c.submit()
+
+
 
 run = wandb.init(  # not needed for sweep
     entity=c.entity,
