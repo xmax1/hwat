@@ -1,8 +1,24 @@
 
-from hwat import compute_r, compute_rvec, compute_emb
+from hwat import compute_r, compute_rvec
 
 from utils import * # bad practice - no you're bad practise :mic drop:
 
+def compute_emb(x, *, a=None, terms=[]):  
+    z = []  
+    if 'x' in terms:  
+        z += [x]  
+    if 'x_rlen' in terms:  
+        z += [jnp.linalg.norm(x, axis=-1, keepdims=True)]  
+    if 'xa' in terms:  
+        z += [compute_rvec(x, a)]  
+    if 'xa_rlen' in terms:  
+        z += [compute_r(x, a)]
+    if 'xx' in terms:
+        z += [compute_r(x, x)]
+    if 'xx_rlen' in terms:
+        z += [compute_rvec(x, x)]
+    return jnp.concatenate(z, axis=-1)
+    
 class Pyfig(Sub):
 
     seed:               int     = 808017424 # grr
@@ -20,16 +36,12 @@ class Pyfig(Sub):
     half_precision:     bool    = True
     dtype:              str     = 'f32'
     n_step:             int     = 1000
-
-    af:                 str     = 'tanh' # activation function
-    n_layer:            int     = 3
     
     class data(Sub):
         b_size: int  = 16
         n_e: int
         n_u: int
         n_d: int = property(lambda _: _.n_e-_.n_u)
-        cache      = False
 
     class model(Sub):
         n_sv: int       = 16
@@ -38,7 +50,7 @@ class Pyfig(Sub):
         n_fb_out: int   = property(lambda _: _.n_sv*3+_.n_pv*2)
         n_det: int      = 1
 
-        class af:
+        class af(Sub):
             tanh = nn.tanh
 
         af_fb: Callable     = af.tanh
@@ -47,22 +59,6 @@ class Pyfig(Sub):
 
         terms_s_emb = ['x_rlen']
         terms_p_emb = ['xx']
-
-        def compute_emb(x, *, a=None, terms=[]):
-            z = []
-            if 'x' in terms:
-                z += [x]
-            if 'x_rlen' in terms:
-                z += [jnp.linalg.norm(x, axis=-1, keepdims=True)]
-            if 'xa' in terms:
-                z += [compute_rvec(x, a)]
-            if 'xa_rlen' in terms:
-                z += [compute_r(x, a)]
-            if 'xx' in terms:
-                z += [compute_r(x, x)]
-            if 'xx_rlen' in terms:
-                z += [compute_rvec(x, x)]
-            return jnp.concatenate(z, axis=-1)
 
         compute_s_emb: Callable = \
             property(lambda _: partial(compute_emb(terms=_.terms_s_emb)))
@@ -111,8 +107,8 @@ class Pyfig(Sub):
         cpus_per_task   = 1     
         time            = '0-12:00:00'     # D-HH:MM:SS
         gres            = 'gpu:RTX3090:1'
-        output          = property(lambda _: _.parent.TMP)/'o-%j.out'
-        error           = property(lambda _: _.parent.TMP)/'e-%j.err'
+        output          = property(lambda _: _.parent.TMP /'o-%j.out')
+        error           = property(lambda _: _.parent.TMP /'e-%j.err')
         job_name        = property(lambda _: _.parent.exp_name)  # this does not call the instance it is in
         sbatch          = property(lambda _: f""" 
             module purge 
@@ -149,10 +145,22 @@ class Pyfig(Sub):
     _sys_arg:       list = sys.argv[1:]
     _submit_state:  int = -1
 
-    def __init__(_i,args:dict={},cap=40,wandb_mode='online',notebook=False):
-        super().__init__()
-        _i.__safe_init__()
-
+    def __init__(_i,args:dict={},cap=40,wandb_mode='online', debug=False):
+        _i.debug = debug
+        super().__init__(_i, debug)
+        print("HEREHHERE")
+        cls_d = dict(_i.__class__.__dict__)
+        sub_cls = {k:v for k,v in cls_d.items() if isinstance(v, type)}
+        print(len(sub_cls))
+        # [setattr(_i,k,v(parent=_i,debug=_i.debug)) for k,v in sub_cls.items()]
+        
+        for k,v in cls_d.items():
+            if isinstance(v, type):
+                _i.debug_print(k, v)
+            if issubclass(type(v), Sub):
+                print('sub')
+                _i.debug_print(k, v)
+            
         update_cls_with_dict(_i, args| cmd_to_dict(sys.argv[1:],_i.dict))
 
         wandb.init(

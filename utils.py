@@ -39,48 +39,59 @@ def debug_try(v: Any, fn):
         res = None
     return res
 
-def debug_print(k=None,v=None,*,seq:list=None):
-    seq = seq or [(k,v)]
-    for k,v in seq:
-        call = debug_try(v, callable)
-        shape = debug_try(v, partial(hasattr, __name='shape'))
-        print(f'{k}: Type:{type(v)} Callable:{call} Shape:{shape}')
+
 
 class Sub:
     _ignore_attr = ['parent','protected','dict','cmd']
-    
-    def __init__(_i, parent=None):
+
+    def __init__(_i, parent=None, debug=False):
+        # super().__init__(_i, parent=parent, debug=debug)
+        
+        _i.debug = debug
+        print(_i, _i.debug)
         _i.parent = parent
         _i.__safe_init__()
 
-    def __safe_init__(_i, debug=False):
+    def __safe_init__(_i,):
+        print('safe')
         cls_d = dict(_i.__class__.__dict__)
         sub_cls = {k:v for k,v in cls_d.items() if isinstance(v, type)}
         [cls_d.pop(k) for k in sub_cls.keys()]
+        
         for k,v in cls_d.items():
             
-            if debug: debug_print(k, v)
+            _i.debug_print(k, v)
             
             # !
             if k.startswith('__') or k in Sub._ignore_attr or isinstance(v, property):
                 continue 
-            # if not isinstance(v, dict):
-            #     if callable(v):
-            #         continue
+            if not isinstance(v, dict):
+                if callable(v):
+                    continue
 
-            if debug: debug_print()
+            _i.debug_print(k, v)
 
-            setattr(_i, k, v)
-        [setattr(_i, k, v(parent=_i)) for k,v in sub_cls.items()]
+            setattr(_i,k,v)
 
+        _i.debug_print(seq=[(k,v) for k,v in sub_cls.items()])
+        
     @property
     def dict(_i,):
         d = cls_to_dict(_i, Sub._ignore_attr)
         for k,v in d.items():
             if issubclass(type(v), Sub):
+
                 d[k] = cls_to_dict(v, Sub._ignore_attr)
         return d
 
+    def debug_print(_i,k=None,v=None,*,seq:list=None):
+        if _i.debug:
+            seq = seq or [(k,v)]
+            for k,v in seq:
+                call = debug_try(v, callable)
+                shape = debug_try(v, partial(hasattr, __name='shape'))
+                print(f'{k}: Type:{type(v)} Callable:{call} Shape:{shape}')
+    
     def print(_i,):
         pprint(_i.dict)
 

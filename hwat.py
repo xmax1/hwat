@@ -10,6 +10,7 @@ import jax
 from jax import numpy as jnp
 from PIL import Image
 
+from jax import pmap
 from flax import jax_utils
 from flax.training import common_utils, train_state, dynamic_scale
 import optax
@@ -114,7 +115,6 @@ def compute_metric(d:dict):
 
 def compute_energy():
     
-
     return 
 
 
@@ -127,7 +127,6 @@ def init_walker(xu, xd):
     rng_u, rng_d = rnd.split(rng, 2)
     return jnp.concatenate([rnd.normal(rng_u, xu.shape), rnd.normal(rng_d, xd.shape)], axis=1)
 
-from jax import pmap
 
 class SampleState():
     """
