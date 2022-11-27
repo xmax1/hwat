@@ -32,6 +32,20 @@ this_dir = Path(__file__).parent
 
 ### momma bear
 
+def debug_try(v: Any, fn):
+    try:
+        res = fn(v)
+    except:
+        res = None
+    return res
+
+def debug_print(k=None,v=None,*,seq:list=None):
+    seq = seq or [(k,v)]
+    for k,v in seq:
+        call = debug_try(v, callable)
+        shape = debug_try(v, partial(hasattr, __name='shape'))
+        print(f'{k}: Type:{type(v)} Callable:{call} Shape:{shape}')
+
 class Sub:
     _ignore_attr = ['parent','protected','dict','cmd']
     
@@ -39,16 +53,23 @@ class Sub:
         _i.parent = parent
         _i.__safe_init__()
 
-    def __safe_init__(_i):
+    def __safe_init__(_i, debug=False):
         cls_d = dict(_i.__class__.__dict__)
         sub_cls = {k:v for k,v in cls_d.items() if isinstance(v, type)}
         [cls_d.pop(k) for k in sub_cls.keys()]
         for k,v in cls_d.items():
-            # print(k, type(v), callable(v))
-            if k.startswith('__') or k in Sub._ignore_attr:
-                continue # this was around because 'dicts are unhashable types'
-            if callable(v) or isinstance(v, property):
-                continue
+            
+            if debug: debug_print(k, v)
+            
+            # !
+            if k.startswith('__') or k in Sub._ignore_attr or isinstance(v, property):
+                continue 
+            # if not isinstance(v, dict):
+            #     if callable(v):
+            #         continue
+
+            if debug: debug_print()
+
             setattr(_i, k, v)
         [setattr(_i, k, v(parent=_i)) for k,v in sub_cls.items()]
 
