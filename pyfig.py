@@ -146,16 +146,14 @@ class Pyfig(Sub):
     env:                str     = 'dex'            # CONDA ENV
     commit_id:          str     = property(lambda _: _.get_commit_id())
     
-    _sys_arg: list = sys.argv[1:]
-    _submit_state: int = -1
+    _sys_arg:       list = sys.argv[1:]
+    _submit_state:  int = -1
 
     def __init__(_i,args:dict={},cap=40,wandb_mode='online',notebook=False):
         super().__init__()
         _i.__safe_init__()
 
-        update_cls_with_dict(_i,args)
-        if not notebook:
-            update_cls_with_dict(cmd_to_dict(sys.argv[1:],_i.dict))
+        update_cls_with_dict(_i, args| cmd_to_dict(sys.argv[1:],_i.dict))
 
         wandb.init(
             job_type    = _i.wandb.job_type,
