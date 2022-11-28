@@ -158,7 +158,7 @@ def create_compute_ke(model):
     def _compute_ke(params, x):
         
         params = maybe_put_param_in_dict(params)
-        
+
         n_b, n_e, _ = x.shape
         x = x.reshape(n_b, -1)
         n_jvp = x.shape[-1]
@@ -204,6 +204,7 @@ class SampleState(): # https://www.notion.so/HWAT-Docs-2bd230b570cc4814878edc007
     fn.apply << apply vs fn() << apply_fn"""
     
     # clean this to dataclass structure
+    # 99% sure to be distributed MUST be defined in a pmap
     def __init__(_i, 
         rng, 
         step        = 0, 

@@ -11,6 +11,9 @@ from ast import literal_eval
 import numpy as np
 import os
 
+import numpy as np
+from copy import copy
+
 this_dir = Path(__file__).parent
 
 ### debug things
