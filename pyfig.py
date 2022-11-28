@@ -1,4 +1,5 @@
-
+from utils import flat_any
+import inspect
 from typing import Callable
 from functools import reduce, partial
 from simple_slurm import Slurm
@@ -30,9 +31,9 @@ def compute_emb(x, *, a=None, terms=[]):
     if 'xa_rlen' in terms:  
         z += [compute_r(x, a)]
     if 'xx' in terms:
-        z += [compute_r(x, x)]
-    if 'xx_rlen' in terms:
         z += [compute_rvec(x, x)]
+    if 'xx_rlen' in terms:
+        z += [compute_r(x, x)]
     return jnp.concatenate(z, axis=-1)
 
 class af:
@@ -74,12 +75,14 @@ class Pyfig:
     half_precision:     bool    = True
     dtype:              str     = 'f32'
     n_step:             int     = 1000
-    
+		
     class data(Sub):
-        b_size: int  = 16
-        n_e: int = 10
-        n_u: int = 5
-        n_d: int = property(lambda _: _.n_e-_.n_u)
+        n_b:    int  = 16
+        n_e:    int = 4
+        n_u:    int = 2
+        n_d:    int = property(lambda _: _.n_e-_.n_u)
+        a:      jnp.ndarray = jnp.array([[0.0, 0.0, 0.0],])
+        a_z:    jnp.ndarray = jnp.array([4.,])
 
     class model(Sub):
         n_sv: int       = 16
@@ -238,7 +241,7 @@ class Pyfig:
             server_out = run_cmds_server(_i.server, _i.user, cmd, cwd=_i.server_project_path)
     
     @property
-    def d(_i, _ignore_attr=['d', 'cmd', 'submit', 'pass_arg']):
+    def d(_i, _ignore_attr=['d', 'cmd', 'submit', 'partial']):
         _d = {}
         for k,v in _i.__class__.__dict__.items():
             if k.startswith('_') or k in _ignore_attr:
@@ -253,9 +256,7 @@ class Pyfig:
     def _sub_cls(_i):
         return [v for v in _i.__dict__.values() if isinstance(v, Sub)]
 
-    def pass_arg(_i, f:Callable):
-        from utils import flat_any
-        import inspect
+    def partial(_i, f:Callable):
         d = flat_any(_i.d)
         d_k = inspect.signature(f.__init__).parameters.keys()
         d = {k:v for k,v in d.items() if k in d_k}
@@ -268,6 +269,9 @@ class Pyfig:
                     cls.__dict__[k] = copy(v)
                     _n += 1
         return (_n - len(d))==0
+
+    def summarise(_i):
+        return
 
 def dict_to_wandb(d:dict, parent='', _l:list=[])->dict:
     sep='.'

@@ -8,10 +8,29 @@ import random
 from typing import Any, Iterable
 import re
 from ast import literal_eval
-from pprint import pprint
 import numpy as np
+import os
 
 this_dir = Path(__file__).parent
+
+### debug things
+
+def debug(on=False):
+    if on:
+        os.environ['debug'] = 'debug'
+    else:
+        os.environ['debug'] = ''
+
+def wpr(d:dict):
+    if os.environ.get('debug') == 'debug':
+        for k,v in d.items():
+            typ = type(v) 
+            has_shape = hasattr(v, 'shape')
+            shape = v.shape if has_shape else None
+            dtype = v.dtype if hasattr(v, 'dtype') else None
+            mean = jnp.mean(v) if has_shape else v
+            std = jnp.std(v) if has_shape else None
+            print(k, f'\t mean={mean} \t std={std} \t shape={shape} \t dtype={dtype}') # \t type={typ}
 
 ### count things
 
