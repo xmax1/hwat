@@ -46,21 +46,19 @@ l1_norm_keep = lambda x: jnp.linalg.norm(x, axis=-1, keepdims=True)
 
 
 def compute_s_perm(x, x_p, p_mask_u, p_mask_d, n_u):
-    n_e, _ = x_p.shape
-    n_u_ish, _ = x.shape
-    n_d = n_e - n_u_ish
-    n_u = n_e - n_d
+    n_e, _, _ = x_p.shape
+    n_d = n_e - n_u
 
-    xu, xd = jnp.split(x, [n_u, n_d], axis=0)
-    mean_xu = jnp.mean(xu, axis=0, keepdims=True)
-    mean_xd = jnp.mean(xd, axis=0, keepdims=True)
+    xu, xd = jnp.split(x, [n_u,], axis=0)
+    mean_xu = jnp.repeat(jnp.mean(xu, axis=0, keepdims=True), n_e, axis=0)
+    mean_xd = jnp.repeat(jnp.mean(xd, axis=0, keepdims=True), n_e, axis=0)
 
     x_p = jnp.expand_dims(x_p, axis=0)
     sum_p_u = (p_mask_u * x_p).sum((1, 2)) / float(n_u)
     sum_p_d = (p_mask_d * x_p).sum((1, 2)) / float(n_d)
 
-    x = jnp.concatenate((x, mean_xu, mean_xd, sum_p_u, sum_p_d), axis=-1)
-    return jnp.split(x, [n_u, n_d], axis=0)
+    # wpr(dict(x=x, mean_xu=mean_xu, mean_xd=mean_xd, sum_p_u=sum_p_u, sum_p_d=sum_p_d))
+    return jnp.concatenate((x, mean_xu, mean_xd, sum_p_u, sum_p_d), axis=-1)
 
 def logabssumdet(orb_u, orb_d=None):
     

@@ -13,34 +13,6 @@ import numpy as np
 
 this_dir = Path(__file__).parent
 
-### momma bear
-
-def get_cls_dict(cls, ignore=[], _d={}):
-    for k,v in cls.__dict__.items():
-        if not (k.startswith('_') or k in ignore): 
-            if k in cls._children:
-                _d[k] = get_cls_dict(v, cls._ignore_attr)
-            else:
-                _d[k] = getattr(cls, k)
-    for k,v in cls.__class__.__dict__.items():
-        if not (k.startswith('_') or k in ignore):
-            if isinstance(v, property):
-                _d[k] = getattr(cls, k)
-    pprint(_d)
-    return _d
-
-
-# def get_cls_prop(cls:type,ignore=[],_d={}):
-#     for k,v in cls.__class__.__dict__.items():
-#         if (not (k.startswith('_') or k in ignore or issubclass(type(v), Sub))) \
-#             and :
-#                 _d[k] = getattr(cls, k)
-#     return _d
-
-def get_cls_sub_cls(cls:type):
-    return {k:v for k,v in cls.__dict__.items() \
-        if issubclass(type(v), Sub) or isinstance(v, type)}
-    
 ### count things
 
 def count_gpu() -> int: 
@@ -119,36 +91,9 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
             except:
                 _d[k] = str(v)
             print(f'Guessing type: {k} as {type(v)}')
+
+    print(_d)
     return _d
-
-def update_cls_with_dict(cls: Any, d:dict):
-    cls_all = [v for v in cls.__dict__.values() if issubclass(type(v), Sub)]
-    cls_all.extend([cls])
-    n_remain = len(d)
-    for k,v in d.items():
-        for _cls_assign in cls_all:            
-            if not hasattr(_cls_assign, k):
-                continue
-            else:
-                if isinstance(cls.__class__.__dict__[k], property):
-                    print('Tried to assign property, consider your life choices')
-                    continue
-                v = type(cls.__dict__)(v)
-                setattr(_cls_assign, k, v)
-                n_remain -= 1
-    return n_remain
-
-
-def dict_to_wandb(d:dict,parent_key:str='',sep:str ='.',items:list=[])->dict:
-    for k, v in d.items():
-        new_key = parent_key + sep + k if parent_key else k
-        if isinstance(v, dict): 
-            print(k,v)
-            items.extend(dict_to_wandb(v,new_key,items=items).items())
-        else:
-            if isinstance(v, Path):  v=str(v)
-            items.append((new_key, v))
-    return dict(items)
 
 ### run things
 
@@ -182,13 +127,13 @@ def flat_arr(v):
 def flat_list(lst_of_lst):
     return [lst for sublst in lst_of_lst for lst in sublst]
 
-def flat_dict(d:dict,items:list=[]):
+def flat_dict(d:dict,_l:list=[]):
     for k,v in d.items():
         if isinstance(v, dict):
-            items.extend(flat_dict(v, items=items).items())
+            _l.extend(flat_dict(v, _l=_l).items())
         else:
-            items.append((k, v))
-    return dict(items)
+            _l.append((k, v))
+    return dict(_l)
 
 def flat_any(v: list|dict|jnp.ndarray|np.ndarray):
     if isinstance(v, list):

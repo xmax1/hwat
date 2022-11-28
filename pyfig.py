@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 from pprint import pprint
 from copy import copy
-
+from typing import Any
 
 from jax import numpy as jnp
 from flax import linen as nn
@@ -15,14 +15,9 @@ from flax import linen as nn
 from hwat import compute_r, compute_rvec, create_masks
 
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum, iterate_folder
-from utils import dict_to_wandb, flat_dict, mkdir, update_cls_with_dict, cmd_to_dict
-from utils import get_cls_dict, debug_try
+from utils import flat_dict, mkdir, cmd_to_dict
 
-
-# Stop trying to share a class 
-# Give the subclasses a different dict operator 
-# That only refers to the class not the instance
-# Always edits the class in the case of the subclasses
+from hwat import compute_s_perm, compute_r, compute_rvec
 
 def compute_emb(x, *, a=None, terms=[]):  
     z = []  
@@ -40,33 +35,28 @@ def compute_emb(x, *, a=None, terms=[]):
         z += [compute_rvec(x, x)]
     return jnp.concatenate(z, axis=-1)
 
-class Sub:
-    _ignore_attr = ['parent','dict','cmd','debug_print','print']
-    @property
-    def dict(_i,):
-        cls_d = _i.__class__.__dict__
-        for k,v in cls_d.items():
-            if k.startswith('_'):
-                continue
-            _i.__dict__[k] = getattr(_i, k)
-        return _i.__dict__
-
-class af(Sub):
+class af:
     tanh = nn.tanh
 
-af_fb: Callable     = af.tanh
-af_fb_out: Callable = af.tanh
-af_pseudo: Callable = af.tanh
+class Sub:
+    _parent = None
 
-terms_s_emb = ['x_rlen']
-terms_p_emb = ['xx']
-
-compute_s_emb: Callable = \
-    property(lambda _: partial(compute_emb(terms=_.terms_s_emb)))
-compute_p_emb: Callable = \
-    property(lambda _: partial(compute_emb(terms=_.terms_p_emb)))
+    def __init__(_i, parent=None):
+        _i._parent = parent
     
-        
+    @property
+    def d(_i, ignore=['d', 'cmd', 'masks', '_parent', 'parent']):
+        _d={} # becomes class variable in call line, accumulates
+        for k,v in _i.__class__.__dict__.items():
+            if k.startswith('_') or k in ignore:
+                continue
+            if isinstance(v, partial): 
+                v = _i.__dict__[k]   # if getattr then calls the partial, which we don't want
+            else:
+                v = getattr(_i, k)
+            _d[k] = copy(v)
+        return _d
+
 class Pyfig:
 
     seed:               int     = 808017424 # grr
@@ -87,10 +77,9 @@ class Pyfig:
     
     class data(Sub):
         b_size: int  = 16
-        n_e: int = 7
-        n_u: int = 14
+        n_e: int = 10
+        n_u: int = 5
         n_d: int = property(lambda _: _.n_e-_.n_u)
-
 
     class model(Sub):
         n_sv: int       = 16
@@ -99,6 +88,15 @@ class Pyfig:
         n_det: int      = 1
         n_fb_out: int   = property(lambda _: _.n_sv*3+_.n_pv*2)
 
+        terms_s_emb = ['x_rlen']
+        terms_p_emb = ['xx']
+        compute_s_emb = \
+            property(lambda _: partial(compute_emb, terms=_.terms_s_emb))
+        compute_p_emb = \
+            property(lambda _: partial(compute_emb, terms=_.terms_p_emb))
+        compute_s_perm: partial = \
+            property(lambda _: partial(compute_s_perm, n_u=_._parent.data.n_u))
+    
     class opt(Sub):
         optimizer   = 'Adam'
         beta1       = 0.9
@@ -141,23 +139,23 @@ class Pyfig:
         cpus_per_task   = 1     
         time            = '0-12:00:00'     # D-HH:MM:SS
         gres            = 'gpu:RTX3090:1'
-        output          = property(lambda _: _.parent.TMP /'o-%j.out')
-        error           = property(lambda _: _.parent.TMP /'e-%j.err')
-        job_name        = property(lambda _: _.parent.exp_name)  # this does not call the instance it is in
+        output          = property(lambda _: _._parent.TMP /'o-%j.out')
+        error           = property(lambda _: _._parent.TMP /'e-%j.err')
+        job_name        = property(lambda _: _._parent.exp_name)  # this does not call the instance it is in
         sbatch          = property(lambda _: f""" 
             module purge 
             source ~/.bashrc 
             module load GCC 
             module load CUDA/11.4.1 
             module load cuDNN/8.2.2.26-CUDA-11.4.1 
-            conda activate {_.parent.env} 
+            conda activate {_._parent.env} 
             export MKL_NUM_THREADS=1 
             export NUMEXPR_NUM_THREADS=1 
             export OMP_NUM_THREADS=1 
             export OPENBLAS_NUM_THREADS=1
             pwd
             nvidia-smi
-            mv_cmd = f'mv {_.parent.TMP}/o-$SLURM_JOB_ID.out {_.parent.TMP}/e-$SLURM_JOB_ID.err $out_dir' 
+            mv_cmd = f'mv {_._parent.TMP}/o-$SLURM_JOB_ID.out {_._parent.TMP}/e-$SLURM_JOB_ID.err $out_dir' 
     """)
 
     exp_id:             str     = gen_alphanum(n=7)
@@ -174,45 +172,44 @@ class Pyfig:
     git_remote:         str     = 'origin'      
     git_branch:         str     = 'main'        
     env:                str     = 'dex'            # CONDA ENV
-    commit_id:          str     = property(lambda _: _.get_commit_id())
     
-    sys_arg:       list = sys.argv[1:]
     submit_state:  int = -1
+    _sys_arg:       list = sys.argv[1:]
 
-    def __init__(_i,args:dict={},cap=40,wandb_mode='online', debug=False):
+    def __init__(_i,args:dict={},cap=40,wandb_mode='online',debug=False):
         
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
-                setattr(_i, k, v())
+                setattr(_i, k, v(_i))
 
-        n_remain = update_cls_with_dict(_i,args|cmd_to_dict(sys.argv[1:],_i.dict))
-        print('N remaining assign', n_remain)
+        assert _i.merge(args|cmd_to_dict(sys.argv[1:],_i.d))
 
-        wandb.init(
-            job_type    = _i.wandb.job_type,
-            entity      = _i.wandb.entity,
-            project     = _i.project,
-            dir         = _i.exp_path,
-            config      = dict_to_wandb(_i.dict),
-            mode        = wandb_mode,
-            settings=wandb.Settings(start_method='fork'), # idk y this is issue, don't change
-        )
+        # wandb.init(
+        #     job_type    = _i.wandb.job_type,
+        #     entity      = _i.wandb.entity,
+        #     project     = _i.project,
+        #     dir         = _i.exp_path,
+        #     config      = dict_to_wandb(_i.d),
+        #     mode        = wandb_mode,
+        #     settings=wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+        # )
 
         if _i.submit_state > 0:
+            exit('whoop')
             n_job_running = run_cmds([f'squeue -u {_i.user} -h -t pending,running -r | wc -l'])
             if n_job_running > cap:
                 exit(f'There are {n_job_running} on the submit cap is {cap}')
 
-            _slurm = Slurm(**_i.slurm.dict)
+            _slurm = Slurm(**_i.slurm.d)
 
-            # n_run, _i.submit_state = _i.submit_state, 0            
-            # for _ in range(n_run):
-            #     _slurm.sbatch(_i.slurm.sbatch 
-            #     + f'out_dir={(mkdir(_i.exp_path/"out"))} {_i.cmd} | tee $out_dir/py.out date "+%B %V %T.%3N" ')
+            n_run, _i.submit_state = _i.submit_state, 0            
+            for _ in range(n_run):
+                _slurm.sbatch(_i.slurm.sbatch 
+                + f'out_dir={(mkdir(_i.exp_path/"out"))} {_i.cmd} | tee $out_dir/py.out date "+%B %V %T.%3N" ')
 
     @property
     def cmd(_i,):
-        d = flat_dict(_i.dict)
+        d = flat_dict(_i.d)
         return ' '.join([f' --{k}  {str(v)} ' for k,v in d.items()])
 
     @property
@@ -227,7 +224,7 @@ class Pyfig:
             if sweep:
                 _i.sweep_id = wandb.sweep(
                     env     = f'conda activate {_i.env};',
-                    sweep   = _i.sweep.dict, 
+                    sweep   = _i.sweep.d, 
                     program = _i.run_path,
                     project = _i.project,
                     name    = _i.exp_name,
@@ -235,22 +232,50 @@ class Pyfig:
                 )
                 _i.submit_state *= _i.sweep.n_sweep
             
+            exit('whoop')
             local_out = run_cmds(['git add .', f'git commit -m {commit_msg}', 'git push'], cwd=_i.project_path)
-
             cmd = f'python -u {_i.run_path} ' + (commit_id or _i.commit_id) + _i.cmd
             server_out = run_cmds_server(_i.server, _i.user, cmd, cwd=_i.server_project_path)
     
     @property
-    def dict(_i):
+    def d(_i, _ignore_attr=['d', 'cmd', 'submit', 'pass_arg']):
+        _d = {}
         for k,v in _i.__class__.__dict__.items():
-            if k.startswith('_') or k=='dict':
+            if k.startswith('_') or k in _ignore_attr:
                 continue
-            _i.__dict__[k] = copy(v)
-        
-        for k,v in _i.__dict__.items():
-            if k.startswith('_') or k=='dict':
-                continue
+            v = getattr(_i, k)
             if isinstance(v, Sub):
-                v = v.dict
-            _i.__dict__[k] = copy(v)
-        return _i.__dict__
+                v = v.d
+            _d[k] = v
+        return _d
+
+    @property
+    def _sub_cls(_i):
+        return [v for v in _i.__dict__.values() if isinstance(v, Sub)]
+
+    def pass_arg(_i, f:Callable):
+        from utils import flat_any
+        import inspect
+        d = flat_any(_i.d)
+        d_k = inspect.signature(f.__init__).parameters.keys()
+        d = {k:v for k,v in d.items() if k in d_k}
+        return f(**d)
+
+    def merge(_i, d:dict, _n=0):
+        for k,v in d.items():
+            for cls in [_i]+_i._sub_cls:
+                if k in cls.__dict__:
+                    cls.__dict__[k] = copy(v)
+                    _n += 1
+        return (_n - len(d))==0
+
+def dict_to_wandb(d:dict, parent='', _l:list=[])->dict:
+    sep='.'
+    for k, v in d.items():
+        k_1 = parent + sep + k if parent else k
+        if isinstance(v, dict): 
+            _l.extend(dict_to_wandb(v, k_1, _l=_l).items())
+        else:
+            if isinstance(v, Path):  v=str(v)
+            _l.append((k_1, v))
+    return dict(_l)
