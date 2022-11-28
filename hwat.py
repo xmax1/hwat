@@ -85,6 +85,7 @@ def logabssumdet(orb_u, orb_d=None):
     return log_psi, sgn_psi
 
 def create_masks(n_electrons, n_up):
+    import numpy as jnp
     ups = jnp.ones(n_electrons)
     ups[n_up:] = 0.
     downs = (ups-1.)*-1.

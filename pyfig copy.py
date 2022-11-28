@@ -6,8 +6,6 @@ import wandb
 from pathlib import Path
 import sys
 from pprint import pprint
-from copy import copy
-
 
 from jax import numpy as jnp
 from flax import linen as nn
@@ -15,9 +13,8 @@ from flax import linen as nn
 from hwat import compute_r, compute_rvec, create_masks
 
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum, iterate_folder
-from utils import dict_to_wandb, flat_dict, mkdir, update_cls_with_dict, cmd_to_dict
+from utils import dict_to_wandb, flat_dict, mkdir
 from utils import get_cls_dict, debug_try
-
 
 # Stop trying to share a class 
 # Give the subclasses a different dict operator 
@@ -40,16 +37,75 @@ def compute_emb(x, *, a=None, terms=[]):
         z += [compute_rvec(x, x)]
     return jnp.concatenate(z, axis=-1)
 
+from copy import copy
+
+class _Dict:
+    @property
+    def dict(_i, _d={}):
+        for k,v in _i.__class__.__dict__.items():
+            if k.startswith('_') or k in _i._ignore_attr or isinstance(v, property):
+                continue
+            _d[k] = copy(v)
+        for k,v in _i.__dict__.items():
+            if k.startswith('_') or k in _i._ignore_attr:
+                continue
+            if isinstance(v, property):
+                _d[k] = copy(v)     
+        return _d
+
 class Sub:
     _ignore_attr = ['parent','dict','cmd','debug_print','print']
+
+    def __init__(_i, parent=None, debug=False):
+        _i.debug = debug
+        _i.parent = parent
+        _i._children = []
+
+        for k,v in _i.__class__.__dict__.items():
+            if k.startswith('_') or k in _i._ignore_attr or isinstance(v, property):
+                continue
+            if isinstance(v, type):
+                _i._children.append(k)
+                v = v(parent=_i, debug=debug)
+            setattr(_i, k, v)
+        
+        print(_i, _i._children)    
+    
+    def debug_print(_i,k=None,v=None,*,seq:list=None):
+        if _i.debug:
+            seq = seq or [(k,v)]
+            for k,v in seq:
+                call = debug_try(v, callable)
+                shape = debug_try(v, partial(hasattr, __name='shape'))
+                print(f'{k}: Type:{type(v)} Callable:{call} Shape:{shape} ')
+
+
+    def print(_i,):
+        pprint(_i.dict)
+
     @property
     def dict(_i,):
-        cls_d = _i.__class__.__dict__
-        for k,v in cls_d.items():
-            if k.startswith('_'):
-                continue
-            _i.__dict__[k] = getattr(_i, k)
-        return _i.__dict__
+        return get_dict(_i)
+        
+
+def get_dict(cls):
+    cls_d = cls.__class__.__dict__
+    for k,v in cls_d.items():
+        if k.startswith('_') or k in cls._ignore_attr:
+            continue
+        try:
+            if k in cls.__dict__['_children']:
+                cls.__dict__[k] = get_dict(v)
+            else:
+                cls.__dict__[k] = getattr(cls, k)
+        except:
+            print('this')
+            print(dir(cls))
+            exit()
+    return cls.__dict__
+
+
+
 
 class af(Sub):
     tanh = nn.tanh
@@ -67,7 +123,7 @@ compute_p_emb: Callable = \
     property(lambda _: partial(compute_emb(terms=_.terms_p_emb)))
     
         
-class Pyfig:
+class Pyfig(Sub):
 
     seed:               int     = 808017424 # grr
     project_root:       str     = Path().home()/'projects'
@@ -179,36 +235,36 @@ class Pyfig:
     sys_arg:       list = sys.argv[1:]
     submit_state:  int = -1
 
-    def __init__(_i,args:dict={},cap=40,wandb_mode='online', debug=False):
+    def __init__(_i, args:dict={},cap=40,wandb_mode='online', debug=False):
+        super().__init__(parent=None, debug=debug)
         
-        for k,v in Pyfig.__dict__.items():
-            if isinstance(v, type):
-                setattr(_i, k, v())
+        print(type(_i.data))
 
-        n_remain = update_cls_with_dict(_i,args|cmd_to_dict(sys.argv[1:],_i.dict))
-        print('N remaining assign', n_remain)
 
-        wandb.init(
-            job_type    = _i.wandb.job_type,
-            entity      = _i.wandb.entity,
-            project     = _i.project,
-            dir         = _i.exp_path,
-            config      = dict_to_wandb(_i.dict),
-            mode        = wandb_mode,
-            settings=wandb.Settings(start_method='fork'), # idk y this is issue, don't change
-        )
+        # n_remain = update_cls_with_dict(_i,args|cmd_to_dict(sys.argv[1:],_i.dict))
+        # print('N remaining assign', n_remain)
 
-        if _i.submit_state > 0:
-            n_job_running = run_cmds([f'squeue -u {_i.user} -h -t pending,running -r | wc -l'])
-            if n_job_running > cap:
-                exit(f'There are {n_job_running} on the submit cap is {cap}')
+        # wandb.init(
+        #     job_type    = _i.wandb.job_type,
+        #     entity      = _i.wandb.entity,
+        #     project     = _i.project,
+        #     dir         = _i.exp_path,
+        #     config      = dict_to_wandb(_i.dict),
+        #     mode        = wandb_mode,
+        #     settings=wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+        # )
 
-            _slurm = Slurm(**_i.slurm.dict)
+        # if _i.submit_state > 0:
+        #     n_job_running = run_cmds([f'squeue -u {_i.user} -h -t pending,running -r | wc -l'])
+        #     if n_job_running > cap:
+        #         exit(f'There are {n_job_running} on the submit cap is {cap}')
 
-            # n_run, _i.submit_state = _i.submit_state, 0            
-            # for _ in range(n_run):
-            #     _slurm.sbatch(_i.slurm.sbatch 
-            #     + f'out_dir={(mkdir(_i.exp_path/"out"))} {_i.cmd} | tee $out_dir/py.out date "+%B %V %T.%3N" ')
+        #     _slurm = Slurm(**_i.slurm.dict)
+
+        #     n_run, _i.submit_state = _i.submit_state, 0            
+        #     for _ in range(n_run):
+        #         _slurm.sbatch(_i.slurm.sbatch 
+        #         + f'out_dir={(mkdir(_i.exp_path/"out"))} {_i.cmd} | tee $out_dir/py.out date "+%B %V %T.%3N" ')
 
     @property
     def cmd(_i,):
@@ -239,18 +295,3 @@ class Pyfig:
 
             cmd = f'python -u {_i.run_path} ' + (commit_id or _i.commit_id) + _i.cmd
             server_out = run_cmds_server(_i.server, _i.user, cmd, cwd=_i.server_project_path)
-    
-    @property
-    def dict(_i):
-        for k,v in _i.__class__.__dict__.items():
-            if k.startswith('_') or k=='dict':
-                continue
-            _i.__dict__[k] = copy(v)
-        
-        for k,v in _i.__dict__.items():
-            if k.startswith('_') or k=='dict':
-                continue
-            if isinstance(v, Sub):
-                v = v.dict
-            _i.__dict__[k] = copy(v)
-        return _i.__dict__

@@ -1,30 +1,13 @@
 from pathlib import Path
-import jax
 from jax import numpy as jnp
-from PIL import Image
-
-from flax import jax_utils
-from flax.training import common_utils, train_state, dynamic_scale
-import optax
 import paramiko
-import sys
 import subprocess
-import wandb
 from time import sleep
-from functools import partial, reduce
 from itertools import product
-from simple_slurm import Slurm
 import random
-from typing import Any, Iterable, Callable
+from typing import Any, Iterable
 import re
 from ast import literal_eval
-import jax
-from jax import numpy as jnp
-from jax import random as rnd
-from typing import Any
-import optax
-from flax.training.train_state import TrainState
-from flax import linen as nn, jax_utils
 from pprint import pprint
 import numpy as np
 
@@ -32,69 +15,32 @@ this_dir = Path(__file__).parent
 
 ### momma bear
 
-def debug_try(v: Any, fn):
-    try:
-        res = fn(v)
-    except:
-        res = None
-    return res
+def get_cls_dict(cls, ignore=[], _d={}):
+    for k,v in cls.__dict__.items():
+        if not (k.startswith('_') or k in ignore): 
+            if k in cls._children:
+                _d[k] = get_cls_dict(v, cls._ignore_attr)
+            else:
+                _d[k] = getattr(cls, k)
+    for k,v in cls.__class__.__dict__.items():
+        if not (k.startswith('_') or k in ignore):
+            if isinstance(v, property):
+                _d[k] = getattr(cls, k)
+    pprint(_d)
+    return _d
 
 
+# def get_cls_prop(cls:type,ignore=[],_d={}):
+#     for k,v in cls.__class__.__dict__.items():
+#         if (not (k.startswith('_') or k in ignore or issubclass(type(v), Sub))) \
+#             and :
+#                 _d[k] = getattr(cls, k)
+#     return _d
 
-class Sub:
-    _ignore_attr = ['parent','protected','dict','cmd']
-
-    def __init__(_i, parent=None, debug=False):
-        # super().__init__(_i, parent=parent, debug=debug)
-        
-        _i.debug = debug
-        print(_i, _i.debug)
-        _i.parent = parent
-        _i.__safe_init__()
-
-    def __safe_init__(_i,):
-        print('safe')
-        cls_d = dict(_i.__class__.__dict__)
-        sub_cls = {k:v for k,v in cls_d.items() if isinstance(v, type)}
-        [cls_d.pop(k) for k in sub_cls.keys()]
-        
-        for k,v in cls_d.items():
-            
-            _i.debug_print(k, v)
-            
-            # !
-            if k.startswith('__') or k in Sub._ignore_attr or isinstance(v, property):
-                continue 
-            if not isinstance(v, dict):
-                if callable(v):
-                    continue
-
-            _i.debug_print(k, v)
-
-            setattr(_i,k,v)
-
-        _i.debug_print(seq=[(k,v) for k,v in sub_cls.items()])
-        
-    @property
-    def dict(_i,):
-        d = cls_to_dict(_i, Sub._ignore_attr)
-        for k,v in d.items():
-            if issubclass(type(v), Sub):
-
-                d[k] = cls_to_dict(v, Sub._ignore_attr)
-        return d
-
-    def debug_print(_i,k=None,v=None,*,seq:list=None):
-        if _i.debug:
-            seq = seq or [(k,v)]
-            for k,v in seq:
-                call = debug_try(v, callable)
-                shape = debug_try(v, partial(hasattr, __name='shape'))
-                print(f'{k}: Type:{type(v)} Callable:{call} Shape:{shape}')
+def get_cls_sub_cls(cls:type):
+    return {k:v for k,v in cls.__dict__.items() \
+        if issubclass(type(v), Sub) or isinstance(v, type)}
     
-    def print(_i,):
-        pprint(_i.dict)
-
 ### count things
 
 def count_gpu() -> int: 
@@ -148,18 +94,6 @@ def add_to_Path(path: Path, string: str | Path):
 def npify(v):
     return jnp.array(v.numpy())
 
-def cls_to_dict(cls, ignore:list)->dict:
-    d = {}
-    for k,v in cls.__dict__.items():
-        if k.startswith('_') or k in ignore:
-            continue
-        if callable(v):
-            continue
-        if issubclass(type(v), Sub):
-            d[k] = cls_to_dict(v, ignore)
-            continue
-        d[k] = getattr(cls,k)
-    return d
 
 def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
     """
@@ -204,13 +138,12 @@ def update_cls_with_dict(cls: Any, d:dict):
                 n_remain -= 1
     return n_remain
 
-def cls_to_dict(cls, ignore:list)->dict:
-    return {k: getattr(cls, k) for k in dir(cls) if not (k.startswith('_') or k in ignore)}
 
 def dict_to_wandb(d:dict,parent_key:str='',sep:str ='.',items:list=[])->dict:
     for k, v in d.items():
         new_key = parent_key + sep + k if parent_key else k
         if isinstance(v, dict): 
+            print(k,v)
             items.extend(dict_to_wandb(v,new_key,items=items).items())
         else:
             if isinstance(v, Path):  v=str(v)
@@ -255,7 +188,7 @@ def flat_dict(d:dict,items:list=[]):
             items.extend(flat_dict(v, items=items).items())
         else:
             items.append((k, v))
-    return dict(items)  
+    return dict(items)
 
 def flat_any(v: list|dict|jnp.ndarray|np.ndarray):
     if isinstance(v, list):
