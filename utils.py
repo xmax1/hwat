@@ -10,6 +10,7 @@ import re
 from ast import literal_eval
 import numpy as np
 import os
+import jax
 
 import numpy as np
 from copy import copy
@@ -113,8 +114,6 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
             except:
                 _d[k] = str(v)
             print(f'Guessing type: {k} as {type(v)}')
-
-    print(_d)
     return _d
 
 ### run things
@@ -163,6 +162,52 @@ def flat_any(v: list|dict|jnp.ndarray|np.ndarray):
     if isinstance(v, dict):
         return flat_dict(v)
 
+def npify(v_set):
+	v_set = jax.device_get(v_set) # pull from distributed
+	if isinstance(v_set, dict):
+		for k,v in copy(v_set).items():
+			v_set[k] = npify(v)
+	if isinstance(v_set, list):
+		for i,v in enumerate(copy(v_set)):
+			v_set[i] = npify(v)
+	try:
+		if hasattr(v_set, 'shape'):
+			v_set = np.array(v_set)
+	except:
+			print(f'Could not compute mean or std of {k} type {type(v)}')
+	return v_set
+
+class Metrix_beta:
+	def __init__(_i, key=None):
+		_i._key = key
+
+	@property
+	def key(_i): # bc of the list structure of setattr
+		return _i._key[0] # #aesthetics
+	
+	def __setattr__(_i, k, v):
+		if not k in _i.__dict__:
+			_i.__dict__[k] = []
+		_i.__dict__[k] += [_i.npify(v)]
+
+	def collect_mean_std(_i, v_set:dict|type):
+		v_set = v_set.__dict__ if isinstance(v_set, type) else v_set
+		for k,v in v_set.items():
+			if hasattr(v, 'shape'):
+				setattr(_i, k+'_mean', np.mean(np.array(v)))
+				setattr(_i, k+'_std', np.mean(np.array(v)))
+
+	def npify(_i, v_set):
+		v_set = jax.device_get(v_set) # pull from distributed
+		if hasattr(v_set, 'shape'):
+			v_set = np.array(v_set)
+		if isinstance(v_set, dict):
+			for k,v in copy(v_set).items():
+				v_set[k] = _i.npify(v)
+		if isinstance(v_set, list):
+			for i,v in enumerate(copy(v_set)):
+				v_set[i] = _i.npify(v)
+		return v_set
 
 # class _Sub:
     

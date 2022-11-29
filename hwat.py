@@ -8,9 +8,19 @@ from flax.training.train_state import TrainState
 from utils import wpr
 from typing import Callable
 from flax import linen as nn
+from jax import vmap
 
 ### MODEL ### https://www.notion.so/HWAT-Docs-2bd230b570cc4814878edc00753b2525#cc424dfd1320496f85fc0504b41946cd
 
+
+@partial(
+    nn.vmap,
+    variable_axes={"params": None, "batch_stats": None},
+    split_rngs={"params": False},
+    in_axes=0,
+    out_axes=0,
+    axis_name="b",
+)
 class FermiNet(nn.Module):
 	n_e: int = None
 	n_u: int = None
@@ -56,6 +66,22 @@ class FermiNet(nn.Module):
 
 		log_psi, sgn = logabssumdet(orb_u, orb_d)
 		return log_psi
+
+def compute_emb(x, *, a=None, terms=[]):  
+    z = []  
+    if 'x' in terms:  
+        z += [x]  
+    if 'x_rlen' in terms:  
+        z += [jnp.linalg.norm(x, axis=-1, keepdims=True)]  
+    if 'xa' in terms:  
+        z += [compute_rvec(x, a)]  
+    if 'xa_rlen' in terms:  
+        z += [compute_r(x, a)]
+    if 'xx' in terms:
+        z += [compute_rvec(x, x)]
+    if 'xx_rlen' in terms:
+        z += [compute_r(x, x)]
+    return jnp.concatenate(z, axis=-1)
 
 compute_rvec = lambda x0, x1: \
         jnp.expand_dims(x0, -2) - jnp.expand_dims(x1, -3)
@@ -134,7 +160,7 @@ def batched_cdist_l2(x1, x2):
         - jnp.sum(2 * jnp.expand_dims(x1, axis=0) * jnp.expand_dims(x2, axis=1), axis=-1))
     return cdist
 
-@partial(jax.vmap, in_axes=(0,None,None))
+# @partial(jax.vmap, in_axes=(0,None,None))
 def compute_pe(x, a, a_z):
     n_a = len(a)
 
@@ -151,57 +177,131 @@ def compute_pe(x, a, a_z):
         pe += jnp.sum(unique_a_a)
     return pe
 
-def create_compute_ke(model):
-    """
-    NB  batch input x: (n_b, n_e, 3)"""
+@partial(
+    nn.vmap,
+    in_axes=0,
+    out_axes=0,
+    axis_name="b",
+)
+class PotentialEnergy(nn.Module):
+    a: jnp.ndarray
+    a_z: jnp.ndarray
 
-    def _compute_ke(params, x):
-        
-        params = maybe_put_param_in_dict(params)
+    @nn.compact
+    def __call__(_i, x):
+        n_a = len(_i.a)
 
-        n_b, n_e, _ = x.shape
-        x = x.reshape(n_b, -1)
-        n_jvp = x.shape[-1]
+        e_e_dist = batched_cdist_l2(x, x)
+        pe = jnp.sum(jnp.tril(1. / e_e_dist, k=-1))
 
-        @jax.vmap
-        def _model_apply(x):
-            out = model.apply(params, x)
-            return out
+        a_e_dist = batched_cdist_l2(_i.a, x)
+        pe -= jnp.sum(_i.a_z / a_e_dist)
 
-        model_apply = lambda x: _model_apply(x).sum()
+        if n_a > 1:
+            a_a_dist = batched_cdist_l2(_i.a, _i.a)
+            weighted_a_a = (_i.a_z[:, None] * _i.a_z[None, :]) / a_a_dist
+            unique_a_a = jnp.tril(weighted_a_a, k=-1)
+            pe += jnp.sum(unique_a_a)
+        return pe
 
-        eye = jnp.eye(n_jvp, dtype=x.dtype)[None, ...].repeat(n_b, axis=0)
-        grad = jax.grad(model_apply)
-        
-        def _body_fun(i, val):
-            primal, tangent = jax.jvp(grad, (x,), (eye[..., i],))  
-            wpr(dict(i=i, primal=primal, tanget=tangent, val=val))
-            return val + (primal[:, i]**2).squeeze() + (tangent[:, i]).squeeze()
-        
-        return -0.5 * jax.lax.fori_loop(0, n_jvp, _body_fun, jnp.zeros(n_b,))
-    return _compute_ke
+def compute_ke_b(state, x):
+    n_b, n_e, _ = x.shape
+    
+    partial_state = partial(state.apply_fn, state.params)
+    model = lambda x: partial_state(x).sum()
+    grad = jax.grad(model)
+
+    x = x.reshape(n_b, -1)
+    n_jvp = x.shape[-1]
+    eye = jnp.eye(n_jvp, dtype=x.dtype)[None, ...].repeat(n_b, axis=0)
+    
+    def _body_fun(i, val):
+        primal, tangent = jax.jvp(grad, (x,), (eye[..., i],))  
+        return val + (primal[:, i]**2).squeeze() + (tangent[:, i]).squeeze()
+    
+    return -0.5 * jax.lax.fori_loop(0, n_jvp, _body_fun, jnp.zeros(n_b,))
 
 ### SAMPLING ### 
 
 def init_walker(rng, n_b, n_u, n_d, center, std=0.1, ):
-    lst = []
+    
     n_center = len(center)
+    rng = [rng] if len(rng.shape) == 1 else rng
     
-    def init_spin(rng, n, lst):
-        for x_i in range(n):
-            rng, rng_i = rnd.split(rng, 2)
-            lst += [center[x_i%n_center] + rnd.normal(rng_i,(n_b,1,3))*std]
-        return rng
-    
-    rng = init_spin(rng, n_u, lst)
-    rng = init_spin(rng, n_d, lst)
-    return jnp.concatenate(lst, axis=1)
+    device_lst = []
+    for rng_n in rng:
+        lst = []
+        
+        def init_spin(rng_n, n, lst):
+            for x_i in range(n):
+                rng_n, rng_i = rnd.split(rng_n, 2)
+                lst += [center[x_i%n_center] + rnd.normal(rng_i,(n_b,1,3))*std]
+            return rng_n
+        
+        rng_n = init_spin(rng_n, n_u, lst)
+        _     = init_spin(rng_n, n_d, lst)
+        device_lst += [jnp.concatenate(lst, axis=1)]
 
+    return jnp.stack(device_lst)
+
+def move(x, rng, deltar):
+    return x + rnd.normal(rng, x.shape, dtype=x.dtype)*deltar
+     
+def sample(
+    rng, 
+    state : TrainState, 
+    x,
+    deltar,
+    corr_len=20, 
+    acc_target=0.5,
+):
+    rng_0, rng_1, rng_move = rnd.split(rng, 3)
+
+    x, acc_0 = sample_subset(rng_0, x, state, corr_len//2, deltar)
+    deltar_1 = jnp.clip(deltar + 0.001*rnd.normal(rng_move), a_min=0.001, a_max=0.5)
+    x, acc_1 = sample_subset(rng_1, x, state, corr_len//2, deltar_1)
+
+    mask = jnp.array((acc_target-acc_0)**2 < (acc_target-acc_1)**2, dtype=jnp.float32)
+    not_mask = ((mask-1.)*-1.)
+    deltar = mask*deltar + not_mask*deltar_1
+    v = dict(
+        deltar = deltar,
+        acc = jnp.mean(acc_1+acc_0)
+    )
+    return x, v
+
+to_prob = lambda log_psi: jnp.exp(log_psi)**2
+
+def sample_subset(rng, x, state, corr_len, deltar):
+    
+    p = to_prob(state.apply_fn(state.params, x))
+    
+    acc = 0.0
+    for _ in range(corr_len//2):
+        rng, rng_move, rng_alpha = rnd.split(rng, 3)
+        
+        x_1 = move(x, rng_move, deltar)
+        p_1 = to_prob(state.apply_fn(state.params, x_1))
+
+        p_mask = (p_1 / p) > rnd.uniform(rng_alpha, p_1.shape)
+        p = jnp.where(p_mask, p_1, p)
+        p_mask = jnp.expand_dims(p, axis=(-1, -2))
+        x = jnp.where(p_mask, x_1, x)
+
+        acc += jnp.mean(p_mask)
+
+    return x, acc
+
+
+
+
+
+
+"""
 class SampleState(): # https://www.notion.so/HWAT-Docs-2bd230b570cc4814878edc00753b2525#c5bf62a754e34116bb7696e88cb6a746
-    """
     @struct.dataclass
     struct.PyTreeNode means jax transformations *do not affect it* eg pmap
-    fn.apply << apply vs fn() << apply_fn"""
+    fn.apply << apply vs fn() << apply_fn
     
     # clean this to dataclass structure
     # 99% sure to be distributed MUST be defined in a pmap
@@ -209,9 +309,7 @@ class SampleState(): # https://www.notion.so/HWAT-Docs-2bd230b570cc4814878edc007
         rng, 
         step        = 0, 
         deltar      = 0.02, 
-        corr_len    = 20,
-        state : TrainState      = None, 
-        model : nn.Module       = None,
+        corr_len    = 20
     ):
 
         _i.acc_target = 0.5
@@ -219,12 +317,10 @@ class SampleState(): # https://www.notion.so/HWAT-Docs-2bd230b570cc4814878edc007
         _i.deltar = deltar
         _i.step = step
         _i.rng = rng
-        _i.model = state.apply_fn if model is None else model.apply
         
-    def __call__(_i, params, x:jnp.ndarray):
+    def __call__(_i, state:TrainState, x):
         
-        params = maybe_put_param_in_dict(params)
-        model = partial(_i.model, params) # variables= is the first argument, but named setting no worky
+        model = partial(state.apply_fn, state.params)
         
         _i.rng, rng_0, rng_1, rng_move = rnd.split(_i.rng, 4)
 
@@ -262,3 +358,31 @@ def sample(rng, x, model:partial, corr_len, deltar):
         acc += jnp.mean(p_mask)
 
     return x, acc
+
+
+
+def compute_ke(state, x):
+    model = partial(state.apply_fn, state.params)
+
+    n_b, n_e, _ = x.shape
+    x = x.reshape(n_b, -1)
+    n_jvp = x.shape[-1]
+
+    @jax.vmap
+    def _model_apply(x):
+        out = model(x)
+        return out
+
+    model_apply = lambda x: _model_apply(x).sum()
+
+    eye = jnp.eye(n_jvp, dtype=x.dtype)[None, ...].repeat(n_b, axis=0)
+    grad = jax.grad(model_apply)
+    
+    def _body_fun(i, val):
+        primal, tangent = jax.jvp(grad, (x,), (eye[..., i],))  
+        wpr(dict(i=i, primal=primal, tanget=tangent, val=val))
+        return val + (primal[:, i]**2).squeeze() + (tangent[:, i]).squeeze()
+    
+    return -0.5 * jax.lax.fori_loop(0, n_jvp, _body_fun, jnp.zeros(n_b,))
+
+"""

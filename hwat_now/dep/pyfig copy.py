@@ -79,7 +79,6 @@ class Sub:
                 shape = debug_try(v, partial(hasattr, __name='shape'))
                 print(f'{k}: Type:{type(v)} Callable:{call} Shape:{shape} ')
 
-
     def print(_i,):
         pprint(_i.dict)
 

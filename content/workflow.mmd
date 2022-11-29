@@ -1,0 +1,24 @@
+flowchart LR
+	subgraph Local 
+		L
+	end
+  L((  fa:fa-awesome  )) <--> Py
+	subgraph Pyfig
+		Py
+	end
+  subgraph Cluster
+		Clus
+	end
+  subgraph Cloud
+		Cl
+	end
+  Py <--> Cl[Cloud]
+  Py[Pyfig <br> </br>] <--> Clus[Cluster]
+  Clus <--> Cl
+
+
+
+
+
+
+

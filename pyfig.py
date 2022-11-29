@@ -10,32 +10,15 @@ from pprint import pprint
 from copy import copy
 from typing import Any
 
-from jax import numpy as jnp
+from jax import numpy as jnp, random as rnd
 from flax import linen as nn
-
-from hwat import compute_r, compute_rvec, create_masks
 
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum, iterate_folder
 from utils import flat_dict, mkdir, cmd_to_dict
 
-from hwat import compute_s_perm, compute_r, compute_rvec
+from hwat import compute_s_perm, init_walker, compute_emb
 
-def compute_emb(x, *, a=None, terms=[]):  
-    z = []  
-    if 'x' in terms:  
-        z += [x]  
-    if 'x_rlen' in terms:  
-        z += [jnp.linalg.norm(x, axis=-1, keepdims=True)]  
-    if 'xa' in terms:  
-        z += [compute_rvec(x, a)]  
-    if 'xa_rlen' in terms:  
-        z += [compute_r(x, a)]
-    if 'xx' in terms:
-        z += [compute_rvec(x, x)]
-    if 'xx_rlen' in terms:
-        z += [compute_r(x, x)]
-    return jnp.concatenate(z, axis=-1)
-
+docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 class af:
     tanh = nn.tanh
 
@@ -60,29 +43,33 @@ class Sub:
 
 class Pyfig:
 
-    seed:               int     = 808017424 # grr
-    project_root:       str     = Path().home()/'projects'
+    project_root:   str     = Path().home()/'projects'
+    project:        str     = 'hwat'
 
-    project:            str     = 'hwat'
-    project_path:       Path    = property(lambda _: _.project_root / _.project)
-    server_project_path:Path    = property(lambda _: _.project_path)
-    n_device:           int     = property(lambda _: count_gpu())
-
-    exp_name:           str     = 'junk'
-    run_path:           Path    = property(lambda _: _.project_path / 'run.py')
-    data_dir:           Path    = project_root / 'data'
+    data_dir:       Path    = project_root / 'data'  # not a property, might change
+    run_path:       Path    = property(lambda _: _.project_path / 'run.py')
+    exp_name:       str     = 'junk'
     
-    half_precision:     bool    = True
-    dtype:              str     = 'f32'
-    n_step:             int     = 1000
+    dtype:          str     = 'f32'
+    n_step:         int     = 1000 
+    log_sample_step         = 5
+    log_metric_step         = 5
+    log_state_step          = 10          
+
+    seed:           int     = 808017424 # grr
+    rng_init:       jnp.ndarray = property(lambda _: rnd.split(rnd.PRNGKey(_.seed), _.n_device))
 		
     class data(Sub):
-        n_b:    int  = 16
-        n_e:    int = 4
-        n_u:    int = 2
-        n_d:    int = property(lambda _: _.n_e-_.n_u)
+        n_b:    int         = 16
+        n_e:    int         = 4
+        n_u:    int         = 2
+        n_d:    int         = property(lambda _: _.n_e-_.n_u)
         a:      jnp.ndarray = jnp.array([[0.0, 0.0, 0.0],])
         a_z:    jnp.ndarray = jnp.array([4.,])
+        init_walker = \
+            property(lambda _: \
+                partial(init_walker, n_b=_.n_b, n_u=_.n_u, n_d=_.n_d, center=_.a, std=0.1))
+
 
     class model(Sub):
         n_sv: int       = 16
@@ -91,8 +78,8 @@ class Pyfig:
         n_det: int      = 1
         n_fb_out: int   = property(lambda _: _.n_sv*3+_.n_pv*2)
 
-        terms_s_emb = ['x_rlen']
-        terms_p_emb = ['xx']
+        terms_s_emb   = ['x_rlen']
+        terms_p_emb   = ['xx']
         compute_s_emb = \
             property(lambda _: partial(compute_emb, terms=_.terms_s_emb))
         compute_p_emb = \
@@ -100,41 +87,39 @@ class Pyfig:
         compute_s_perm: partial = \
             property(lambda _: partial(compute_s_perm, n_u=_._parent.data.n_u))
     
+
     class opt(Sub):
-        optimizer   = 'Adam'
-        beta1       = 0.9
-        beta2       = 0.99
-        eps         = 1e-8
-        lr          = 0.001
-        loss        = 'l1'  # change this to loss table load? 
+        optimizer       = 'Adam'
+        beta1           = 0.9
+        beta2           = 0.99
+        eps             = 1e-8
+        lr              = 0.001
+        loss            = 'l1'  # change this to loss table load? 
+
 
     class sweep(Sub):
-        method      = 'random'
-        name        = 'sweep'
-        metrics = dict(
-            goal    = 'minimize',
-            name    = 'validation_loss',
+        method          = 'random'
+        name            = 'sweep'
+        metrics         = dict(
+            goal        = 'minimize',
+            name        = 'validation_loss',
         )
         parameters = dict(
             batch_size  = {'values' : [16, 32, 64]},
             epoch       = {'values' : [5, 10, 15]},
             lr          = {'max'    : 0.1, 'min': 0.0001},
         )
-        n_sweep = run_cap = reduce(
+        n_sweep         = reduce(
             lambda i,j:i*j,[len(v['values']) for k,v in parameters.items() if 'values' in v])+1
         sweep_id = ''
 
-    class wandb(Sub):
-        job_type:       str     = 'training'
-        entity:         str     = 'xmax1'
 
-    log_sample_step:    int     = 5
-    log_metric_step:    int     = 5
-    log_state_step:     int     = 10         # wandb entity
-    n_epoch:            int     = 20
+    class wandb(Sub):
+        job_type        = 'training'
+        entity          = 'xmax1'
+
 
     class slurm(Sub):
-        
         mail_type       = 'FAIL'
         partition       ='sm3090'
         nodes           = 1                # n_node
@@ -163,6 +148,10 @@ class Pyfig:
 
     exp_id:             str     = gen_alphanum(n=7)
     
+    project_path:       Path    = property(lambda _: _.project_root / _.project)
+    server_project_path:Path    = property(lambda _: _.project_path)
+    n_device:           int     = property(lambda _: count_gpu())
+
     iter_exp_dir:       bool    = True
     project_exp_dir:    Path    = property(lambda _: _.project_path / 'exp')
     project_cfg_dir:    Path    = property(lambda _: _.project_path / 'cfg')
@@ -178,6 +167,7 @@ class Pyfig:
     
     submit_state:  int = -1
     _sys_arg:       list = sys.argv[1:]
+    _wandb_ignore = ['sbatch',]
 
     def __init__(_i,args:dict={},cap=40,wandb_mode='online',debug=False):
         
@@ -187,28 +177,27 @@ class Pyfig:
 
         assert _i.merge(args|cmd_to_dict(sys.argv[1:],_i.d))
 
-        # wandb.init(
-        #     job_type    = _i.wandb.job_type,
-        #     entity      = _i.wandb.entity,
-        #     project     = _i.project,
-        #     dir         = _i.exp_path,
-        #     config      = dict_to_wandb(_i.d),
-        #     mode        = wandb_mode,
-        #     settings=wandb.Settings(start_method='fork'), # idk y this is issue, don't change
-        # )
+        wandb.init(
+            job_type    = _i.wandb.job_type,
+            entity      = _i.wandb.entity,
+            project     = _i.project,
+            dir         = _i.exp_path,
+            config      = _i._to_wandb(_i.d),
+            mode        = wandb_mode,
+            settings=wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+        )
 
         if _i.submit_state > 0:
-            exit('whoop')
             n_job_running = run_cmds([f'squeue -u {_i.user} -h -t pending,running -r | wc -l'])
             if n_job_running > cap:
                 exit(f'There are {n_job_running} on the submit cap is {cap}')
+            print(f'{n_job_running} on the cluster')
 
             _slurm = Slurm(**_i.slurm.d)
-
             n_run, _i.submit_state = _i.submit_state, 0            
             for _ in range(n_run):
-                _slurm.sbatch(_i.slurm.sbatch 
-                + f'out_dir={(mkdir(_i.exp_path/"out"))} {_i.cmd} | tee $out_dir/py.out date "+%B %V %T.%3N" ')
+                _slurm.sbatch(_i.slurm.sbatch \
+                    + f'out_dir={(mkdir(_i.exp_path/"out"))} {_i.cmd} | tee $out_dir/py.out date "+%B %V %T.%3N" ')
 
     @property
     def cmd(_i,):
@@ -235,10 +224,9 @@ class Pyfig:
                 )
                 _i.submit_state *= _i.sweep.n_sweep
             
-            exit('whoop')
-            local_out = run_cmds(['git add .', f'git commit -m {commit_msg}', 'git push'], cwd=_i.project_path)
+            # local_out = run_cmds(['git add .', f'git commit -m {commit_msg}', 'git push'], cwd=_i.project_path)
             cmd = f'python -u {_i.run_path} ' + (commit_id or _i.commit_id) + _i.cmd
-            server_out = run_cmds_server(_i.server, _i.user, cmd, cwd=_i.server_project_path)
+            # server_out = run_cmds_server(_i.server, _i.user, cmd, cwd=_i.server_project_path)
     
     @property
     def d(_i, _ignore_attr=['d', 'cmd', 'submit', 'partial']):
@@ -270,16 +258,22 @@ class Pyfig:
                     _n += 1
         return (_n - len(d))==0
 
-    def summarise(_i):
-        return
+    def _to_wandb(_i, d:dict, parent='', _l:list=[])->dict:
+        sep='.'
+        for k, v in d.items():
+            if isinstance(v, Path) or callable(v):
+                continue
 
-def dict_to_wandb(d:dict, parent='', _l:list=[])->dict:
-    sep='.'
-    for k, v in d.items():
-        k_1 = parent + sep + k if parent else k
-        if isinstance(v, dict): 
-            _l.extend(dict_to_wandb(v, k_1, _l=_l).items())
-        else:
-            if isinstance(v, Path):  v=str(v)
+            if k in _i._wandb_ignore:
+                continue
+            
+            k_1 = parent + sep + k if parent else k
+            
+            if isinstance(v, dict):
+                _l.extend(_i._to_wandb(v, k_1, _l=_l).items())
+            elif callable(v):
+                continue
             _l.append((k_1, v))
-    return dict(_l)
+        return dict(_l)
+
+
