@@ -12,6 +12,7 @@ from typing import Any
 
 from jax import numpy as jnp, random as rnd
 from flax import linen as nn
+import optax 
 
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum, iterate_folder
 from utils import flat_dict, mkdir, cmd_to_dict
@@ -19,6 +20,7 @@ from utils import flat_dict, mkdir, cmd_to_dict
 from hwat import compute_s_perm, init_walker, compute_emb
 
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
+
 class af:
     tanh = nn.tanh
 
@@ -49,9 +51,10 @@ class Pyfig:
     data_dir:       Path    = project_root / 'data'  # not a property, might change
     run_path:       Path    = property(lambda _: _.project_path / 'run.py')
     exp_name:       str     = 'junk'
+    exp_id:         str     = gen_alphanum(n=7)
     
     dtype:          str     = 'f32'
-    n_step:         int     = 1000 
+    n_step:         int     = 20 
     log_sample_step         = 5
     log_metric_step         = 5
     log_state_step          = 10          
@@ -69,7 +72,8 @@ class Pyfig:
         init_walker = \
             property(lambda _: \
                 partial(init_walker, n_b=_.n_b, n_u=_.n_u, n_d=_.n_d, center=_.a, std=0.1))
-
+        corr_len:  int      = 20
+        acc_target:int      = 0.5
 
     class model(Sub):
         n_sv: int       = 16
@@ -87,15 +91,14 @@ class Pyfig:
         compute_s_perm: partial = \
             property(lambda _: partial(compute_s_perm, n_u=_._parent.data.n_u))
     
-
     class opt(Sub):
         optimizer       = 'Adam'
-        beta1           = 0.9
-        beta2           = 0.99
+        b1              = 0.9
+        b2              = 0.99
         eps             = 1e-8
         lr              = 0.001
         loss            = 'l1'  # change this to loss table load? 
-
+        tx = property(lambda _: optax.adam(_._parent.opt.lr))
 
     class sweep(Sub):
         method          = 'random'
@@ -113,11 +116,10 @@ class Pyfig:
             lambda i,j:i*j,[len(v['values']) for k,v in parameters.items() if 'values' in v])+1
         sweep_id = ''
 
-
     class wandb(Sub):
         job_type        = 'training'
         entity          = 'xmax1'
-
+        run_path        = None
 
     class slurm(Sub):
         mail_type       = 'FAIL'
@@ -144,9 +146,8 @@ class Pyfig:
             pwd
             nvidia-smi
             mv_cmd = f'mv {_._parent.TMP}/o-$SLURM_JOB_ID.out {_._parent.TMP}/e-$SLURM_JOB_ID.err $out_dir' 
-    """)
-
-    exp_id:             str     = gen_alphanum(n=7)
+    """
+    )
     
     project_path:       Path    = property(lambda _: _.project_root / _.project)
     server_project_path:Path    = property(lambda _: _.project_path)
@@ -165,9 +166,9 @@ class Pyfig:
     git_branch:         str     = 'main'        
     env:                str     = 'dex'            # CONDA ENV
     
-    submit_state:  int = -1
-    _sys_arg:       list = sys.argv[1:]
-    _wandb_ignore = ['sbatch',]
+    submit_state:       int  = -1
+    _sys_arg:           list = sys.argv[1:]
+    _wandb_ignore:      list = ['sbatch',]
 
     def __init__(_i,args:dict={},cap=40,wandb_mode='online',debug=False):
         
@@ -177,7 +178,9 @@ class Pyfig:
 
         assert _i.merge(args|cmd_to_dict(sys.argv[1:],_i.d))
 
-        wandb.init(
+        mkdir(_i.exp_path)
+
+        run = wandb.init(
             job_type    = _i.wandb.job_type,
             entity      = _i.wandb.entity,
             project     = _i.project,
@@ -186,6 +189,8 @@ class Pyfig:
             mode        = wandb_mode,
             settings=wandb.Settings(start_method='fork'), # idk y this is issue, don't change
         )
+
+        _i.wandb.run_path = run.path
 
         if _i.submit_state > 0:
             n_job_running = run_cmds([f'squeue -u {_i.user} -h -t pending,running -r | wc -l'])
@@ -198,6 +203,7 @@ class Pyfig:
             for _ in range(n_run):
                 _slurm.sbatch(_i.slurm.sbatch \
                     + f'out_dir={(mkdir(_i.exp_path/"out"))} {_i.cmd} | tee $out_dir/py.out date "+%B %V %T.%3N" ')
+
 
     @property
     def cmd(_i,):

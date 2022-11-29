@@ -8,7 +8,7 @@ from flax.training.train_state import TrainState
 from utils import wpr
 from typing import Callable
 from flax import linen as nn
-from jax import vmap
+from jax import vmap, jit
 
 ### MODEL ### https://www.notion.so/HWAT-Docs-2bd230b570cc4814878edc00753b2525#cc424dfd1320496f85fc0504b41946cd
 
@@ -257,9 +257,9 @@ def sample(
 ):
     rng_0, rng_1, rng_move = rnd.split(rng, 3)
 
-    x, acc_0 = sample_subset(rng_0, x, state, corr_len//2, deltar)
+    x, acc_0 = sample_subset(rng_0, x, state, deltar, corr_len//2)
     deltar_1 = jnp.clip(deltar + 0.001*rnd.normal(rng_move), a_min=0.001, a_max=0.5)
-    x, acc_1 = sample_subset(rng_1, x, state, corr_len//2, deltar_1)
+    x, acc_1 = sample_subset(rng_1, x, state, deltar_1, corr_len//2)
 
     mask = jnp.array((acc_target-acc_0)**2 < (acc_target-acc_1)**2, dtype=jnp.float32)
     not_mask = ((mask-1.)*-1.)
@@ -272,12 +272,13 @@ def sample(
 
 to_prob = lambda log_psi: jnp.exp(log_psi)**2
 
-def sample_subset(rng, x, state, corr_len, deltar):
+@partial(jit, static_argnames=('corr_len'))
+def sample_subset(rng, x, state, deltar, corr_len):
     
     p = to_prob(state.apply_fn(state.params, x))
     
     acc = 0.0
-    for _ in range(corr_len//2):
+    for _ in jnp.arange(corr_len):
         rng, rng_move, rng_alpha = rnd.split(rng, 3)
         
         x_1 = move(x, rng_move, deltar)
