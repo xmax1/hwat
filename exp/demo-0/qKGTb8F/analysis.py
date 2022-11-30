@@ -186,16 +186,6 @@ def get_precision(x):
   prec = -int(floor(log10(abs(x))))
   return prec
 
-def mkdir(path: Path) -> Path:
-    path = Path(path)
-    if path.suffix != '':
-        path = path.parent
-    if path.exists():
-        print('path exists, leaving alone')
-    else:
-        path.mkdir(parents=True)
-    return path
-
 ''' LINE PROPERTIES 
 Line setters
   agg_filter: a filter function, which takes a (m, n, 3) float array and a dpi value, and returns a (m, n, 3) array and two offsets from the bottom left corner of the image

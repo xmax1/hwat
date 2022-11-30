@@ -255,7 +255,7 @@ def sample(
     corr_len=20, 
     acc_target=0.5,
 ):
-    rng_0, rng_1, rng_move = rnd.split(rng, 3)
+    rng, rng_0, rng_1, rng_move = rnd.split(rng, 4)
 
     x, acc_0 = sample_subset(rng_0, x, state, deltar, corr_len//2)
     deltar_1 = jnp.clip(deltar + 0.001*rnd.normal(rng_move), a_min=0.001, a_max=0.5)
@@ -266,7 +266,8 @@ def sample(
     deltar = mask*deltar + not_mask*deltar_1
     v = dict(
         deltar = deltar,
-        acc = jnp.mean(acc_1+acc_0)
+        acc = (acc_1+acc_0)/2.,
+        rng = rng
     )
     return x, v
 
@@ -286,12 +287,12 @@ def sample_subset(rng, x, state, deltar, corr_len):
 
         p_mask = (p_1 / p) > rnd.uniform(rng_alpha, p_1.shape)
         p = jnp.where(p_mask, p_1, p)
-        p_mask = jnp.expand_dims(p, axis=(-1, -2))
+        p_mask = jnp.expand_dims(p_mask, axis=(-1, -2))
         x = jnp.where(p_mask, x_1, x)
 
         acc += jnp.mean(p_mask)
 
-    return x, acc
+    return x, acc/corr_len
 
 
 

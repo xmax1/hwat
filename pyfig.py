@@ -9,6 +9,7 @@ import sys
 from pprint import pprint
 from copy import copy
 from typing import Any
+import shutil
 
 from jax import numpy as jnp, random as rnd
 from flax import linen as nn
@@ -20,6 +21,7 @@ from utils import flat_dict, mkdir, cmd_to_dict
 from hwat import compute_s_perm, init_walker, compute_emb
 
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
+success = ["❌", "✅"]
 
 class af:
     tanh = nn.tanh
@@ -31,7 +33,7 @@ class Sub:
         _i._parent = parent
     
     @property
-    def d(_i, ignore=['d', 'cmd', 'masks', '_parent', 'parent']):
+    def d(_i, ignore=['d', 'cmd', 'masks', '_parent']):
         _d={} # becomes class variable in call line, accumulates
         for k,v in _i.__class__.__dict__.items():
             if k.startswith('_') or k in ignore:
@@ -40,35 +42,36 @@ class Sub:
                 v = _i.__dict__[k]   # if getattr then calls the partial, which we don't want
             else:
                 v = getattr(_i, k)
-            _d[k] = copy(v)
+            _d[k] = v
         return _d
 
 class Pyfig:
+    # 🔴 Variables in any class/subclass cannot have the same name
 
     project_root:   str     = Path().home()/'projects'
     project:        str     = 'hwat'
 
     data_dir:       Path    = project_root / 'data'  # not a property, might change
     run_path:       Path    = property(lambda _: _.project_path / 'run.py')
-    exp_name:       str     = 'junk'
+    exp_name:       str     = 'demo-final'
     exp_id:         str     = gen_alphanum(n=7)
     
     dtype:          str     = 'f32'
-    n_step:         int     = 20 
+    n_step:         int     = 10000
+    log_metric_step         = 100
     log_sample_step         = 5
-    log_metric_step         = 5
     log_state_step          = 10          
 
     seed:           int     = 808017424 # grr
     rng_init:       jnp.ndarray = property(lambda _: rnd.split(rnd.PRNGKey(_.seed), _.n_device))
 		
     class data(Sub):
-        n_b:    int         = 16
-        n_e:    int         = 4
-        n_u:    int         = 2
+        n_b:    int         = 256
+        n_e:    int         = 6
+        n_u:    int         = 3
         n_d:    int         = property(lambda _: _.n_e-_.n_u)
         a:      jnp.ndarray = jnp.array([[0.0, 0.0, 0.0],])
-        a_z:    jnp.ndarray = jnp.array([4.,])
+        a_z:    jnp.ndarray = jnp.array([6.,])
         init_walker = \
             property(lambda _: \
                 partial(init_walker, n_b=_.n_b, n_u=_.n_u, n_d=_.n_d, center=_.a, std=0.1))
@@ -76,9 +79,9 @@ class Pyfig:
         acc_target:int      = 0.5
 
     class model(Sub):
-        n_sv: int       = 16
-        n_pv: int       = 8
-        n_fb: int       = 2
+        n_sv: int       = 32
+        n_pv: int       = 16
+        n_fb: int       = 16
         n_det: int      = 1
         n_fb_out: int   = property(lambda _: _.n_sv*3+_.n_pv*2)
 
@@ -96,7 +99,7 @@ class Pyfig:
         b1              = 0.9
         b2              = 0.99
         eps             = 1e-8
-        lr              = 0.001
+        lr              = 0.0001
         loss            = 'l1'  # change this to loss table load? 
         tx = property(lambda _: optax.adam(_._parent.opt.lr))
 
@@ -116,10 +119,10 @@ class Pyfig:
             lambda i,j:i*j,[len(v['values']) for k,v in parameters.items() if 'values' in v])+1
         sweep_id = ''
 
-    class wandb(Sub):
+    class wandb_c(Sub):
         job_type        = 'training'
         entity          = 'xmax1'
-        run_path        = None
+        wandb_run_path  = ''
 
     class slurm(Sub):
         mail_type       = 'FAIL'
@@ -153,10 +156,12 @@ class Pyfig:
     server_project_path:Path    = property(lambda _: _.project_path)
     n_device:           int     = property(lambda _: count_gpu())
 
-    iter_exp_dir:       bool    = True
+    iter_exp_dir:       bool    = False  # True is broken, bc properties
+    exp_path:           Path    = property(lambda _: \
+        iterate_folder(_.project_exp_dir/_.exp_name,_.iter_exp_dir)/_.exp_id)
     project_exp_dir:    Path    = property(lambda _: _.project_path / 'exp')
     project_cfg_dir:    Path    = property(lambda _: _.project_path / 'cfg')
-    exp_path:           Path    = property(lambda _: iterate_folder(_.project_exp_dir/_.exp_name,_.iter_exp_dir)/_.exp_id)
+    
     TMP:                Path    = property(lambda _: _.project_exp_dir / 'tmp')
 
     server:             str     = 'svol.fysik.dtu.dk'   # SERVER
@@ -170,19 +175,21 @@ class Pyfig:
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['sbatch',]
 
-    def __init__(_i,args:dict={},cap=40,wandb_mode='online',debug=False):
+    def __init__(_i,args:dict={},cap=40,wandb_mode='online',get_sys_arg=True):
         
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
-                setattr(_i, k, v(_i))
+                setattr(_i, k, v(parent=_i))
 
-        assert _i.merge(args|cmd_to_dict(sys.argv[1:],_i.d))
+        n_unmerged = _i.merge(args | (cmd_to_dict(sys.argv[1:],_i.d) if get_sys_arg else {}))
+        print(f'{n_unmerged} args unmerged: {success[~bool(n_unmerged)]}')   
 
         mkdir(_i.exp_path)
-
+        print('Path: ', _i.exp_path.absolute(), '✅')
+        
         run = wandb.init(
-            job_type    = _i.wandb.job_type,
-            entity      = _i.wandb.entity,
+            job_type    = _i.wandb_c.job_type,
+            entity      = _i.wandb_c.entity,
             project     = _i.project,
             dir         = _i.exp_path,
             config      = _i._to_wandb(_i.d),
@@ -190,7 +197,29 @@ class Pyfig:
             settings=wandb.Settings(start_method='fork'), # idk y this is issue, don't change
         )
 
-        _i.wandb.run_path = run.path
+        _i.wandb_c.wandb_run_path = run.path  
+        print('run: ', run.path, '✅')
+        
+        try:
+            shutil.copy('./analysis.ipynb', _i.exp_path/'analysis.ipynb')
+            shutil.copy('./analysis.py', _i.exp_path/'analysis.py')
+            def write_jup(path, wandb_run_path):
+                import json
+                with open(path, 'r') as f:
+                    jup = json.load(f)
+                cell = {
+                "cell_type": "code",
+                "execution_count": 1,
+                "metadata": {},
+                "outputs": [],
+                "source": [f'%wandb "{wandb_run_path}"']
+                }
+                jup['cells'].insert(1, cell)
+                with open(path, 'w') as f:
+                    jup = json.dump(jup, f)
+            write_jup(_i.exp_path/'analysis.ipynb', run.path)
+        except:
+            print('f')
 
         if _i.submit_state > 0:
             n_job_running = run_cmds([f'squeue -u {_i.user} -h -t pending,running -r | wc -l'])
@@ -203,7 +232,6 @@ class Pyfig:
             for _ in range(n_run):
                 _slurm.sbatch(_i.slurm.sbatch \
                     + f'out_dir={(mkdir(_i.exp_path/"out"))} {_i.cmd} | tee $out_dir/py.out date "+%B %V %T.%3N" ')
-
 
     @property
     def cmd(_i,):
@@ -240,8 +268,11 @@ class Pyfig:
         for k,v in _i.__class__.__dict__.items():
             if k.startswith('_') or k in _ignore_attr:
                 continue
+            # print(k, v)
+            if isinstance(v, partial):
+                v = _i.__dict__[k] # ‼ 🏳 Danger zone - partials may not be part of dict
             v = getattr(_i, k)
-            if isinstance(v, Sub):
+            if isinstance(v, Sub): 
                 v = v.d
             _d[k] = v
         return _d
@@ -251,6 +282,7 @@ class Pyfig:
         return [v for v in _i.__dict__.values() if isinstance(v, Sub)]
 
     def partial(_i, f:Callable):
+        # _i._debug_print(on=False)
         d = flat_any(_i.d)
         d_k = inspect.signature(f.__init__).parameters.keys()
         d = {k:v for k,v in d.items() if k in d_k}
@@ -259,27 +291,34 @@ class Pyfig:
     def merge(_i, d:dict, _n=0):
         for k,v in d.items():
             for cls in [_i]+_i._sub_cls:
-                if k in cls.__dict__:
-                    cls.__dict__[k] = copy(v)
+                if k in cls.__class__.__dict__:
+                    if isinstance(cls.__class__.__dict__[k], property):
+                        print('Tried to set a property {k}, letting you off this time')
+                    else:
+                        setattr(cls, k, copy(v))
                     _n += 1
-        return (_n - len(d))==0
+        return _n - len(d)
 
-    def _to_wandb(_i, d:dict, parent='', _l:list=[])->dict:
-        sep='.'
+    def _to_wandb(_i, d:dict, parent='', sep='.', _l:list=[])->dict:
         for k, v in d.items():
             if isinstance(v, Path) or callable(v):
                 continue
-
             if k in _i._wandb_ignore:
                 continue
-            
             k_1 = parent + sep + k if parent else k
-            
             if isinstance(v, dict):
                 _l.extend(_i._to_wandb(v, k_1, _l=_l).items())
             elif callable(v):
                 continue
             _l.append((k_1, v))
         return dict(_l)
+
+    def _debug_print(_i, on=False, cls=True):
+        if on:
+            for k,v in vars(_i).items():
+                if not k.startswith('_'):
+                    print(k, getattr(_i, k))    
+            if cls:
+                [print(k,v) for k,v in vars(_i.__class__).items() if not k.startswith('_')]
 
 
