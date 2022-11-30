@@ -31,16 +31,18 @@ class FermiNet(nn.Module):
 	n_det: int = None
 	n_fb: int = None
 	n_fb_out: int = None
-	n_pv: int = None
-	n_sv: int = None
-
-	@nn.compact # params arg hidden in apply
-	def __call__(_i, x):
+    n_pv: int = None
+    n_sv: int = None
+    a: jnp.ndarray =None
+    masks: tuple=None
+    @nn.compact # params arg hidden in apply
+    def __call__(_i, x):
 		
 		if len(x.shape) == 1:  # jvp hack
 			x = x.reshape(_i.n_e, 3)
-			
-		p_mask_u, p_mask_d = create_masks(_i.n_e, _i.n_u)
+		
+		# p_mask_u, p_mask_d = create_masks(_i.n_e, _i.n_u)
+		p_mask_u, p_mask_d = _i.masks
 
 		xu, xd = jnp.split(x, [_i.n_u,], axis=0)
 		x_s_var = _i.compute_s_emb(x)
@@ -60,8 +62,8 @@ class FermiNet(nn.Module):
 		x_wd = nn.tanh(nn.Dense(_i.n_det*_i.n_d)(x_wd))
 		wpr(dict(x_w=x_w, x_wu=x_wu, x_wd=x_wd))
 
-		orb_u = jnp.stack((x_wu * jnp.exp(-nn.Dense(_i.n_u*_i.n_det)(-xu))).split(_i.n_det, axis=-1)) # (e, f(e)) (e, (f(e))*n_det)
-		orb_d = jnp.stack((x_wd * jnp.exp(-nn.Dense(_i.n_d*_i.n_det)(-xd))).split(_i.n_det, axis=-1))
+		orb_u = jnp.stack((x_wu * jnp.exp(-nn.Dense(_i.n_u*_i.n_det)(_i.a-xu))).split(_i.n_det, axis=-1)) # (e, f(e)) (e, (f(e))*n_det)
+		orb_d = jnp.stack((x_wd * jnp.exp(-nn.Dense(_i.n_d*_i.n_det)(_i.a-xd))).split(_i.n_det, axis=-1))
 		wpr(dict(orb_u=orb_u, orb_d=orb_d))
 
 		log_psi, sgn = logabssumdet(orb_u, orb_d)

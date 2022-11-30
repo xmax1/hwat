@@ -18,7 +18,7 @@ import optax
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum, iterate_folder
 from utils import flat_dict, mkdir, cmd_to_dict
 
-from hwat import compute_s_perm, init_walker, compute_emb
+from hwat import compute_s_perm, init_walker, compute_emb, create_masks
 
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 success = ["❌", "✅"]
@@ -59,7 +59,6 @@ class Pyfig:
     dtype:          str     = 'f32'
     n_step:         int     = 10000
     log_metric_step         = 100
-    log_sample_step         = 5
     log_state_step          = 10          
 
     seed:           int     = 808017424 # grr
@@ -67,16 +66,19 @@ class Pyfig:
 		
     class data(Sub):
         n_b:    int         = 256
-        n_e:    int         = 6
+        l_e:    list        = [6,]
         n_u:    int         = 3
-        n_d:    int         = property(lambda _: _.n_e-_.n_u)
+        n_e:    int         = property(lambda _: int(sum(_.l_e)))
+        n_d:    int         = property(lambda _:_.n_e-_.n_u)
         a:      jnp.ndarray = jnp.array([[0.0, 0.0, 0.0],])
-        a_z:    jnp.ndarray = jnp.array([6.,])
+        a_z:    jnp.ndarray = property(lambda _: jnp.array(_.n_e))
         init_walker = \
             property(lambda _: \
                 partial(init_walker, n_b=_.n_b, n_u=_.n_u, n_d=_.n_d, center=_.a, std=0.1))
-        corr_len:  int      = 20
-        acc_target:int      = 0.5
+        
+        corr_len:   int      = 20
+        equil_len:  int      = 1000  # total number: n_equil_loop = equil_len / corr_len
+        acc_target: int      = 0.5
 
     class model(Sub):
         n_sv: int       = 32
@@ -84,8 +86,8 @@ class Pyfig:
         n_fb: int       = 16
         n_det: int      = 1
         n_fb_out: int   = property(lambda _: _.n_sv*3+_.n_pv*2)
-
-        terms_s_emb   = ['x_rlen']
+        masks = property(lambda _: partial(create_masks, _._parent.data.n_e, _._parent.data.n_u))
+        terms_s_emb   = ['x_rlen', 'x']
         terms_p_emb   = ['xx']
         compute_s_emb = \
             property(lambda _: partial(compute_emb, terms=_.terms_s_emb))
@@ -101,7 +103,7 @@ class Pyfig:
         eps             = 1e-8
         lr              = 0.0001
         loss            = 'l1'  # change this to loss table load? 
-        tx = property(lambda _: optax.adam(_._parent.opt.lr))
+        tx = property(lambda _: optax.chain(optax.adaptive_grad_clip(1.0),optax.adam(_.lr)))
 
     class sweep(Sub):
         method          = 'random'
@@ -179,14 +181,21 @@ class Pyfig:
         
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
-                setattr(_i, k, v(parent=_i))
-
-        n_unmerged = _i.merge(args | (cmd_to_dict(sys.argv[1:],_i.d) if get_sys_arg else {}))
+                v = v(parent=_i)
+                setattr(_i, k, v)
+        
+        n_unmerged = _i.merge(cmd_to_dict(sys.argv[1:],_i.d))
+        n_unmerged += _i.merge(args)
         print(f'{n_unmerged} args unmerged: {success[~bool(n_unmerged)]}')   
 
         mkdir(_i.exp_path)
         print('Path: ', _i.exp_path.absolute(), '✅')
         
+        print('System ')
+        pprint(_i.data.d)
+        print('Model ')
+        pprint(_i.model.d)
+
         run = wandb.init(
             job_type    = _i.wandb_c.job_type,
             entity      = _i.wandb_c.entity,
@@ -201,23 +210,31 @@ class Pyfig:
         print('run: ', run.path, '✅')
         
         try:
-            shutil.copy('./analysis.ipynb', _i.exp_path/'analysis.ipynb')
-            shutil.copy('./analysis.py', _i.exp_path/'analysis.py')
+            # shutil.copy('./analysis.ipynb', _i.exp_path/'analysis.ipynb')
+            # shutil.copy('./analysis.py', _i.exp_path/'analysis.py')
             def write_jup(path, wandb_run_path):
                 import json
                 with open(path, 'r') as f:
                     jup = json.load(f)
+                cmd = f"""
+                api = wandb.Api()
+                run = api.run("{wandb_run_path}")
+                c = run.config
+                h = run.history()
+                s = run.summary
+                """
+                
                 cell = {
                 "cell_type": "code",
                 "execution_count": 1,
                 "metadata": {},
                 "outputs": [],
-                "source": [f'%wandb "{wandb_run_path}"']
+                "source": [cmd]
                 }
                 jup['cells'].insert(1, cell)
                 with open(path, 'w') as f:
                     jup = json.dump(jup, f)
-            write_jup(_i.exp_path/'analysis.ipynb', run.path)
+            write_jup('analysis.ipynb', run.path)
         except:
             print('f')
 
@@ -293,11 +310,12 @@ class Pyfig:
             for cls in [_i]+_i._sub_cls:
                 if k in cls.__class__.__dict__:
                     if isinstance(cls.__class__.__dict__[k], property):
-                        print('Tried to set a property {k}, letting you off this time')
+                        print(f'Tried to set a property {k}, letting you off this time')
                     else:
-                        setattr(cls, k, copy(v))
-                    _n += 1
-        return _n - len(d)
+                        # cls.__class__.__dict__[k] = copy(v)
+                        cls.__dict__[k] = copy(v)
+                        _n += 1
+        return len(d) - _n
 
     def _to_wandb(_i, d:dict, parent='', sep='.', _l:list=[])->dict:
         for k, v in d.items():
