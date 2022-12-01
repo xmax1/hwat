@@ -33,7 +33,7 @@ class Sub:
         _i._parent = parent
     
     @property
-    def d(_i, ignore=['d', 'cmd', 'masks', '_parent']):
+    def d(_i, ignore=['d', 'cmd', '_parent']):
         _d={} # becomes class variable in call line, accumulates
         for k,v in _i.__class__.__dict__.items():
             if k.startswith('_') or k in ignore:
@@ -87,6 +87,7 @@ class Pyfig:
         n_det: int      = 1
         n_fb_out: int   = property(lambda _: _.n_sv*3+_.n_pv*2)
         masks = property(lambda _: partial(create_masks, _._parent.data.n_e, _._parent.data.n_u))
+        masks = property(lambda _: create_masks(_._parent.data.n_e, _._parent.data.n_u))
         terms_s_emb   = ['x_rlen', 'x']
         terms_p_emb   = ['xx']
         compute_s_emb = \
@@ -194,7 +195,7 @@ class Pyfig:
         print('System ')
         pprint(_i.data.d)
         print('Model ')
-        pprint(_i.model.d)
+        pprint({k:(v if not k=='masks' else '...') for k,v in _i.model.d.items() })
 
         run = wandb.init(
             job_type    = _i.wandb_c.job_type,
