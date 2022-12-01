@@ -31,12 +31,13 @@ class FermiNet(nn.Module):
 	n_det: int = None
 	n_fb: int = None
 	n_fb_out: int = None
-    n_pv: int = None
-    n_sv: int = None
-    a: jnp.ndarray =None
-    masks: tuple=None
-    @nn.compact # params arg hidden in apply
-    def __call__(_i, x):
+	n_pv: int = None
+	n_sv: int = None
+	a: jnp.ndarray =None
+	masks: tuple=None
+	
+	@nn.compact # params arg hidden in apply
+	def __call__(_i, x):
 		
 		if len(x.shape) == 1:  # jvp hack
 			x = x.reshape(_i.n_e, 3)
