@@ -23,6 +23,7 @@ from hwat import compute_s_perm, init_walker, compute_emb, create_masks
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 success = ["❌", "✅"]
 
+# Variables cannot be a type
 class af:
     tanh = nn.tanh
 
@@ -75,18 +76,17 @@ class Pyfig:
         init_walker = \
             property(lambda _: \
                 partial(init_walker, n_b=_.n_b, n_u=_.n_u, n_d=_.n_d, center=_.a, std=0.1))
-        
+
         corr_len:   int      = 20
         equil_len:  int      = 1000  # total number: n_equil_loop = equil_len / corr_len
         acc_target: int      = 0.5
-
+        
     class model(Sub):
         n_sv: int       = 32
         n_pv: int       = 16
         n_fb: int       = 16
         n_det: int      = 1
         n_fb_out: int   = property(lambda _: _.n_sv*3+_.n_pv*2)
-        masks = property(lambda _: partial(create_masks, _._parent.data.n_e, _._parent.data.n_u))
         masks = property(lambda _: create_masks(_._parent.data.n_e, _._parent.data.n_u))
         terms_s_emb   = ['x_rlen', 'x']
         terms_p_emb   = ['xx']
@@ -263,6 +263,7 @@ class Pyfig:
 
     def submit(_i, sweep=False, commit_msg=None, commit_id=None):
         commit_msg = commit_msg or _i.exp_id
+        
         _i.submit_state *= -1
         if _i.submit_state > 0:
             if sweep:
@@ -305,6 +306,7 @@ class Pyfig:
         d_k = inspect.signature(f.__init__).parameters.keys()
         d = {k:v for k,v in d.items() if k in d_k}
         return f(**d)
+
 
     def merge(_i, d:dict, _n=0):
         for k,v in d.items():

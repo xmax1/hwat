@@ -1,10 +1,27 @@
 
+
+
+
+
+
+# How To
+- Fill in User Details in Pyfig
+
+
+
+# Doc Notes
+## Glossary
+
+
+
+
+
+
+
 # Gist / Notion / Embed / Share
 - https://blog.shorouk.dev/2020/06/how-to-embed-any-number-of-html-widgets-snippets-into-notion-app-for-free/
 
-
-
-
+https://hwat.herokuapp.com/panel_demo
 
 
 # Setup
@@ -41,10 +58,8 @@ ln -s /usr/local/lib/heroku/bin/heroku /usr/local/bin/heroku
     - heroku git:remote -a example-app
 - git push heroku main
 
-
-
-
-
-
 ## ide-yeet 
 - Other 
+
+
+<script src="https://gist.github.com/xmax1/f9f66535467ec44759193a18594e72c4.js"></script>
