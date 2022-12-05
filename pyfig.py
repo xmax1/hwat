@@ -11,7 +11,9 @@ from copy import copy
 from typing import Any
 import shutil
 
-from jax import numpy as jnp, random as rnd
+from jax import numpy as jnp
+from jax import random as rnd
+import numpy as np
 from flax import linen as nn
 import optax 
 
@@ -24,6 +26,10 @@ docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 success = ["❌", "✅"]
 
 # Variables cannot be a type
+# Until we understand the jit leak compilation issue - we only use np arrays. 
+
+
+
 class af:
     tanh = nn.tanh
 
@@ -46,6 +52,8 @@ class Sub:
             _d[k] = v
         return _d
 
+
+
 class Pyfig:
     # 🔴 Variables in any class/subclass cannot have the same name
 
@@ -57,26 +65,31 @@ class Pyfig:
     exp_name:       str     = 'demo-final'
     exp_id:         str     = gen_alphanum(n=7)
     
-    dtype:          str     = 'f32'
+    dtype:          str     = 'float32'
     n_step:         int     = 10000
-    log_metric_step         = 100
-    log_state_step          = 10          
+    log_metric_step:int     = 100
+    log_state_step: int     = 10          
 
-    seed:           int     = 808017424 # grr
-    rng_init:       jnp.ndarray = property(lambda _: rnd.split(rnd.PRNGKey(_.seed), _.n_device))
+    # seed:           int     = 808017424 # grr
+    seed:           int     = 80085 # grr
+    # rng_init:   jnp.ndarray = property(lambda _: rnd.split(rnd.PRNGKey(_.seed), _.n_device))
 		
     class data(Sub):
-        n_b:    int         = 256
-        l_e:    list        = [6,]
-        n_u:    int         = 3
+        with_sign: bool     = False
+        n_b:    int         = 512
+
+        l_e:    list        = [4,]
+        n_u:    int         = 2
+
         n_e:    int         = property(lambda _: int(sum(_.l_e)))
-        n_d:    int         = property(lambda _:_.n_e-_.n_u)
-        a:      jnp.ndarray = jnp.array([[0.0, 0.0, 0.0],])
-        a_z:    jnp.ndarray = property(lambda _: jnp.array(_.n_e))
+        n_d:    int         = property(lambda _: _.n_e-_.n_u)
+        a:      np.ndarray  = property(lambda _: np.array([[0.0, 0.0, 0.0],]))
+        a_z:    np.ndarray  = property(lambda _: np.array([4.,]))
+        a_z:    np.ndarray  = a_z.setter(lambda _, _a_z: np.array(_a_z))
+        
         init_walker = \
             property(lambda _: \
                 partial(init_walker, n_b=_.n_b, n_u=_.n_u, n_d=_.n_d, center=_.a, std=0.1))
-
         corr_len:   int      = 20
         equil_len:  int      = 1000  # total number: n_equil_loop = equil_len / corr_len
         acc_target: int      = 0.5
@@ -84,18 +97,16 @@ class Pyfig:
     class model(Sub):
         n_sv: int       = 32
         n_pv: int       = 16
-        n_fb: int       = 16
+        n_fbv: int      = property(lambda _: _.n_sv*3+_.n_pv*2)
+        n_fb: int       = 3
         n_det: int      = 1
-        n_fb_out: int   = property(lambda _: _.n_sv*3+_.n_pv*2)
-        masks = property(lambda _: create_masks(_._parent.data.n_e, _._parent.data.n_u))
-        terms_s_emb   = ['x_rlen', 'x']
-        terms_p_emb   = ['xx']
-        compute_s_emb = \
-            property(lambda _: partial(compute_emb, terms=_.terms_s_emb))
-        compute_p_emb = \
-            property(lambda _: partial(compute_emb, terms=_.terms_p_emb))
-        compute_s_perm: partial = \
-            property(lambda _: partial(compute_s_perm, n_u=_._parent.data.n_u))
+        terms_s_emb:list     = ['r_len', 'r', 'ra', 'ra_len']
+        terms_p_emb:list     = ['rr']
+        compute_s_emb:Callable   = property(lambda _: partial(compute_emb, terms=_.terms_s_emb, a=_._parent.data.a))
+        compute_p_emb:Callable   = property(lambda _: partial(compute_emb, terms=_.terms_p_emb))
+        # p_mask_u: jnp.ndarray    = property(lambda _: create_masks(_._parent.data.n_e, _._parent.data.n_u, _._parent.dtype))
+        # p_mask_d: jnp.ndarray    = property(lambda _: create_masks(_._parent.data.n_e, _._parent.data.n_u, _._parent.dtype))
+        # compute_s_perm: Callable = property(lambda _: partial(compute_s_perm, n_u=_._parent.data.n_u, p_mask_u=_.p_mask_u, p_mask_d=_.p_mask_d))
     
     class opt(Sub):
         optimizer       = 'Adam'
@@ -104,7 +115,7 @@ class Pyfig:
         eps             = 1e-8
         lr              = 0.0001
         loss            = 'l1'  # change this to loss table load? 
-        tx = property(lambda _: optax.chain(optax.adaptive_grad_clip(1.0),optax.adam(_.lr)))
+        tx = property(lambda _: optax.chain(optax.adaptive_grad_clip(1.0), optax.adam(_.lr)))
 
     class sweep(Sub):
         method          = 'random'
@@ -154,14 +165,13 @@ class Pyfig:
             mv_cmd = f'mv {_._parent.TMP}/o-$SLURM_JOB_ID.out {_._parent.TMP}/e-$SLURM_JOB_ID.err $out_dir' 
     """
     )
-    
+
     project_path:       Path    = property(lambda _: _.project_root / _.project)
     server_project_path:Path    = property(lambda _: _.project_path)
     n_device:           int     = property(lambda _: count_gpu())
 
     iter_exp_dir:       bool    = False  # True is broken, bc properties
-    exp_path:           Path    = property(lambda _: \
-        iterate_folder(_.project_exp_dir/_.exp_name,_.iter_exp_dir)/_.exp_id)
+    exp_path:           Path    = property(lambda _: iterate_folder(_.project_exp_dir/_.exp_name,_.iter_exp_dir)/_.exp_id)
     project_exp_dir:    Path    = property(lambda _: _.project_path / 'exp')
     project_cfg_dir:    Path    = property(lambda _: _.project_path / 'cfg')
     
@@ -185,9 +195,8 @@ class Pyfig:
                 v = v(parent=_i)
                 setattr(_i, k, v)
         
-        n_unmerged = _i.merge(cmd_to_dict(sys.argv[1:],_i.d))
-        n_unmerged += _i.merge(args)
-        print(f'{n_unmerged} args unmerged: {success[~bool(n_unmerged)]}')   
+        _i.merge(cmd_to_dict(sys.argv[1:], _i.d))
+        _i.merge(args)
 
         mkdir(_i.exp_path)
         print('Path: ', _i.exp_path.absolute(), '✅')
@@ -209,35 +218,6 @@ class Pyfig:
 
         _i.wandb_c.wandb_run_path = run.path  
         print('run: ', run.path, '✅')
-        
-        try:
-            # shutil.copy('./analysis.ipynb', _i.exp_path/'analysis.ipynb')
-            # shutil.copy('./analysis.py', _i.exp_path/'analysis.py')
-            def write_jup(path, wandb_run_path):
-                import json
-                with open(path, 'r') as f:
-                    jup = json.load(f)
-                cmd = f"""
-                api = wandb.Api()
-                run = api.run("{wandb_run_path}")
-                c = run.config
-                h = run.history()
-                s = run.summary
-                """
-                
-                cell = {
-                "cell_type": "code",
-                "execution_count": 1,
-                "metadata": {},
-                "outputs": [],
-                "source": [cmd]
-                }
-                jup['cells'].insert(1, cell)
-                with open(path, 'w') as f:
-                    jup = json.dump(jup, f)
-            write_jup('analysis.ipynb', run.path)
-        except:
-            print('f')
 
         if _i.submit_state > 0:
             n_job_running = run_cmds([f'squeue -u {_i.user} -h -t pending,running -r | wc -l'])
@@ -259,7 +239,7 @@ class Pyfig:
     @property
     def commit_id(_i,)->str:
         process = run_cmds(['git log --pretty=format:%h -n 1'], cwd=_i.project_path)[0]
-        return process.stdout.decode('utf-8') 
+        return process.stdout.decode('utf-8')     
 
     def submit(_i, sweep=False, commit_msg=None, commit_id=None):
         commit_msg = commit_msg or _i.exp_id
@@ -282,15 +262,16 @@ class Pyfig:
             # server_out = run_cmds_server(_i.server, _i.user, cmd, cwd=_i.server_project_path)
     
     @property
-    def d(_i, _ignore_attr=['d', 'cmd', 'submit', 'partial']):
+    def d(_i, _ignore_attr=['d', 'cmd', 'submit', 'partial', 'test_suite', 'sweep']):
         _d = {}
         for k,v in _i.__class__.__dict__.items():
             if k.startswith('_') or k in _ignore_attr:
                 continue
-            # print(k, v)
+
             if isinstance(v, partial):
-                v = _i.__dict__[k] # ‼ 🏳 Danger zone - partials may not be part of dict
-            v = getattr(_i, k)
+                v = copy(_i.__dict__[k]) # ‼ 🏳 Danger zone - partials may not be part of dict
+            else:
+                v = getattr(_i, k)
             if isinstance(v, Sub): 
                 v = v.d
             _d[k] = v
@@ -300,25 +281,35 @@ class Pyfig:
     def _sub_cls(_i):
         return [v for v in _i.__dict__.values() if isinstance(v, Sub)]
 
-    def partial(_i, f:Callable):
+    def partial(_i, f:Callable, **kw):
         # _i._debug_print(on=False)
         d = flat_any(_i.d)
         d_k = inspect.signature(f.__init__).parameters.keys()
-        d = {k:v for k,v in d.items() if k in d_k}
+        d = {k:copy(v) for k,v in d.items() if k in d_k}
+        print(d)
+        d = {k:v for k,v in d.items() if k in d_k} | kw
+        print(d)
         return f(**d)
 
 
-    def merge(_i, d:dict, _n=0):
+    def merge(_i, d:dict):
+        merged = []
         for k,v in d.items():
             for cls in [_i]+_i._sub_cls:
                 if k in cls.__class__.__dict__:
-                    if isinstance(cls.__class__.__dict__[k], property):
-                        print(f'Tried to set a property {k}, letting you off this time')
-                    else:
+                    try:
+                        setattr(cls, k, copy(v))
+                    except Exception as e:
+                        print(e)
+                        print('Unmerged {k}')
+                    # if isinstance(cls.__class__.__dict__[k], property.getter):
+                    #     print(f'Tried to set a property {k}, letting you off this time')
+                    # else:
                         # cls.__class__.__dict__[k] = copy(v)
-                        cls.__dict__[k] = copy(v)
-                        _n += 1
-        return len(d) - _n
+                        # cls.__dict__[k] = copy(v)
+                        
+                        # merged += [k]
+            
 
     def _to_wandb(_i, d:dict, parent='', sep='.', _l:list=[])->dict:
         for k, v in d.items():
@@ -342,4 +333,7 @@ class Pyfig:
             if cls:
                 [print(k,v) for k,v in vars(_i.__class__).items() if not k.startswith('_')]
 
+
+
+        
 

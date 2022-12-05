@@ -209,20 +209,33 @@ class Metrix_beta:
 				v_set[i] = _i.npify(v)
 		return v_set
 
-# class _Sub:
-    
-#     def __init__(_i, parent) -> None:
-#         super().__init__()
-#         _i.parent = parent
-    
-#     @property
-#     def dict(_i,):
-#         d = _i._dict_from_cls(_i,)
-#         for k,v in d.items():
-#             if issubclass(type(v), _Sub):  # type(v) on an instantiated class returns the class, which is a subclass of _Sub
-#                 d[k] = _i._dict_from_cls(v)
-#         return d
 
-#     @staticmethod
-#     def _dict_from_cls(cls):
-#         return {k: getattr(cls, k) for k in dir(cls) if not k.startswith('_') and not k in ['dict', 'parent', 'sys_arg', 'cmd']}
+
+
+### Jax Type Testing ### 
+
+
+
+def test_print_fp16_no_cast():
+    x = jnp.ones([1], dtype='float16')
+    print(x)  # FAILS
+
+
+def test_print_fp16():
+    x = jnp.ones([1], dtype='float16')
+    x = x.astype('float16')
+    print(x)  # OK
+
+
+def test_print_fp32():
+    x = jnp.ones([1], dtype='float16')
+    x = x.astype('float16')
+    x = x.astype('float32')
+    print(x)  # OK
+
+
+def test_print_fp32_to_fp16_cast():
+    x = jnp.ones([1], dtype='float32')
+    x = x.astype('float16')
+    print(x)  # FAILS
+

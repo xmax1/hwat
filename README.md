@@ -13,8 +13,22 @@
 ## Glossary
 
 
+# Test Suite
+- Anti-symmetry
 
+# Theory notes
+- Why is the mean over the electron axes equal to a quarter? 
+    - The mean of the entire thing is equal to zero...
+    - * this problem is interesting and lead to the tril idea
 
+# Model Ideas
+- Alter the dims of the embedded variables to match the first FermiBlock layer, giving more residual connections (ie mean with keepdims)
+    - name: 'fb0_res'
+    - r_s_res = r_s_var.mean(-1, keepdims=True) if _i.fb0_res else jnp.zeros((_i.n_e, _i.n_sv), dtype=r.dtype)
+- Electrons are indistinguishable... Why no mix mas? Eg in the initial layers, extrac the mean out the fermi block and perform it every iteration removing the means from the fermi block 
+- Tril to drop the lower triangle duh? 
+    - Need to check the antisymmetry, for sure
+- Max pools ARE ALSO PERMUTATION INVARIANT
 
 
 

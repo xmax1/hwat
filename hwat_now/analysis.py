@@ -10,56 +10,11 @@ from prettytable import PrettyTable
 from matplotlib import pyplot as plt
 from matplotlib.ticker import MultipleLocator, AutoMinorLocator
 
-from walle import bureaucrat as wb
 
-class wGather:
-    def __init__(self) -> None:
-        pass
-
-    def d(self) -> dict:
-        return self.__dict__
-    
-    def __setattr__(self, k: str, v: Any):
-        v = np.array(v).tolist()
-        if not k in self.d.keys():
-            self.d[k] = [v]
-        else:
-            self.d[k] += [v]
-
-def format_val_to_csv(v: Any):
-    return str(v)
-
-def create_summary(p: Path, keys: list = ['exp_id'], tab='\t'*4):
-    exp_all = [exp.parent for exp in p.rglob('*py.out')]
-    with open(p/'summary.csv', 'w') as f:
-        for exp in exp_all:
-            c = wb.load_pyfig(exp)
-            line = [(format_val_to_csv(c.dict[k]) + tab) for k in keys]
-            f.writelines(line)  
-            # for k in keys:
-            #     setattr(stat, k, c.dict[k])
-
-
-walle_cmaps = {
+mpl_cmaps = {x: plt.get_cmap(x) for x in ['viridis', 'plasma', 'inferno', 'magma', 'cividis']}
+cmaps = { # http://colormind.io/
     'nice': ['#0051a2', '#97964a', '#ffd44f', '#f4777f', '#93003a']
-
-}
-
-mpl_cmap_list = ['viridis', 'plasma', 'inferno', 'magma', 'cividis']
-mpl_cmaps = {x: plt.get_cmap(x) for x in mpl_cmap_list}
-
-cmaps = walle_cmaps | mpl_cmaps
-
-def get_cmap(name: str, iterable: bool = True):
-    # cmap = get_cmap('viridis', iterable=False)
-    # cmap = plt.get_cmap('viridis')
-    # cmap = iter([cmap(x) for x in np.linspace(0, 1, n_plots)])
-    cmap = cmaps[name]
-    if iterable:
-        return iter(cmap)
-    else:
-        return cmap
-    
+} | mpl_cmaps
 
 def plot_setup(
     fsize   = 15,
@@ -96,7 +51,6 @@ def plot_setup(
     fig, axs = plt.subplots(*figshape, figsize=(figshape[1]*figsize[1], figshape[0]*figsize[0]))
 
     return fig, axs
-
 
 def plot_format(
     ax,
@@ -137,110 +91,61 @@ def plot_format(
         ax.set_yticks(yticks)
         ax.set_yticklabels(yticklabels, rotation=45)
 
-    # ax.tick_params(
-    #     axis='both', 
-    #     which='minor',
-    #     bottom=False,
-    # )
-
-    # ax.ticklabel_format(axis='both', style='sci', scilimits=(-2, 3), useMathText=True, useOffset=True)
-#         ax.tick_params(axis='both', pad=3.)  # pad default is 4.
-
-    # ax.xaxis.set_major_locator(MultipleLocator(20))
-    # ax.xaxis.set_major_formatter('{x:.0f}')
-
-    # ax.get_xaxis().set_visible(False)
-    # ax.get_yaxis().set_visible(False)
     if aspect is not None:
         x_left, x_right = ax.get_xlim()
         y_low, y_high = ax.get_ylim()
         ax.set_aspect(abs((x_right-x_left)/(y_low-y_high))*aspect)
 
+def useful_instructions(ax):
+    ax.tick_params(
+        axis='both', 
+        which='minor',
+        bottom=False,
+    )
 
-# printing
+    ax.ticklabel_format(axis='both', style='sci', scilimits=(-2, 3), useMathText=True, useOffset=True)
+    ax.tick_params(axis='both', pad=3.)  # pad default is 4.
 
-def pretty_print_dict(d: dict, header: str | None = None):
+    ax.xaxis.set_major_locator(MultipleLocator(20))
+    ax.xaxis.set_major_formatter('{x:.0f}')
+
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
+    # cmap = get_cmap('viridis', iterable=False)
+    # cmap = plt.get_cmap('viridis')
+    # cmap = iter([cmap(x) for x in np.linspace(0, 1, n_plots)])
+
+def format_val_to_csv(v: Any):
+    return str(v)
+
+def get_cmap(name: str, iterable: bool = True):
+    return iter(cmaps[name]) if iterable else cmaps[name]
     
-    if not header is None:
-        print(header)
+def pretty_table(
+    df: pd.DataFrame, 
+    cols: list = None,
+    top: float = 100.0, 
+    bottom: float = 0.01
+):
     
-    # print_tmp = print(f'{k}: {(' ' * whitespace):str} {v} ({type(v).__name__})')
-    def print_tmp(k, whitespace, v):
-        whitespace = f' ' * whitespace
-        print(f'{k}: {whitespace} {v} ({type(v).__name__})')
-    
-    max_chars = max([len(k) for k in d.keys()]) + 3
-    
-    for k, v in d.items():
-        v = wb.array_to_lists(v) 
-        
-        whitespace = max_chars - len(k)  # set the whitespace so all prints are aligned
-        
-        if isinstance(v, list):
-            if isinstance(v[0], list) and len(v) > 1:
-                print_tmp(k, whitespace, v[0])
-                whitespace += len(k)
-                for l in v[1:]:
-                    print_tmp('', whitespace, l)
-            else:
-                print_tmp(k, whitespace, v)
-        else:
-            print_tmp(k, whitespace, v)
-
-
-def save_pretty_table(data: dict | pd.DataFrame, 
-                      path: str = 'table.txt',
-                      top: float = 100.0, 
-                      bottom: float = 0.01):
-
-    if isinstance(data, pd.DataFrame):
-        data = df_to_dict(data, type_filter=[str, object])
-    
-    map_small = lambda x: '{:.3f}'.format(x)
-    map_big = lambda x: '{:.3e}'.format(x)
-
     table = PrettyTable()
-    for k, v in data.items():
-        v = np.squeeze(v)
-        if v.ndim == 1:
-            
-            v = map(map_small, v) if ((top > v).all() and (v > bottom).all()) else map(map_big, v)
-            
-            table.add_column(k, list(v))
-
-    with open(path, 'w') as f:
-        f.write(str(table))
-
-
-def save_pretty_table_pandas(df: pd.DataFrame, path='table.txt', cols=None, top=100, bottom=0.01):
-    
-    if cols is None: cols = df.columns
-
-    table = PrettyTable()
-    for c in cols:
+    for c in cols if not cols is None else df.columns:
         if df[c].dtypes not in [str, object]:
             if (top > df[c]).all() and (df[c] > bottom).all():
-                df[c] = df[c].map(lambda x: '{:.3f}'.format(x))
+                df[c] = df[c].map(lambda x: '{:.3f}'.format(x)) 
             else:
                 df[c] = df[c].map(lambda x: '{:.3e}'.format(x))
             
             table.add_column(c, list(df[c]))
 
-    with open(path, 'w') as f:
-        f.write(str(table))
-
-
 ### LATEX ###
-def get_precision(x):
-  prec = -int(floor(log10(abs(x))))
-  return prec
 
 def gen_latex_table_rows(
     d           : dict, 
     norm_table  : pd.DataFrame, 
     cols        : list, 
     fname       : str,
-    cmap        : plt.Color = mpl_cmaps['plasma'],
+    cmap        = mpl_cmaps['plasma'],
 ):
     header = '&'.join(cols) + ' \\\\ \n'
     with open(fname, "w") as f:
@@ -270,9 +175,26 @@ def gen_latex_table_rows(
 
 
 ### PANDAS ###
+
 def df_to_dict(df: pd.DataFrame, type_filter: list = []) -> dict:
     return {c:np.array(df[c]) for c in df.columns if df[c].dtypes not in type_filter}
 
+
+### utils ###
+
+def get_precision(x):
+  prec = -int(floor(log10(abs(x))))
+  return prec
+
+def mkdir(path: Path) -> Path:
+    path = Path(path)
+    if path.suffix != '':
+        path = path.parent
+    if path.exists():
+        print('path exists, leaving alone')
+    else:
+        path.mkdir(parents=True)
+    return path
 
 ''' LINE PROPERTIES 
 Line setters
