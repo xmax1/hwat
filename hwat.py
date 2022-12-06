@@ -13,12 +13,11 @@ from jax import vmap, jit, pmap
 ### MODEL ### https://www.notion.so/HWAT-Docs-2bd230b570cc4814878edc00753b2525#cc424dfd1320496f85fc0504b41946cd
 
 @partial(
-	nn.vmap,
-	variable_axes={"params": None, "batch_stats": None},
-	split_rngs={"params": False},
-	in_axes=0,
-	out_axes=0,
-	axis_name="b"
+	nn.vmap, 
+	in_axes=0, 
+	out_axes=0, 
+	variable_axes={'params': None}, 
+	split_rngs={'params': False}
 )
 class FermiNet(nn.Module):
 	n_e: int = None
@@ -37,31 +36,48 @@ class FermiNet(nn.Module):
 	@nn.compact # params arg hidden in apply
 	def __call__(_i, r: jnp.ndarray):
 		
+		n_a, _ = _i.a.shape
+		
 		if len(r.shape) == 1:  # jvp hack
 			r = r.reshape(_i.n_e, 3)
 		
-		ru, rd = r[:_i.n_u], r[_i.n_u:]
+		# ra = compute_rrvec(r, _i.a)
+
+		ra = (r[:, None, ...] - _i.a[None, ...]).reshape(_i.n_e, -1)
 
 		p_mask_u, p_mask_d = create_masks(_i.n_e, _i.n_u, r.dtype)
 
-		r_s_var = _i.compute_s_emb(r)
-		r_p_var = _i.compute_p_emb(r) + jnp.eye(_i.n_e)[..., None]
+		r_s_var = jnp.concatenate([ra, jnp.linalg.norm(ra, axis=-1, keepdims=True)], axis=-1)
+		r_p_var = (r[None, ...] - r[:, None, :]) + jnp.eye(_i.n_e)[..., None]
+		r_p_var = jnp.concatenate([r_p_var, jnp.linalg.norm(r_p_var, axis=-1, keepdims=True)], axis=-1)
+		# r_s_var = _i.compute_s_emb(r)
+		# r_p_var = _i.compute_p_emb(r)
 		# wpr(dict(r_s_var=r_s_var, r_p_var=r_p_var))
 
-		# r_s_res = jnp.zeros((_i.n_e, _i.n_sv), dtype=r.dtype)
-		# r_p_res = jnp.zeros((_i.n_e, _i.n_e, _i.n_pv), dtype=r.dtype)
+		r_s_res = jnp.zeros((_i.n_e, _i.n_sv), dtype=r.dtype)
+		r_p_res = jnp.zeros((_i.n_e, _i.n_e, _i.n_pv), dtype=r.dtype)
 		for l in range(_i.n_fb):
-			r_s_var = jnp.tanh(nn.Dense(_i.n_sv, name=f's_{l}')(r_s_var)) # + r_s_res r_s_res =
-			r_p_var = jnp.tanh(nn.Dense(_i.n_pv, name=f'p_{l}')(r_p_var)) # r_p_res =+ r_p_res
-			r_s_var = compute_s_perm(r_s_var, r_p_var, _i.n_u, p_mask_u, p_mask_d)
+			r_s_var = jnp.tanh(compute_s_perm(r_s_var, r_p_var, _i.n_u, p_mask_u, p_mask_d)) 
+			r_p_var = r_p_res = jnp.tanh(nn.Dense(_i.n_pv, name=f'p_{l}')(r_p_var)) + r_p_res 
+			r_s_var = r_s_res = nn.Dense(_i.n_sv, name=f's_{l}')(r_s_var)  + r_s_res 
 
-		r_w = jnp.tanh(nn.Dense(_i.n_fbv//2)(r_s_var))
-		r_wu = nn.Dense(_i.n_det*_i.n_u)(r_w[:_i.n_u])
-		r_wd = nn.Dense(_i.n_det*_i.n_d)(r_w[_i.n_u:])
+		# r_wu = jnp.tanh(nn.Dense(_i.n_fbv//2)(r_s_var[:_i.n_u]))
+		# r_wd = jnp.tanh(nn.Dense(_i.n_fbv//2)(r_s_var[_i.n_u:]))
+		r_wu = jnp.tanh(nn.Dense(_i.n_det*_i.n_u)(r_s_var[:_i.n_u]))  # (r_j, w_i) 
+		r_wd = jnp.tanh(nn.Dense(_i.n_det*_i.n_d)(r_s_var[_i.n_u:]))
 		# wpr(dict(r_w=r_w, r_wu=r_wu, r_wd=r_wd))
 
-		orb_u = (r_wu * jnp.exp(-nn.Dense(_i.n_u*_i.n_det)(ru-_i.a))).reshape((_i.n_det, _i.n_u, _i.n_u)) # (e, f(e)) (e, (f(e))*n_det)
-		orb_d = (r_wd * jnp.exp(-nn.Dense(_i.n_d*_i.n_det)(rd-_i.a))).reshape((_i.n_det, _i.n_d, _i.n_d))
+		exp_u_0 = nn.Dense(3*max(n_a,1)*_i.n_u*_i.n_det)(ra[:_i.n_u])  # (r_i, a_i, w_i*3*det_i)
+		exp_u_1 = exp_u_0.reshape(_i.n_u, n_a, _i.n_det, _i.n_u, 3) # (e, f(e)) (e, (f(e))*n_det)
+		# exp_u_2 = jnp.transpose(exp_u_1, (2,1,0,3))
+		exp_u_2 = jnp.transpose(jnp.linalg.norm(exp_u_1, axis=-1), (2,1,0,3))
+		orb_u  = r_wu * jnp.exp(-exp_u_2).sum(1)
+
+		exp_d_0 = nn.Dense(3*max(n_a,1)*_i.n_d*_i.n_det)(ra[_i.n_u:])  # (r_i, a_i, w_i*3*det_i)
+		exp_d_1 = exp_d_0.reshape(_i.n_d, n_a, _i.n_det, _i.n_d, 3) # (e, f(e)) (e, (f(e))*n_det)
+		exp_d_2 = jnp.transpose(jnp.linalg.norm(exp_d_1, axis=-1), (2,1,0,3))
+		# exp_d_2 = jnp.transpose(exp_d_1, (2,1,0,3))
+		orb_d = r_wd * jnp.exp(-exp_d_2).sum(1)
 		# wpr(dict(orb_u=orb_u, orb_d=orb_d))
 
 		log_psi, sgn = logabssumdet(orb_u, orb_d)
@@ -80,28 +96,38 @@ def compute_emb(r, terms, a=None):
 	if 'r_len' in terms:  
 		z += [jnp.linalg.norm(r, axis=-1, keepdims=True)]  
 	if 'ra' in terms:  
-		z += [compute_rrvec(r, a).reshape(n_e, -1)]  
+		z += [(r[:, None, :] - a[None, ...]).reshape(n_e, -1)]  
 	if 'ra_len' in terms:  
-		z += [compute_rrlen(r, a).reshape(n_e, -1)]
+		z += [jnp.linalg.norm(r[:, None, :] - a[None, ...], axis=-1)]
 	if 'rr' in terms:
 		z += [compute_rrvec(r, r)]
 	if 'rr_len' in terms:
-		z += [compute_rrlen(r, r)]
+		z += [compute_rrlen(r)]
 	return jnp.concatenate(z, axis=-1)
 
-compute_rrvec = lambda ri, rj: ri[:, None, :] - rj[None, :, :]
 
-compute_rrlen = lambda ri, rj, keepdims=True: jnp.linalg.norm(compute_rrvec(ri, rj), axis=-1, keepdims=keepdims)
+def compute_rrlen(ri, rj=None):
+	n_dim = ri.shape[0]
+	rj_1 = ri if rj is None else rj
+	rr_vec = compute_rrvec(ri, rj_1)
+	if rj is None: 
+		rr_vec = rr_vec * jnp.eye(n_dim)[..., None]
+	return jnp.linalg.norm(rr_vec, axis=-1, keepdims=True) * ((jnp.eye(n_dim)-1.)*-1)[..., None]
+
+
+compute_rrvec = lambda ri, rj: jnp.expand_dims(ri, axis=-2) - jnp.expand_dims(rj, axis=-3)
+
 
 def compute_s_perm(r_s_v, r_p_v, n_u, p_mask_u, p_mask_d):
 
 	mean_s_u = r_s_v[:n_u].mean(axis=0, keepdims=True).repeat(r_s_v.shape[0], axis=0)
 	mean_s_d = r_s_v[n_u:].mean(axis=0, keepdims=True).repeat(r_s_v.shape[0], axis=0)
 
-	sum_p_u = jnp.expand_dims(p_mask_u, axis=-1)*r_p_v
-	sum_p_d = jnp.expand_dims(p_mask_d, axis=-1)*r_p_v 
+	sum_p_u = (p_mask_u[..., None]*r_p_v).mean(0)
+	sum_p_d = (p_mask_d[..., None]*r_p_v).mean(0)
 
-	return jnp.concatenate((r_s_v, mean_s_u, mean_s_d, sum_p_u.mean(0), sum_p_d.mean(0)), axis=-1)
+	return jnp.concatenate((r_s_v, mean_s_u, mean_s_d, sum_p_u, sum_p_d), axis=-1)
+
 
 def logabssumdet(orb_u, orb_d=None):
 	
@@ -127,11 +153,13 @@ def logabssumdet(orb_u, orb_d=None):
 
 def create_masks(n_e, n_u, dtype):
 	""" up with down and down with up """
+	""" sum along 0th axis in fermiblock """
+	eye_mask = ((jnp.eye(n_e)-1.)*-1)
 	n_d = n_e - n_u
-	e_i = jnp.arange(0, n_e)[:, None]
+	e_i = jnp.ones((n_e, n_e))  # (i, j) \sum_j
 	e_j = jnp.arange(0, n_e)[None, :]
-	m_u = (e_i < n_u) * (e_j >= n_u)
-	m_d = (e_i >= n_d) * (e_j < n_u)
+	m_u = e_i * (e_j < n_u)  * eye_mask  # *)
+	m_d = e_i * (e_j >= n_u) * eye_mask  # *(e_j < n_u))
 	return m_u.astype(dtype), m_d.astype(dtype)
 
 def maybe_put_param_in_dict(params):
@@ -147,21 +175,21 @@ def batched_cdist_l2(x1, x2):
 	return cdist
 
 # @partial(jax.vmap, in_axes=(0,None,None))
-def compute_pe(x, a, a_z):
-	n_a = len(a)
+# def compute_pe(x, a, a_z):
+# 	n_a = len(a)
 
-	e_e_dist = batched_cdist_l2(x, x)
-	pe = jnp.sum(jnp.tril(1. / e_e_dist, k=-1))    # https://www.notion.so/Potential-energy-fn-ac8267aefc2343778174958fad531cb5
+# 	e_e_dist = batched_cdist_l2(x, x)
+# 	pe = jnp.sum(jnp.tril(1. / e_e_dist, k=-1))    # https://www.notion.so/Potential-energy-fn-ac8267aefc2343778174958fad531cb5
 
-	a_e_dist = batched_cdist_l2(a, x)
-	pe -= jnp.sum(a_z / a_e_dist)
+# 	a_e_dist = batched_cdist_l2(a, x)
+# 	pe -= jnp.sum(a_z / a_e_dist)
 
-	if n_a > 1:
-		a_a_dist = batched_cdist_l2(a, a)
-		weighted_a_a = (a_z[:, None] * a_z[None, :]) / a_a_dist
-		unique_a_a = jnp.tril(weighted_a_a, k=-1)
-		pe += jnp.sum(unique_a_a)
-	return pe
+# 	if n_a > 1:
+# 		a_a_dist = batched_cdist_l2(a, a)
+# 		weighted_a_a = (a_z[:, None] * a_z[None, :]) / a_a_dist
+# 		unique_a_a = jnp.tril(weighted_a_a, k=-1)
+# 		pe += jnp.sum(unique_a_a)
+# 	return pe
 
 @partial(
 	nn.vmap,
@@ -174,38 +202,72 @@ class PotentialEnergy(nn.Module):
 	a_z: jnp.ndarray
 
 	@nn.compact
-	def __call__(_i, x):
+	def __call__(_i, r):
+
 		n_a = len(_i.a)
 
-		e_e_dist = batched_cdist_l2(x, x)
-		pe = jnp.sum(jnp.tril(1. / e_e_dist, k=-1))
+		e_e_dist = batched_cdist_l2(r, r)
+		pe = jnp.sum(jnp.tril(1. / e_e_dist, k=-1))    # https://www.notion.so/Potential-energy-fn-ac8267aefc2343778174958fad531cb5
 
-		a_e_dist = batched_cdist_l2(_i.a, x)
+		a_e_dist = batched_cdist_l2(_i.a, r)
 		pe -= jnp.sum(_i.a_z / a_e_dist)
 
 		if n_a > 1:
+			print('here')
 			a_a_dist = batched_cdist_l2(_i.a, _i.a)
 			weighted_a_a = (_i.a_z[:, None] * _i.a_z[None, :]) / a_a_dist
 			unique_a_a = jnp.tril(weighted_a_a, k=-1)
 			pe += jnp.sum(unique_a_a)
+		
+		# rr_len = compute_rrlen(r, r).squeeze()
+		# pe = jnp.tril(1./rr_len, k=-1).sum()
+
+		# ra_len = jnp.linalg.norm(r[:, None, :] - _i.a[:, ...], axis=-1)
+		# # ra_len = compute_rrlen(r,_i.a).squeeze()
+		# pe     -= (_i.a_z/ra_len).sum()
+
+		# if len(_i.a) > 1:
+		# 	aa_len = compute_rrlen(_i.a, _i.a).squeeze()
+		# 	weighted_a_a = (_i.a_z[:, None]*_i.a_z[None, :])/aa_len
+		# 	pe += jnp.tril(weighted_a_a, k=-1).sum()
 		return pe
 
-def compute_ke_b(state, x):
-	n_b, n_e, _ = x.shape
+
+
+def compute_pe(r, a=None, a_z=None):
+
+	n_a = len(a)
+
+	e_e_dist = batched_cdist_l2(r, r)
+	pe = jnp.sum(jnp.tril(1. / e_e_dist, k=-1))    # https://www.notion.so/Potential-energy-fn-ac8267aefc2343778174958fad531cb5
+
+	a_e_dist = batched_cdist_l2(_i.a, r)
+	pe -= jnp.sum(a_z / a_e_dist)
+
+	if n_a > 1:
+		print('here')
+		a_a_dist = batched_cdist_l2(a, a)
+		weighted_a_a = (a_z[:, None] * a_z[None, :]) / a_a_dist
+		unique_a_a = jnp.tril(weighted_a_a, k=-1)
+		pe += jnp.sum(unique_a_a)
+	return pe
+
+
+def compute_ke_b(state, r):
+	n_b, n_e, _ = r.shape
 	
-	partial_state = partial(state.apply_fn, state.params)
-	model = lambda x: partial_state(x).sum()
+	model = lambda r: state.apply_fn(state.params, r).sum()
 	grad = jax.grad(model)
 
-	x = x.reshape(n_b, -1)
-	n_jvp = x.shape[-1]
-	eye = jnp.eye(n_jvp, dtype=x.dtype)[None, ...].repeat(n_b, axis=0)
+	r = r.reshape(n_b, -1)
+	n_jvp = r.shape[-1]
+	eye = jnp.eye(n_jvp, dtype=r.dtype)[None, ...].repeat(n_b, axis=0)
 	
 	def _body_fun(i, val):
-		primal, tangent = jax.jvp(grad, (x,), (eye[..., i],))  
+		primal, tangent = jax.jvp(grad, (r,), (eye[..., i],))  
 		return val + (primal[:, i]**2).squeeze() + (tangent[:, i]).squeeze()
 	
-	return -0.5 * jax.lax.fori_loop(0, n_jvp, _body_fun, jnp.zeros(n_b,))
+	return -0.5*jax.lax.fori_loop(0, n_jvp, _body_fun, jnp.zeros(n_b,))
 
 ### SAMPLING ### 
 
@@ -230,61 +292,60 @@ def init_walker(rng, n_b, n_u, n_d, center, std=0.1):
 
 	return jnp.stack(device_lst)
 
-def move(x, rng, deltar):
-	return x + rnd.normal(rng, x.shape, dtype=x.dtype)*deltar
+def move(r, rng, deltar):
+	return r + rnd.normal(rng, r.shape, dtype=r.dtype)*deltar
 	 
+
 def sample(
 	rng, 
-	state : TrainState, 
-	x,
+	state:TrainState, 
+	r,
 	deltar,
 	corr_len=20, 
 	acc_target=0.5,
 ):
 	rng, rng_0, rng_1, rng_move = rnd.split(rng, 4)
 
-	x, acc_0 = sample_subset(rng_0, x, state, deltar, corr_len//2)
+	r, acc_0 = sample_subset(rng_0, r, state, deltar, corr_len//2)
 	deltar_1 = jnp.clip(deltar + 0.001*rnd.normal(rng_move), a_min=0.001, a_max=0.5)
-	x, acc_1 = sample_subset(rng_1, x, state, deltar_1, corr_len//2)
+	r, acc_1 = sample_subset(rng_1, r, state, deltar_1, corr_len//2)
 
-	mask = jnp.array((acc_target-acc_0)**2 < (acc_target-acc_1)**2, dtype=jnp.float32)
-	not_mask = ((mask-1.)*-1.)
-	deltar = mask*deltar + not_mask*deltar_1
+	mask = jnp.abs(acc_target-acc_0) < jnp.abs(acc_target-acc_1)
+	deltar = mask*deltar + ~mask*deltar_1
 	v = dict(
 		deltar = deltar,
 		acc = (acc_1+acc_0)/2.,
 		rng = rng
 	)
-	return x, v
+	return r, v
 
 to_prob = lambda log_psi: jnp.exp(log_psi)**2
 
-@partial(jit, static_argnames=('corr_len'))
-def sample_subset(rng, x, state, deltar, corr_len):
+
+def sample_subset(rng, r_0, state, deltar, corr_len):
 	
-	p = to_prob(state.apply_fn(state.params, x))
+	p_0 = to_prob(state.apply_fn(state.params, r_0))
 	
 	acc = 0.0
 	for _ in jnp.arange(corr_len):
 		rng, rng_move, rng_alpha = rnd.split(rng, 3)
 		
-		x_1 = move(x, rng_move, deltar)
-		p_1 = to_prob(state.apply_fn(state.params, x_1))
+		r_1 = move(r_0, rng_move, deltar)
+		p_1 = to_prob(state.apply_fn(state.params, r_1))
 
-		p_mask = (p_1 / p) > rnd.uniform(rng_alpha, p_1.shape)
-		p = jnp.where(p_mask, p_1, p)
-		p_mask = jnp.expand_dims(p_mask, axis=(-1, -2))
-		x = jnp.where(p_mask, x_1, x)
+		p_mask = (p_1 / p_0) > rnd.uniform(rng_alpha, p_1.shape)
+		p_0 = jnp.where(p_mask, p_1, p_0)
+		r_0 = jnp.where(p_mask[..., None, None], r_1, r_0)
 
 		acc += jnp.mean(p_mask)
-
-	return x, acc/corr_len
+	return r_0, acc/corr_len
 
 
 ### Test Suite ###
 
 def check_antisym(c, rng, r):
 	n_u, n_d, = c.data.n_u, c.data.n_d
+	r = r[:, :4]
 	
 	@partial(vmap, in_axes=(0, None, None))
 	def swap_rows(r, i_0, i_1):
@@ -293,12 +354,12 @@ def check_antisym(c, rng, r):
 	@partial(jax.pmap, axis_name='dev', in_axes=(0,0))
 	def _create_train_state(rng, r):
 		model = c.partial(FermiNet, with_sign=True)  
-		params = model.init(rng, r)
+		params = model.init(rng, r)['params']
 		return TrainState.create(apply_fn=model.apply, params=params, tx=c.opt.tx)
 	
 	state = _create_train_state(rng, r)
 
-	@partial(pmap, in_axes=(0, 0))
+	@partial(pmap, in_axes=(None, 0))
 	def _check_antisym(state, r):
 		log_psi_0, sgn_0 = state.apply_fn(state.params, r)
 		r_swap_u = swap_rows(r, 0, 1)

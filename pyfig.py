@@ -85,13 +85,12 @@ class Pyfig:
         n_d:    int         = property(lambda _: _.n_e-_.n_u)
         a:      np.ndarray  = property(lambda _: np.array([[0.0, 0.0, 0.0],]))
         a_z:    np.ndarray  = property(lambda _: np.array([4.,]))
-        a_z:    np.ndarray  = a_z.setter(lambda _, _a_z: np.array(_a_z))
         
         init_walker = \
             property(lambda _: \
                 partial(init_walker, n_b=_.n_b, n_u=_.n_u, n_d=_.n_d, center=_.a, std=0.1))
         corr_len:   int      = 20
-        equil_len:  int      = 1000  # total number: n_equil_loop = equil_len / corr_len
+        equil_len:  int      = 10000  # total number: n_equil_loop = equil_len / corr_len
         acc_target: int      = 0.5
         
     class model(Sub):
@@ -100,8 +99,8 @@ class Pyfig:
         n_fbv: int      = property(lambda _: _.n_sv*3+_.n_pv*2)
         n_fb: int       = 3
         n_det: int      = 1
-        terms_s_emb:list     = ['r_len', 'r', 'ra', 'ra_len']
-        terms_p_emb:list     = ['rr']
+        terms_s_emb:list     = ['r', 'ra',]
+        terms_p_emb:list     = ['rr',]
         compute_s_emb:Callable   = property(lambda _: partial(compute_emb, terms=_.terms_s_emb, a=_._parent.data.a))
         compute_p_emb:Callable   = property(lambda _: partial(compute_emb, terms=_.terms_p_emb))
         # p_mask_u: jnp.ndarray    = property(lambda _: create_masks(_._parent.data.n_e, _._parent.data.n_u, _._parent.dtype))
@@ -115,7 +114,7 @@ class Pyfig:
         eps             = 1e-8
         lr              = 0.0001
         loss            = 'l1'  # change this to loss table load? 
-        tx = property(lambda _: optax.chain(optax.adaptive_grad_clip(1.0), optax.adam(_.lr)))
+        tx = property(lambda _: optax.chain(optax.adaptive_grad_clip(0.1), optax.adam(_.lr)))
 
     class sweep(Sub):
         method          = 'random'
@@ -267,7 +266,6 @@ class Pyfig:
         for k,v in _i.__class__.__dict__.items():
             if k.startswith('_') or k in _ignore_attr:
                 continue
-
             if isinstance(v, partial):
                 v = copy(_i.__dict__[k]) # ‼ 🏳 Danger zone - partials may not be part of dict
             else:
@@ -286,29 +284,18 @@ class Pyfig:
         d = flat_any(_i.d)
         d_k = inspect.signature(f.__init__).parameters.keys()
         d = {k:copy(v) for k,v in d.items() if k in d_k}
-        print(d)
         d = {k:v for k,v in d.items() if k in d_k} | kw
-        print(d)
         return f(**d)
 
 
     def merge(_i, d:dict):
-        merged = []
         for k,v in d.items():
             for cls in [_i]+_i._sub_cls:
                 if k in cls.__class__.__dict__:
                     try:
                         setattr(cls, k, copy(v))
                     except Exception as e:
-                        print(e)
-                        print('Unmerged {k}')
-                    # if isinstance(cls.__class__.__dict__[k], property.getter):
-                    #     print(f'Tried to set a property {k}, letting you off this time')
-                    # else:
-                        # cls.__class__.__dict__[k] = copy(v)
-                        # cls.__dict__[k] = copy(v)
-                        
-                        # merged += [k]
+                        print(e, '\n Unmerged {k}')
             
 
     def _to_wandb(_i, d:dict, parent='', sep='.', _l:list=[])->dict:
