@@ -193,7 +193,7 @@ def init_r(rng, n_b, n_e, center_points, std=0.1):
 	sub_r = [center_points + rnd.normal(rng_i,(n_b,n_e,3))*std for rng_i in rng]
 	return jnp.stack(sub_r) if len(sub_r)>1 else sub_r[0][None, ...]
 
-def sample_b(rng, state, r_0, deltar_0, corr_len=10):
+def sample_b(rng, state, r_0, deltar_0, n_corr=10):
 	""" metropolis hastings sampling with automated step size adjustment """
 	
 	deltar_1 = jnp.clip(deltar_0 + 0.01*rnd.normal(rng), a_min=0.005, a_max=0.5)
@@ -201,7 +201,7 @@ def sample_b(rng, state, r_0, deltar_0, corr_len=10):
 	acc = []
 	for deltar in [deltar_0, deltar_1]:
 		
-		for _ in jnp.arange(corr_len):
+		for _ in jnp.arange(n_corr):
 			rng, rng_alpha = rnd.split(rng, 2)
 
 			p_0 = (jnp.exp(state.apply_fn(state.params, r_0))**2)  			# ❗can make more efficient with where statement at end

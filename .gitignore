@@ -26,6 +26,7 @@ data/*/
 logs/
 wandb/
 exp/
+dep_dump/
 
 # machine utilities
 *powershell*

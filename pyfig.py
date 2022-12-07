@@ -8,53 +8,33 @@ from pathlib import Path
 import sys
 from pprint import pprint
 from copy import copy
-from typing import Any
-import shutil
-
-from jax import numpy as jnp
-from jax import random as rnd
 import numpy as np
-from flax import linen as nn
-import optax 
 
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum, iterate_folder
 from utils import flat_dict, mkdir, cmd_to_dict, dict_to_wandb
 
-
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
-success = ["❌", "✅"]
-
-# Variables cannot be a type
-# Until we understand the jit leak compilation issue - we only use np arrays. 
-
-
-
-class af:
-    tanh = nn.tanh
 
 class Sub:
-    _parent = None
+    _p = None
 
-    def __init__(_i, parent=None):
-        _i._parent = parent
+    def __init__(ii, parent=None):
+        ii._p = parent
     
     @property
-    def d(_i, ignore=['d', 'cmd', '_parent']):
-        _d={} # becomes class variable in call line, accumulates
-        for k,v in _i.__class__.__dict__.items():
+    def d(ii, ignore=['d', 'cmd', '_p']):
+        out={} # becomes class variable in call line, accumulates
+        for k,v in ii.__class__.__dict__.items():
             if k.startswith('_') or k in ignore:
                 continue
             if isinstance(v, partial): 
-                v = _i.__dict__[k]   # if getattr then calls the partial, which we don't want
+                v = ii.__dict__[k]   # if getattr then calls the partial, which we don't want
             else:
-                v = getattr(_i, k)
-            _d[k] = v
-        return _d
-
-
+                v = getattr(ii, k)
+            out[k] = v
+        return out
 
 class Pyfig:
-    # 🔴 Variables in any class/subclass cannot have the same name
 
     project_root:   str     = Path().home()/'projects'
     project:        str     = 'hwat'
@@ -125,23 +105,23 @@ class Pyfig:
         cpus_per_task   = 1     
         time            = '0-12:00:00'     # D-HH:MM:SS
         gres            = 'gpu:RTX3090:1'
-        output          = property(lambda _: _._parent.TMP /'o-%j.out')
-        error           = property(lambda _: _._parent.TMP /'e-%j.err')
-        job_name        = property(lambda _: _._parent.exp_name)  # this does not call the instance it is in
+        output          = property(lambda _: _._p.TMP /'o-%j.out')
+        error           = property(lambda _: _._p.TMP /'e-%j.err')
+        job_name        = property(lambda _: _._p.exp_name)  # this does not call the instance it is in
         sbatch          = property(lambda _: f""" 
             module purge 
             source ~/.bashrc 
             module load GCC 
             module load CUDA/11.4.1 
             module load cuDNN/8.2.2.26-CUDA-11.4.1 
-            conda activate {_._parent.env} 
+            conda activate {_._p.env} 
             export MKL_NUM_THREADS=1 
             export NUMEXPR_NUM_THREADS=1 
             export OMP_NUM_THREADS=1 
             export OPENBLAS_NUM_THREADS=1
             pwd
             nvidia-smi
-            mv_cmd = f'mv {_._parent.TMP}/o-$SLURM_JOB_ID.out {_._parent.TMP}/e-$SLURM_JOB_ID.err $out_dir' 
+            mv_cmd = f'mv {_._p.TMP}/o-$SLURM_JOB_ID.out {_._p.TMP}/e-$SLURM_JOB_ID.err $out_dir' 
     """
     )
 
@@ -171,8 +151,8 @@ class Pyfig:
         
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
-                v = v(parent=_i)
-                setattr(_i, k, v)
+                v = v(parent=ii)
+                setattr(ii, k, v)
         
         ii.merge(cmd_to_dict(sys.argv[1:], ii.d))
         ii.merge(args)
@@ -183,7 +163,7 @@ class Pyfig:
             job_type    = ii.wandb_c.job_type,
             entity      = ii.wandb_c.entity,
             project     = ii.project,
-            dir         = './dump', # _i.exp_path,
+            dir         = './dump', # ii.exp_path,
             config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
             mode        = wandb_mode,
             settings=wandb.Settings(start_method='fork'), # idk y this is issue, don't change
@@ -210,10 +190,10 @@ class Pyfig:
         return ' '.join([f' --{k}  {str(v)} ' for k,v in d.items()])
 
     @property
-    def d(ii, _ignore_attr=['d', 'cmd', 'submit', 'partial', 'test_suite', 'sweep']):
+    def d(ii, ignore=['d', 'cmd', 'submit', 'partial', 'sweep']):
         out = {}
         for k,v in ii.__class__.__dict__.items():
-            if k.startswith('_') or k in _ignore_attr:
+            if k.startswith('_') or k in ignore:
                 continue
             if isinstance(v, partial):
                 v = copy(ii.__dict__[k]) # ‼ 🏳 Danger zone - partials may not be part of dict

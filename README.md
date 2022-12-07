@@ -6,10 +6,8 @@
 - Do arrays roll from right
 
 
-
 # How To
 - Fill in User Details in Pyfig
-
 
 
 # Doc Notes
