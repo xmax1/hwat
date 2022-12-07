@@ -11,10 +11,7 @@ from flax import linen as nn
 from jax import vmap, jit, pmap
 import functools
 
-### MODEL ### https://www.notion.so/HWAT-Docs-2bd230b570cc4814878edc00753b2525#cc424dfd1320496f85fc0504b41946cd
-
-
-# b_init = lambda _, shape: jnp.zeros(shape, jnp.complex64)
+### model ###
 
 @partial(
 	nn.vmap, 
@@ -22,7 +19,7 @@ import functools
 	out_axes=0, 
 	variable_axes={'params': None}, 
 	split_rngs={'params': False}
-) # https://flax.readthedocs.io/en/latest/api_reference/_autosummary/flax.linen.vmap.html
+) 																							# https://flax.readthedocs.io/en/latest/api_reference/_autosummary/flax.linen.vmap.html
 class FermiNet(nn.Module):
 	n_e: int = None
 	n_u: int = None
@@ -90,56 +87,35 @@ class FermiNet(nn.Module):
 
 		assert orb_u.shape == (1, _i.n_u, _i.n_u)
 
-		log_psi, sgn = logdet_matmul([orb_u, orb_d])
+		log_psi, sgn = logabssumdet([orb_u, orb_d])
 
 		if _i.with_sign:
 			return log_psi, sgn
 		else:
 			return log_psi.squeeze()
 
-
-
-def logdet_matmul(xs):
-	slogdets = [jnp.linalg.slogdet(x) for x in xs]
+def logabssumdet(xs):
 	
-	sign_in, slogdet = functools.reduce(lambda a, b: (a[0] * b[0], a[1] + b[1]), slogdets)
-	max_idx = jnp.argmax(slogdet)
-	slogdet_max = slogdet[max_idx]
-	det = sign_in * jnp.exp(slogdet-slogdet_max)
+	dets = [x.reshape(-1) for x in xs if x.shape[-1] == 1]						# in case n_u or n_d=1, no need to compute determinant
+	dets = reduce(lambda a,b: a*b, dets) if len(dets)>0 else 1.					# take product of these cases
+	maxlogdet = 0.																# initialised for sumlogexp trick (for stability)
+	det = dets																	# if both cases satisfy n_u or n_d=1, this is the determinant
 	
-	result = jnp.sum(det)
-	sign_out = jnp.sign(result)
-	slog_out = jnp.log(jnp.abs(result)) + slogdet_max
-	return slog_out, sign_out
-
-
-def logabssumdet(orb_u, orb_d=None):
+	slogdets = [jnp.linalg.slogdet(x) for x in xs if x.shape[-1]>1] 			# otherwise take slogdet
+	if len(slogdets)>0: 
+		sign_in, logdet = reduce(lambda a,b: (a[0]*b[0], a[1]+b[1]), slogdets)  # take product of n_u or n_d!=1 cases
+		maxlogdet = jnp.max(logdet)												# adjusted for new inputs
+		det = sign_in * dets * jnp.exp(logdet-maxlogdet)						# product of all these things is determinant
 	
-	xs = [orb_u] if orb_d is None else [orb_u, orb_d] 
-	
-	dets = [x.reshape(-1) for x in xs if x.shape[-1] == 1]
-	dets = reduce(lambda a,b: a*b, dets) if len(dets)>0 else 1.
-
-	slogdets = [jnp.linalg.slogdet(x) for x in xs if x.shape[-1]>1]
-	
-	print(slogdets[0][0].shape)
-	if len(slogdets)>0: # at least 2 electon in at least 1 orbital
-		sign_in, logdet = reduce(lambda a,b: (a[0]*b[0], a[1]+b[1]), slogdets)
-		maxlogdet = jnp.max(logdet)
-		det = sign_in * dets * jnp.exp(logdet-maxlogdet)
-	else:
-		maxlogdet = 0.
-		det = dets
-
 	psi_ish = jnp.sum(det)
 	sgn_psi = jnp.sign(psi_ish)
 	log_psi = jnp.log(jnp.abs(psi_ish)) + maxlogdet
 	return log_psi, sgn_psi
 
+### energy ###
 
-def compute_pe(r, a=None, a_z=None):
-	n_a = len(a)
-	
+def compute_pe_b(r, a=None, a_z=None):
+
 	rr = jnp.expand_dims(r, -2) - jnp.expand_dims(r, -3)
 	rr_len = jnp.linalg.norm(rr, axis=-1)
 	pe_rr = jnp.tril(1./rr_len, k=-1).sum((1,2))
@@ -150,55 +126,76 @@ def compute_pe(r, a=None, a_z=None):
 		ra_len = jnp.linalg.norm(ra, axis=-1)
 		pe_ra = (a_z/ra_len).sum((1,2))   
 	
-		if n_a > 1:
+		if len(a) > 1:  # len(a) = n_a
 			raise NotImplementedError
 	return (pe_rr - pe_ra).squeeze()
 
 
 def compute_ke_b(state, r):
-	n_b, n_e, _ = r.shape
+	grad_fn = jax.grad(lambda r: state.apply_fn(state.params, r).sum())
 	
-	model = lambda r: state.apply_fn(state.params, r).sum()
-	grad = jax.grad(model)
-
 	r = r.reshape(n_b, -1)
-	n_jvp = r.shape[-1]
+	n_b, n_jvp = r.shape
 	eye = jnp.eye(n_jvp, dtype=r.dtype)[None, ...].repeat(n_b, axis=0)
 	
 	def _body_fun(i, val):
-		primal, tangent = jax.jvp(grad, (r,), (eye[..., i],))  
+		primal, tangent = jax.jvp(grad_fn, (r,), (eye[..., i],))  
 		return val + (primal[:, i]**2).squeeze() + (tangent[:, i]).squeeze()
 	
 	return (- 0.5 * jax.lax.fori_loop(0, n_jvp, _body_fun, jnp.zeros(n_b,))).squeeze()
 
-### SAMPLING ### 
+### sampling ###
 
-def init_walker(rng, n_b, n_u, n_d, center, std=0.1):
+def keep_around_points(r, points, l=1.):
+	""" points = center of box each particle kept inside. """
+	""" l = length side of box """
+	r = r - points[None, ...]
+	r = r/l
+	r = jnp.fmod(r, 1.)
+	r = r*l
+	r = r + points[None, ...]
+	return r
+
+def get_center_points(n_e, center, _r_cen=None):
+	""" from a set of centers, selects in order where each electron will start """
+	""" loop concatenate pattern """
+	for r_i in range(n_e):
+		_r_cen = center[[r_i % len(center)]] if _r_cen is None else jnp.concatenate([_r_cen, center[[r_i % len(center)]]])
+	return _r_cen
+
+def init_r(rng, n_b, n_e, center_points, std=0.1, _r=[]):
+	for rng_i in rng:
+		_r += [center_points + rnd.normal(rng_i,(n_b,n_e,3))*std]
+	return jnp.stack(_r)
+
+def sample_b(rng, state, r_0, deltar_0, corr_len=10):
+	""" metropolis hastings sampling with automated step size adjustment """
 	
-	n_center = len(center)
-	rng = [rng] if len(rng.shape) == 1 else rng
+	deltar_1 = jnp.clip(deltar + 0.01*rnd.normal(rng), a_min=0.005, a_max=0.5)
+
+	acc = []
+	for deltar in [deltar_0, deltar_1]:
+		
+		for _ in jnp.arange(corr_len):
+			rng, rng_alpha = rnd.split(rng, 2)
+
+			p_0 = (jnp.exp(state.apply_fn(state.params, r_0))**2)  			# ❗can make more efficient with where statement at end
+			
+			r_1 = r_0 + rnd.normal(rng, r_0.shape, dtype=r_0.dtype)*0.02
+			
+			p_1 = jnp.exp(state.apply_fn(state.params, r_1))**2
+			p_1 = jnp.where(jnp.isnan(p_1), 0., p_1)
+
+			p_mask = (p_1/p_0) > rnd.uniform(rng_alpha, p_1.shape)			# metropolis hastings
+			
+			r_0 = jnp.where(p_mask[..., None, None], r_1, r_0)
 	
-	device_lst = []
-	for rng_n in rng:
-		lst = []
-		
-		def init_spin(rng_n, n, lst):
-			for x_i in range(n):
-				rng_n, rng_i = rnd.split(rng_n, 2)
-				lst += [center[x_i%n_center] + rnd.normal(rng_i,(n_b,1,3))]
-			return rng_n
-		
-		rng_n = init_spin(rng_n, n_u, lst)
-		_     = init_spin(rng_n, n_d, lst)
-		device_lst += [jnp.concatenate(lst, axis=1)]
-
-	return jnp.stack(device_lst)
-
-def move(r, rng, deltar):
-	return r + rnd.normal(rng, r.shape, dtype=r.dtype)*deltar
-	 
-
-
+		acc += [p_mask.mean()]
+	
+	mask = ((0.5-acc[0])**2 - (0.5-acc[1])**2) < 0.
+	deltar = mask*deltar_0 + ~mask*deltar_1
+	
+	return r_0, (acc[0]+acc[1])/2., deltar
 
 ### Test Suite ###
 

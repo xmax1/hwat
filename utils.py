@@ -17,6 +17,19 @@ from copy import copy
 
 this_dir = Path(__file__).parent
 
+### metrics ###
+
+def collect_stats(k, v, new_d, p='tr', suf='', sep='/', sep_long='-'):
+	depth = p.count('/')
+	if depth > 1:
+		sep = sep_long
+	if isinstance(v, dict):
+		for k_sub,v_sub in v.items():
+			collect_stats(k, v_sub, new_d, p=(p+sep+k_sub))
+	else:
+		new_d[p+sep+k+suf] = v
+	return new_d
+
 ### debug things
 
 def debug(on=False):
@@ -210,32 +223,66 @@ class Metrix_beta:
 		return v_set
 
 
+### jax ###
 
+try:
+    from flax.core.frozen_dict import FrozenDict
+    from jax import random as rnd
+    
+    def gen_rng(rng, n_device):
+        """ rng generator for multi-gpu experiments """
+        rng, rng_p = jnp.split(rnd.split(rng, n_device+1), [1,])
+        return rng.squeeze(), rng_p	
+        
 
-### Jax Type Testing ### 
+    def compute_metrix(d:dict, mode='tr', fancy=None, ignore = [], _d = {}):
+        
+        for k,v in d.items():
+            if any([ig in k for ig in ignore]):
+                continue 
 
+            k = fancy.get(k, k)
+            v = jax.device_get(v)
+            
+            if isinstance(v, FrozenDict):
+                v = v.unfreeze()
+            
+            v_mean = jax.tree_map(lambda x: x.mean(), v) if not np.isscalar(v) else v
+            v_std = jax.tree_map(lambda x: x.std(), v) if not np.isscalar(v) else 0.
 
+            group = mode
+            if 'grad' in k:
+                group = mode + '/grad'
+            elif 'param' in k:
+                group += '/param'
+                
+            _d = collect_stats(k, v_mean, _d, p=group, suf=r'_\mu$')
+            _d = collect_stats(k, v_std, _d, p=group+'/std', suf=r'_\sigma$')
 
-def test_print_fp16_no_cast():
-    x = jnp.ones([1], dtype='float16')
-    print(x)  # FAILS
+        return _d
 
+    ### type testing ### 
 
-def test_print_fp16():
-    x = jnp.ones([1], dtype='float16')
-    x = x.astype('float16')
-    print(x)  # OK
+    def test_print_fp16_no_cast():
+        x = jnp.ones([1], dtype='float16')
+        print(x)  # FAILS
 
+    def test_print_fp16():
+        x = jnp.ones([1], dtype='float16')
+        x = x.astype('float16')
+        print(x)  # OK
 
-def test_print_fp32():
-    x = jnp.ones([1], dtype='float16')
-    x = x.astype('float16')
-    x = x.astype('float32')
-    print(x)  # OK
+    def test_print_fp32():
+        x = jnp.ones([1], dtype='float16')
+        x = x.astype('float16')
+        x = x.astype('float32')
+        print(x)  # OK
 
+    def test_print_fp32_to_fp16_cast():
+        x = jnp.ones([1], dtype='float32')
+        x = x.astype('float16')
+        print(x)  # FAILS
 
-def test_print_fp32_to_fp16_cast():
-    x = jnp.ones([1], dtype='float32')
-    x = x.astype('float16')
-    print(x)  # FAILS
+except:
+    print('no flax or jax installed')
 
