@@ -20,7 +20,6 @@ import optax
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum, iterate_folder
 from utils import flat_dict, mkdir, cmd_to_dict
 
-from hwat import compute_s_perm, init_walker, compute_emb, create_masks
 
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 success = ["❌", "✅"]
@@ -66,7 +65,7 @@ class Pyfig:
     exp_id:         str     = gen_alphanum(n=7)
     
     dtype:          str     = 'float32'
-    n_step:         int     = 10000
+    n_step:         int     = 200
     log_metric_step:int     = 100
     log_state_step: int     = 10          
 
@@ -86,9 +85,9 @@ class Pyfig:
         a:      np.ndarray  = property(lambda _: np.array([[0.0, 0.0, 0.0],]))
         a_z:    np.ndarray  = property(lambda _: np.array([4.,]))
         
-        init_walker = \
-            property(lambda _: \
-                partial(init_walker, n_b=_.n_b, n_u=_.n_u, n_d=_.n_d, center=_.a, std=0.1))
+        # init_walker = \
+        #     property(lambda _: \
+        #         partial(init_walker, n_b=_.n_b, n_u=_.n_u, n_d=_.n_d, center=_.a, std=0.1))
         corr_len:   int      = 20
         equil_len:  int      = 10000  # total number: n_equil_loop = equil_len / corr_len
         acc_target: int      = 0.5
@@ -97,12 +96,12 @@ class Pyfig:
         n_sv: int       = 32
         n_pv: int       = 16
         n_fbv: int      = property(lambda _: _.n_sv*3+_.n_pv*2)
-        n_fb: int       = 3
+        n_fb: int       = 2
         n_det: int      = 1
         terms_s_emb:list     = ['r', 'ra',]
         terms_p_emb:list     = ['rr',]
-        compute_s_emb:Callable   = property(lambda _: partial(compute_emb, terms=_.terms_s_emb, a=_._parent.data.a))
-        compute_p_emb:Callable   = property(lambda _: partial(compute_emb, terms=_.terms_p_emb))
+        # compute_s_emb:Callable   = property(lambda _: partial(compute_emb, terms=_.terms_s_emb, a=_._parent.data.a))
+        # compute_p_emb:Callable   = property(lambda _: partial(compute_emb, terms=_.terms_p_emb))
         # p_mask_u: jnp.ndarray    = property(lambda _: create_masks(_._parent.data.n_e, _._parent.data.n_u, _._parent.dtype))
         # p_mask_d: jnp.ndarray    = property(lambda _: create_masks(_._parent.data.n_e, _._parent.data.n_u, _._parent.dtype))
         # compute_s_perm: Callable = property(lambda _: partial(compute_s_perm, n_u=_._parent.data.n_u, p_mask_u=_.p_mask_u, p_mask_d=_.p_mask_d))
@@ -114,7 +113,7 @@ class Pyfig:
         eps             = 1e-8
         lr              = 0.0001
         loss            = 'l1'  # change this to loss table load? 
-        tx = property(lambda _: optax.chain(optax.adaptive_grad_clip(0.1), optax.adam(_.lr)))
+        # tx = property(lambda _: optax.chain(optax.adaptive_grad_clip(0.1), optax.adam(_.lr)))
 
     class sweep(Sub):
         method          = 'random'
@@ -279,12 +278,14 @@ class Pyfig:
     def _sub_cls(_i):
         return [v for v in _i.__dict__.values() if isinstance(v, Sub)]
 
-    def partial(_i, f:Callable, **kw):
+    def partial(_i, f:Callable, get_dict=False, **kw):
         # _i._debug_print(on=False)
         d = flat_any(_i.d)
         d_k = inspect.signature(f.__init__).parameters.keys()
         d = {k:copy(v) for k,v in d.items() if k in d_k}
         d = {k:v for k,v in d.items() if k in d_k} | kw
+        if get_dict:
+            return d
         return f(**d)
 
 
@@ -293,6 +294,7 @@ class Pyfig:
             for cls in [_i]+_i._sub_cls:
                 if k in cls.__class__.__dict__:
                     try:
+                        print('setting ', k)
                         setattr(cls, k, copy(v))
                     except Exception as e:
                         print(e, '\n Unmerged {k}')

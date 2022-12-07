@@ -1,6 +1,9 @@
 
 
-
+# FIX 
+- Pretrain on diag gaussian
+- Loop over dense
+- Do arrays roll from right
 
 
 
@@ -29,7 +32,9 @@
 - Tril to drop the lower triangle duh? 
     - Need to check the antisymmetry, for sure
 - Max pools ARE ALSO PERMUTATION INVARIANT
-
+- Keep the atom dimension so perform ops? 
+- To test 'only upper triangle' - tril the inputs
+- Test limiting the log_psi esp early in training (regularise)
 
 
 # Gist / Notion / Embed / Share
