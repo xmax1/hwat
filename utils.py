@@ -175,52 +175,29 @@ def flat_any(v: list|dict|jnp.ndarray|np.ndarray):
     if isinstance(v, dict):
         return flat_dict(v)
 
-def npify(v_set):
-	v_set = jax.device_get(v_set) # pull from distributed
-	if isinstance(v_set, dict):
-		for k,v in copy(v_set).items():
-			v_set[k] = npify(v)
-	if isinstance(v_set, list):
-		for i,v in enumerate(copy(v_set)):
-			v_set[i] = npify(v)
-	try:
-		if hasattr(v_set, 'shape'):
-			v_set = np.array(v_set)
-	except:
-			print(f'Could not compute mean or std of {k} type {type(v)}')
-	return v_set
 
-class Metrix_beta:
-	def __init__(_i, key=None):
-		_i._key = key
+### wandb ###
 
-	@property
-	def key(_i): # bc of the list structure of setattr
-		return _i._key[0] # #aesthetics
-	
-	def __setattr__(_i, k, v):
-		if not k in _i.__dict__:
-			_i.__dict__[k] = []
-		_i.__dict__[k] += [_i.npify(v)]
-
-	def collect_mean_std(_i, v_set:dict|type):
-		v_set = v_set.__dict__ if isinstance(v_set, type) else v_set
-		for k,v in v_set.items():
-			if hasattr(v, 'shape'):
-				setattr(_i, k+'_mean', np.mean(np.array(v)))
-				setattr(_i, k+'_std', np.mean(np.array(v)))
-
-	def npify(_i, v_set):
-		v_set = jax.device_get(v_set) # pull from distributed
-		if hasattr(v_set, 'shape'):
-			v_set = np.array(v_set)
-		if isinstance(v_set, dict):
-			for k,v in copy(v_set).items():
-				v_set[k] = _i.npify(v)
-		if isinstance(v_set, list):
-			for i,v in enumerate(copy(v_set)):
-				v_set[i] = _i.npify(v)
-		return v_set
+def dict_to_wandb(
+    d:dict, 
+    parent='', 
+    sep='.', 
+    ignore=[],
+    _l:list=None,
+    )->dict:
+    _l = [] if _l is None else _l
+    for k, v in d.items():
+        if isinstance(v, Path) or callable(v):
+            continue
+        if k in ignore:
+            continue
+        k_1 = parent + sep + k if parent else k
+        if isinstance(v, dict):
+            _l.extend(dict_to_wandb(v, k_1, _l=_l).items())
+        elif callable(v):
+            continue
+        _l.append((k_1, v))
+    return dict(_l)
 
 
 ### jax ###
@@ -238,10 +215,12 @@ try:
     def compute_metrix(d:dict, mode='tr', fancy=None, ignore = [], _d = {}):
         
         for k,v in d.items():
-            if any([ig in k for ig in ignore]):
+            if any([ig in k for ig in ignore+['step']]):
                 continue 
+            
+            if not fancy is None:
+                k = fancy.get(k, k)
 
-            k = fancy.get(k, k)
             v = jax.device_get(v)
             
             if isinstance(v, FrozenDict):

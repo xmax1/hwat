@@ -18,7 +18,7 @@ from flax import linen as nn
 import optax 
 
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum, iterate_folder
-from utils import flat_dict, mkdir, cmd_to_dict
+from utils import flat_dict, mkdir, cmd_to_dict, dict_to_wandb
 
 
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
@@ -64,56 +64,37 @@ class Pyfig:
     exp_name:       str     = 'demo-final'
     exp_id:         str     = gen_alphanum(n=7)
     
+    
+    seed:           int     = 808017424 # grr
     dtype:          str     = 'float32'
     n_step:         int     = 200
     log_metric_step:int     = 100
     log_state_step: int     = 10          
-
-    # seed:           int     = 808017424 # grr
-    seed:           int     = 80085 # grr
-    # rng_init:   jnp.ndarray = property(lambda _: rnd.split(rnd.PRNGKey(_.seed), _.n_device))
-		
+	
     class data(Sub):
-        with_sign: bool     = False
-        n_b:    int         = 512
+        n_b:        int         = 512
 
-        l_e:    list        = [4,]
-        n_u:    int         = 2
+        l_e:        list        = [4,]
+        n_u:        int         = 2
 
-        n_e:    int         = property(lambda _: int(sum(_.l_e)))
-        n_d:    int         = property(lambda _: _.n_e-_.n_u)
-        a:      np.ndarray  = property(lambda _: np.array([[0.0, 0.0, 0.0],]))
-        a_z:    np.ndarray  = property(lambda _: np.array([4.,]))
-        
-        # init_walker = \
-        #     property(lambda _: \
-        #         partial(init_walker, n_b=_.n_b, n_u=_.n_u, n_d=_.n_d, center=_.a, std=0.1))
-        corr_len:   int      = 20
-        equil_len:  int      = 10000  # total number: n_equil_loop = equil_len / corr_len
-        acc_target: int      = 0.5
+        n_e:        int         = property(lambda _: int(sum(_.l_e)))
+        n_d:        int         = property(lambda _: _.n_e-_.n_u)
+        a:          np.ndarray  = property(lambda _: np.array([[0.0, 0.0, 0.0],]))
+        a_z:        np.ndarray  = property(lambda _: np.array([4.,]))
+      
+        n_corr:     int         = 20
+        n_equil:    int         = 10000  # total number: n_equil_loop = equil_len / corr_len
+        acc_target: int         = 0.5
         
     class model(Sub):
-        n_sv: int       = 32
-        n_pv: int       = 16
-        n_fbv: int      = property(lambda _: _.n_sv*3+_.n_pv*2)
-        n_fb: int       = 2
-        n_det: int      = 1
-        terms_s_emb:list     = ['r', 'ra',]
-        terms_p_emb:list     = ['rr',]
-        # compute_s_emb:Callable   = property(lambda _: partial(compute_emb, terms=_.terms_s_emb, a=_._parent.data.a))
-        # compute_p_emb:Callable   = property(lambda _: partial(compute_emb, terms=_.terms_p_emb))
-        # p_mask_u: jnp.ndarray    = property(lambda _: create_masks(_._parent.data.n_e, _._parent.data.n_u, _._parent.dtype))
-        # p_mask_d: jnp.ndarray    = property(lambda _: create_masks(_._parent.data.n_e, _._parent.data.n_u, _._parent.dtype))
-        # compute_s_perm: Callable = property(lambda _: partial(compute_s_perm, n_u=_._parent.data.n_u, p_mask_u=_.p_mask_u, p_mask_d=_.p_mask_d))
-    
-    class opt(Sub):
-        optimizer       = 'Adam'
-        b1              = 0.9
-        b2              = 0.99
-        eps             = 1e-8
-        lr              = 0.0001
-        loss            = 'l1'  # change this to loss table load? 
-        # tx = property(lambda _: optax.chain(optax.adaptive_grad_clip(0.1), optax.adam(_.lr)))
+        with_sign:      bool    = False
+        n_sv:           int     = 32
+        n_pv:           int     = 16
+        n_fbv:          int     = property(lambda _: _.n_sv*3+_.n_pv*2)
+        n_fb:           int     = 2
+        n_det:          int     = 1
+        terms_s_emb:    list    = ['ra', 'ra_len']
+        terms_p_emb:    list    = ['rr', 'rr_len']
 
     class sweep(Sub):
         method          = 'random'
@@ -186,101 +167,89 @@ class Pyfig:
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['sbatch',]
 
-    def __init__(_i,args:dict={},cap=40,wandb_mode='online',get_sys_arg=True):
+    def __init__(ii,args:dict={},cap=40,wandb_mode='online',get_sys_arg=True):
         
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
                 v = v(parent=_i)
                 setattr(_i, k, v)
         
-        _i.merge(cmd_to_dict(sys.argv[1:], _i.d))
-        _i.merge(args)
+        ii.merge(cmd_to_dict(sys.argv[1:], ii.d))
+        ii.merge(args)
 
-        mkdir(_i.exp_path)
-        print('Path: ', _i.exp_path.absolute(), '✅')
+        mkdir(ii.exp_path)
         
-        print('System ')
-        pprint(_i.data.d)
-        print('Model ')
-        pprint({k:(v if not k=='masks' else '...') for k,v in _i.model.d.items() })
-
         run = wandb.init(
-            job_type    = _i.wandb_c.job_type,
-            entity      = _i.wandb_c.entity,
-            project     = _i.project,
-            dir         = _i.exp_path,
-            config      = _i._to_wandb(_i.d),
+            job_type    = ii.wandb_c.job_type,
+            entity      = ii.wandb_c.entity,
+            project     = ii.project,
+            dir         = './dump', # _i.exp_path,
+            config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
             mode        = wandb_mode,
             settings=wandb.Settings(start_method='fork'), # idk y this is issue, don't change
         )
 
-        _i.wandb_c.wandb_run_path = run.path  
-        print('run: ', run.path, '✅')
-
-        if _i.submit_state > 0:
-            n_job_running = run_cmds([f'squeue -u {_i.user} -h -t pending,running -r | wc -l'])
+        if ii.submit_state > 0:
+            n_job_running = run_cmds([f'squeue -u {ii.user} -h -t pending,running -r | wc -l'])
             if n_job_running > cap:
                 exit(f'There are {n_job_running} on the submit cap is {cap}')
             print(f'{n_job_running} on the cluster')
 
-            _slurm = Slurm(**_i.slurm.d)
-            n_run, _i.submit_state = _i.submit_state, 0            
+            _slurm = Slurm(**ii.slurm.d)
+            n_run, ii.submit_state = ii.submit_state, 0            
             for _ in range(n_run):
-                _slurm.sbatch(_i.slurm.sbatch \
-                    + f'out_dir={(mkdir(_i.exp_path/"out"))} {_i.cmd} | tee $out_dir/py.out date "+%B %V %T.%3N" ')
+                _slurm.sbatch(ii.slurm.sbatch \
+                    + f'out_dir={(mkdir(ii.exp_path/"out"))} {ii.cmd} | tee $out_dir/py.out date "+%B %V %T.%3N" ')
+
+        ii.wandb_c.wandb_run_path = run.path  
+        print('run: ', run.path, '✅')
 
     @property
-    def cmd(_i,):
-        d = flat_dict(_i.d)
+    def cmd(ii,):
+        d = flat_dict(ii.d)
         return ' '.join([f' --{k}  {str(v)} ' for k,v in d.items()])
 
     @property
-    def commit_id(_i,)->str:
-        process = run_cmds(['git log --pretty=format:%h -n 1'], cwd=_i.project_path)[0]
-        return process.stdout.decode('utf-8')     
-
-    def submit(_i, sweep=False, commit_msg=None, commit_id=None):
-        commit_msg = commit_msg or _i.exp_id
-        
-        _i.submit_state *= -1
-        if _i.submit_state > 0:
-            if sweep:
-                _i.sweep_id = wandb.sweep(
-                    env     = f'conda activate {_i.env};',
-                    sweep   = _i.sweep.d, 
-                    program = _i.run_path,
-                    project = _i.project,
-                    name    = _i.exp_name,
-                    run_cap = _i.sweep.n_sweep
-                )
-                _i.submit_state *= _i.sweep.n_sweep
-            
-            # local_out = run_cmds(['git add .', f'git commit -m {commit_msg}', 'git push'], cwd=_i.project_path)
-            cmd = f'python -u {_i.run_path} ' + (commit_id or _i.commit_id) + _i.cmd
-            # server_out = run_cmds_server(_i.server, _i.user, cmd, cwd=_i.server_project_path)
-    
-    @property
-    def d(_i, _ignore_attr=['d', 'cmd', 'submit', 'partial', 'test_suite', 'sweep']):
-        _d = {}
-        for k,v in _i.__class__.__dict__.items():
+    def d(ii, _ignore_attr=['d', 'cmd', 'submit', 'partial', 'test_suite', 'sweep']):
+        out = {}
+        for k,v in ii.__class__.__dict__.items():
             if k.startswith('_') or k in _ignore_attr:
                 continue
             if isinstance(v, partial):
-                v = copy(_i.__dict__[k]) # ‼ 🏳 Danger zone - partials may not be part of dict
+                v = copy(ii.__dict__[k]) # ‼ 🏳 Danger zone - partials may not be part of dict
             else:
-                v = getattr(_i, k)
+                v = getattr(ii, k)
             if isinstance(v, Sub): 
                 v = v.d
-            _d[k] = v
-        return _d
+            out[k] = v
+        return out
 
     @property
-    def _sub_cls(_i):
-        return [v for v in _i.__dict__.values() if isinstance(v, Sub)]
+    def _sub_cls(ii):
+        return [v for v in ii.__dict__.values() if isinstance(v, Sub)]
+    
+    def submit(ii, sweep=False, commit_msg=None, commit_id=None):
+        commit_msg = commit_msg or ii.exp_id
+        
+        ii.submit_state *= -1
+        if ii.submit_state > 0:
+            if sweep:
+                ii.sweep_id = wandb.sweep(
+                    env     = f'conda activate {ii.env};',
+                    sweep   = ii.sweep.d, 
+                    program = ii.run_path,
+                    project = ii.project,
+                    name    = ii.exp_name,
+                    run_cap = ii.sweep.n_sweep
+                )
+                ii.submit_state *= ii.sweep.n_sweep
+            
+            local_out = run_cmds(['git add .', f'git commit -m {commit_msg}', 'git push'], cwd=ii.project_path)
+            cmd = f'python -u {ii.run_path} ' + (commit_id or ii.commit_id) + ii.cmd
+            server_out = run_cmds_server(ii.server, ii.user, cmd, cwd=ii.server_project_path)
 
-    def partial(_i, f:Callable, get_dict=False, **kw):
-        # _i._debug_print(on=False)
-        d = flat_any(_i.d)
+    def partial(ii, f:Callable, get_dict=False, **kw):
+        d = flat_any(ii.d)
         d_k = inspect.signature(f.__init__).parameters.keys()
         d = {k:copy(v) for k,v in d.items() if k in d_k}
         d = {k:v for k,v in d.items() if k in d_k} | kw
@@ -288,39 +257,27 @@ class Pyfig:
             return d
         return f(**d)
 
-
-    def merge(_i, d:dict):
+    def merge(ii, d:dict):
         for k,v in d.items():
-            for cls in [_i]+_i._sub_cls:
+            for cls in [ii]+ii._sub_cls:
                 if k in cls.__class__.__dict__:
                     try:
-                        print('setting ', k)
                         setattr(cls, k, copy(v))
-                    except Exception as e:
-                        print(e, '\n Unmerged {k}')
+                    except Exception:
+                        print(f'Unmerged {k}')
             
-
-    def _to_wandb(_i, d:dict, parent='', sep='.', _l:list=[])->dict:
-        for k, v in d.items():
-            if isinstance(v, Path) or callable(v):
-                continue
-            if k in _i._wandb_ignore:
-                continue
-            k_1 = parent + sep + k if parent else k
-            if isinstance(v, dict):
-                _l.extend(_i._to_wandb(v, k_1, _l=_l).items())
-            elif callable(v):
-                continue
-            _l.append((k_1, v))
-        return dict(_l)
-
-    def _debug_print(_i, on=False, cls=True):
+    def _debug_print(ii, on=False, cls=True):
         if on:
-            for k,v in vars(_i).items():
+            for k in vars(ii).keys():
                 if not k.startswith('_'):
-                    print(k, getattr(_i, k))    
+                    print(k, getattr(ii, k))    
             if cls:
-                [print(k,v) for k,v in vars(_i.__class__).items() if not k.startswith('_')]
+                [print(k,v) for k,v in vars(ii.__class__).items() if not k.startswith('_')]
+
+    @property
+    def commit_id(ii,)->str:
+        process = run_cmds(['git log --pretty=format:%h -n 1'], cwd=ii.project_path)[0]
+        return process.stdout.decode('utf-8')  
 
 
 
