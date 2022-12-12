@@ -78,6 +78,8 @@ class Pyfig:
         terms_s_emb:    list    = ['ra', 'ra_len']
         terms_p_emb:    list    = ['rr', 'rr_len']
 
+
+
     class sweep(Sub):
         method          = 'random'
         name            = 'sweep'
@@ -87,12 +89,14 @@ class Pyfig:
         )
         parameters = dict(
             batch_size  = {'values' : [16, 32, 64]},
-            epoch       = {'values' : [5, 10, 15]},
+            # epoch       = {'values' : [5, 10, 15]},
             lr          = {'max'    : 0.1, 'min': 0.0001},
         )
         n_sweep         = reduce(
             lambda i,j:i*j,[len(v['values']) for k,v in parameters.items() if 'values' in v])+1
         sweep_id = ''
+
+
 
     class wandb_c(Sub):
         job_type        = 'training'
@@ -134,7 +138,7 @@ class Pyfig:
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['sbatch',]
 
-    def __init__(ii,args: dict={},cap=40,wandb_mode='online',get_sys_arg=True):
+    def __init__(ii,args:dict={},cap=40,sweep=False,wandb_mode='online',get_sys_arg=True):
         
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
