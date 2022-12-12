@@ -13,6 +13,8 @@ import numpy as np
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum, iterate_folder
 from utils import flat_dict, mkdir, cmd_to_dict, dict_to_wandb
 
+from cfg.user import server, sbatch_cmd, wandb_entity
+
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 
 class Sub:
@@ -94,7 +96,7 @@ class Pyfig:
 
     class wandb_c(Sub):
         job_type        = 'training'
-        entity          = 'xmax1'
+        entity          = wandb_entity
         wandb_run_path  = ''
 
     class slurm(Sub):
@@ -108,22 +110,7 @@ class Pyfig:
         output          = property(lambda _: _._p.TMP /'o-%j.out')
         error           = property(lambda _: _._p.TMP /'e-%j.err')
         job_name        = property(lambda _: _._p.exp_name)  # this does not call the instance it is in
-        sbatch          = property(lambda _: f""" 
-            module purge 
-            source ~/.bashrc 
-            module load GCC 
-            module load CUDA/11.4.1 
-            module load cuDNN/8.2.2.26-CUDA-11.4.1 
-            conda activate {_._p.env} 
-            export MKL_NUM_THREADS=1 
-            export NUMEXPR_NUM_THREADS=1 
-            export OMP_NUM_THREADS=1 
-            export OPENBLAS_NUM_THREADS=1
-            pwd
-            nvidia-smi
-            mv_cmd = f'mv {_._p.TMP}/o-$SLURM_JOB_ID.out {_._p.TMP}/e-$SLURM_JOB_ID.err $out_dir' 
-    """
-    )
+        sbatch          = property(lambda _: )
 
     project_path:       Path    = property(lambda _: _.project_root / _.project)
     server_project_path:Path    = property(lambda _: _.project_path)
@@ -147,7 +134,7 @@ class Pyfig:
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['sbatch',]
 
-    def __init__(ii,args:dict={},cap=40,wandb_mode='online',get_sys_arg=True):
+    def __init__(ii,args: dict={},cap=40,wandb_mode='online',get_sys_arg=True):
         
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
@@ -166,7 +153,7 @@ class Pyfig:
             dir         = './dump', # ii.exp_path,
             config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
             mode        = wandb_mode,
-            settings=wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+            settings = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
         )
 
         if ii.submit_state > 0:
