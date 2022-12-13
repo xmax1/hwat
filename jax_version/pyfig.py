@@ -227,7 +227,7 @@ class Pyfig:
         return [v for v in ii.__dict__.values() if isinstance(v, Sub)]
     
     def _get_dict(ii, get_prop=True, _ignore=[]):
-        ignore = ['d', 'cmd', 'submit', 'partial', 'sweep', 'save', 'load', 'log', 'merge'] + _ignore
+        ignore = ['d', 'cmd', 'submit', 'partial', 'sweep', 'save', 'load', 'log', 'merge', 'sbatch']
         out = {}
         for cls in [ii,] + ii._sub_cls:
             for k,v in cls.__class__.__dict__.items():
@@ -241,6 +241,7 @@ class Pyfig:
                     if not get_prop:
                         continue
                 print(k)
+                print(ignore)
                 v = getattr(cls, k)
                 if isinstance(v, Sub): 
                     v = v.d
