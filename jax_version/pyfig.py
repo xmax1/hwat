@@ -241,8 +241,6 @@ class Pyfig:
                     print(k, v)
                     if not get_prop:
                         continue
-                print(k)
-                print(ignore)
                 v = getattr(cls, k)
                 if isinstance(v, Sub): 
                     v = v.d
