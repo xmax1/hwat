@@ -182,13 +182,14 @@ def flat_arr(v):
 def flat_list(lst_of_lst):
     return [lst for sublst in lst_of_lst for lst in sublst]
 
-def flat_dict(d:dict,_l:list=[]):
+def flat_dict(d:dict):
+    items = []
     for k,v in d.items():
         if isinstance(v, dict):
-            _l.extend(flat_dict(v, _l=_l).items())
+            items.extend(flat_dict(v).items())
         else:
-            _l.append((k, v))
-    return dict(_l)
+            items.append((k, v))
+    return dict(items)
 
 def flat_any(v: list|dict|jnp.ndarray|np.ndarray):
     if isinstance(v, list):

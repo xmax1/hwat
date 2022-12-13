@@ -213,7 +213,7 @@ class Pyfig:
             
     @property
     def cmd(ii):
-        d = flat_dict(ii._get_dict(get_prop=False, _ignore=['sbatch',]))
+        d = flat_dict(ii._get_dict(get_prop=False))
         d = {k: v.tolist() if isinstance(v, np.ndarray) else v for k,v in d.items()}
         cmd_d = {str(k).replace(" ", ""): str(v).replace(" ", "") for k,v in d.items()}
         return ' '.join([f'--{k} {v}' for k,v in cmd_d.items() if v])
