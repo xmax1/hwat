@@ -119,7 +119,6 @@ class Pyfig:
     server_project_path:Path    = property(lambda _: _.project_path)
     n_device:           int     = property(lambda _: count_gpu())
 
-    exp_path:           Path    = property(lambda _: iterate_folder(_.project_exp_dir/_.exp_name,_.iter_exp_dir)/_.exp_id)
     TMP:                Path    = Path('./dump/tmp')
 
     server:             str     = server   # SERVER

@@ -130,18 +130,19 @@ class Pyfig:
     git_branch:         str     = 'main'        
     env:                str     = 'dex'                 # CONDA ENV
     
-    _n_submit:           int  = -1                  # #_n_submit-state-flow
+    _n_submit:          int  = -1                  # #_n_submit-state-flow
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['sbatch',]
 
-    def __init__(ii,args:dict={}, cap=3, wandb_mode='online'):
+    def __init__(ii, arg:dict={}, cap=3, wandb_mode='online'):
+        ii._input_arg = arg 
         
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
                 v = v(parent=ii)
                 setattr(ii, k, v)
         
-        ii.merge(args  | cmd_to_dict(sys.argv[1:], ii.d))
+        ii.merge(ii._input_arg | cmd_to_dict(sys.argv[1:], ii.d))
         
         run = wandb.init(
             job_type    = ii.wandb_c.job_type,
@@ -156,8 +157,10 @@ class Pyfig:
         if ii._n_submit > 0:
             n_job_running = run_cmds([f'squeue -u {ii.user} -h -t pending,running -r | wc -l'])
             if n_job_running < cap:        
-                for sub in range(ii._n_submit):
+                for sub in range(1, ii._n_submit+1):
                     Slurm(**ii.slurm.d).sbatch(ii.slurm.sbatch + '\n' + ii._run_cmd + ' --_n_submit 0')
+                    if sub > 5:
+                        break
             exit(f'{sub} submitted, {n_job_running} on cluster before, cap is {cap}')
 
         if ii.sweep_id:
@@ -195,7 +198,7 @@ class Pyfig:
         commit_msg = commit_msg or ii.exp_id
         
         if ii._n_submit < 0:
-            if sweep:
+            if sweep or ('sweep' in ii._input_arg):
                 ii.sweep_id = wandb.sweep(
                     env     = f'conda activate {ii.env};',
                     sweep   = ii.sweep.d, 
