@@ -48,7 +48,7 @@ class Pyfig:
         a_z:        np.ndarray  = np.array([4.,])
 
         n_e:        int         = property(lambda _: int(sum(_.a_z)))
-        n_u:        int         = property(lambda _: (spin + _.n_e)//2 )
+        n_u:        int         = property(lambda _: (_.spin + _.n_e)//2 )
         n_d:        int         = property(lambda _: _.n_e - _.n_u)
         
         n_b:        int         = 512
@@ -98,8 +98,7 @@ class Pyfig:
         output          = property(lambda _: _._p.TMP /'o-%j.out')
         error           = property(lambda _: _._p.TMP /'e-%j.err')
         job_name        = property(lambda _: _._p.exp_name)  # this does not call the instance it is in
-        sbatch          = property(lambda _: )
-        sbatch_cmd = f""" 
+        sbatch          = property(lambda _: f""" 
         module purge 
         source ~/.bashrc 
         module load GCC 
@@ -114,6 +113,7 @@ class Pyfig:
         nvidia-smi
         mv_cmd = f'mv {_._p.TMP}/o-$SLURM_JOB_ID.out {_._p.TMP}/e-$SLURM_JOB_ID.err $out_dir' 
         """
+        )
 
     project_path:       Path    = property(lambda _: _.project_root / _.project)
     server_project_path:Path    = property(lambda _: _.project_path)
@@ -121,7 +121,7 @@ class Pyfig:
 
     TMP:                Path    = Path('./dump/tmp')
 
-    server:             str     = server   # SERVER
+    server:             str     = ''   # SERVER
     user:               str     = user             # SERVER
     git_remote:         str     = 'origin'      
     git_branch:         str     = 'main'        
@@ -242,8 +242,4 @@ class Pyfig:
     def commit_id(ii,)->str:
         process = run_cmds(['git log --pretty=format:%h -n 1'], cwd=ii.project_path)[0]
         return process.stdout.decode('utf-8')  
-
-
-
-        
 

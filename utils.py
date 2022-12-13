@@ -123,7 +123,6 @@ def add_to_Path(path: Path, string: str | Path):
 def npify(v):
     return jnp.array(v.numpy())
 
-
 def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
     """
     fmt: [--flag, arg, --true_flag, --flag, arg1]
@@ -148,7 +147,6 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
             except:
                 v = str(v)
             print(f'Guessing type: {k} as {type(v)}')
-        v = v.replace('\n', '-CR-').replace(' ', '-WS-')
         _d[k] = v
     return _d
 
@@ -159,8 +157,10 @@ def run_cmds(cmd:str|list,cwd:str|Path=None,input_req:str=None):
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
         cmd_1 = [c.strip() for c in cmd_1.split(' ')]
         out += [subprocess.run(cmd_1,cwd=cwd,input=input_req, capture_output=True)]
+        print(out)
         sleep(0.1)
     return out[0] if len(out) == 0 else out
+
 
 def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path):
     out = []
@@ -168,7 +168,6 @@ def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path):
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # if not known host
     client.connect(server, username=user)
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]):
-        
         out += [client.exec_command(f'cd {str(cwd)}; {cmd_1}')] # in, out, err
         sleep(0.1)
     client.close()

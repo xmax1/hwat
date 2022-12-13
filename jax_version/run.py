@@ -1,7 +1,3 @@
-### Distribution ✨ ❇ Demo 💪 ### 
-import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '3'
-
 ### fancy logging variables, philosophically reminding us of the goal ###
 fancy = dict(
 		pe		= r'$V(X)',    				

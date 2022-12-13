@@ -76,7 +76,8 @@ def wpr(d:dict):
 def count_gpu() -> int: 
     # output = run_cmd('echo $CUDA_VISIBLE_DEVICES', cwd='.') - one day 
     import os
-    return sum(c.isdigit() for c in os.environ.get('CUDA_VISIBLE_DEVICES'))
+    device = os.environ.get('CUDA_VISIBLE_DEVICES') or 'none'
+    return sum(c.isdigit() for c in device)
 
 def get_cartesian_product(*args):
     """ Cartesian product is the ordered set of all combinations of n sets """
@@ -122,13 +123,11 @@ def add_to_Path(path: Path, string: str | Path):
 def npify(v):
     return jnp.array(v.numpy())
 
-
 def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
     """
     fmt: [--flag, arg, --true_flag, --flag, arg1]
     # all flags double dash because of negative numbers duh """
     booleans = ['True', 'true', 't', 'False', 'false', 'f']
-    
     cmd = ' '.join(cmd) if isinstance(cmd, list) else cmd
     cmd = [x.lstrip().lstrip('--').rstrip() for x in cmd.split(delim)]
     cmd = [x.split(' ', maxsplit=1) for x in cmd if ' ' in x]
@@ -136,17 +135,21 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
     cmd = flat_list(cmd)
     cmd = iter([x.strip() for x in cmd])
 
+    print(ref.keys())
     for k,v in zip(cmd, cmd):
         if v in booleans: 
             v=booleans.index(v)<3  # 0-2 True 3-5 False
+    
         if k in ref:
-            _d[k] = type(ref[k])(v)
+            v = type(ref[k])(v)
+            
         else:
             try:
-                _d[k] = literal_eval(v)
+                v = literal_eval(v)
             except:
-                _d[k] = str(v)
-            print(f'Guessing type: {k} as {type(v)}')
+                v = str(v)
+            print(f'Guessing type: {k} as {type(v)} \n')
+        _d[k] = v
     return _d
 
 ### run things

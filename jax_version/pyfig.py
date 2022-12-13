@@ -9,9 +9,8 @@ import sys
 import pprint
 from copy import copy
 import numpy as np
-from IPython import get_ipython
 
-from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum, iterate_folder
+from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum
 from utils import flat_dict, mkdir, cmd_to_dict, dict_to_wandb
 from utils import Sub
 
@@ -23,7 +22,8 @@ class Pyfig:
 
     project_root:   str     = Path('~/projects')
     project:        str     = 'hwat'
-    run_path:       Path    = Path(__file__).parent.relative_to(Path().home()) / 'run.py'
+    run_dir:       Path     = Path(__file__).parent.relative_to(Path().home())
+    run_name:       Path    = 'run.py'
     
     exp_name:       str     = 'demo-final'
     exp_id:         str     = gen_alphanum(n=7)
@@ -55,7 +55,7 @@ class Pyfig:
         n_corr:     int         = 20
         n_equil:    int         = 10000  # total number: n_equil_loop = equil_len / corr_len
         acc_target: int         = 0.5
-        
+
     class model(Sub):
         with_sign:      bool    = False
         n_sv:           int     = 32
@@ -140,7 +140,8 @@ class Pyfig:
                 v = v(parent=ii)
                 setattr(ii, k, v)
         
-        ii.merge(ii._input_arg | cmd_to_dict(sys.argv[1:], ii.d))
+        sys_arg = cmd_to_dict(sys.argv[1:], ii.d)
+        ii.merge(ii._input_arg | sys_arg)
         
         
         """             |        submit         |       
@@ -164,7 +165,7 @@ class Pyfig:
                     dir         = mkdir(ii.exp_path),
                     config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
                     mode        = wandb_mode,
-                    settings = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+                    settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
                 )
             
             ii.wandb_c.wandb_run_path = run.path  
@@ -173,7 +174,6 @@ class Pyfig:
                 wandb.agent(ii.sweep_id, count=1)
         
             ii.log(ii.d, create=True)
-            
             
         if run_slurm:
             print('Submitting runs to slurm')
@@ -186,7 +186,6 @@ class Pyfig:
                         break
             exit(f'{sub} submitted, {n_job_running} on cluster before, cap is {cap}')
         
-        
         if run_server:
             print('sshing to server and running this file')
             if ii._n_submit < 0:
@@ -195,7 +194,7 @@ class Pyfig:
                     ii.sweep_id = wandb.sweep(
                         env     = f'conda activate {ii.env};',
                         sweep   = ii.sweep.d, 
-                        program = ii.run_path,
+                        program = ii.run_dir / ii.run_name,
                         project = ii.project,
                         name    = ii.exp_name,
                         run_cap = ii.sweep.n_sweep
@@ -203,10 +202,11 @@ class Pyfig:
                 
                 local_out = run_cmds(['git add .', f'git commit -m run_things', 'git push'], cwd=ii.project_path)
                 print(ii.server, ii.user, ii.server_project_path)
-                run_cmd = f'python {str(ii.run_path)} {ii.cmd}'
-                run_cmd = f'python {str(ii.run_path)} {ii.cmd}'
-                print(cmd)
-                server_out = run_cmds_server(ii.server, ii.user, cmd, ii.server_project_path)[0]
+                git_cmd = 'git pull'
+                run_cmd = f'python {str(ii.run_name)} {ii.cmd}'
+                server_out = run_cmds_server(ii.server, ii.user, git_cmd, ii.server_project_path)[0]
+                print(server_out)
+                server_out = run_cmds_server(ii.server, ii.user, run_cmd, ii.run_dir)[0]
                 print(server_out)
                 exit()
             
@@ -215,7 +215,6 @@ class Pyfig:
         d = flat_dict(ii.d)
         # to_cmd_string = lambda v: str(v).replace('\n', '-CR-').replace(' ', '-WS-')
         to_cmd_string = lambda v: str(v)
-        
         cmd_d = {str(k).replace(" ", ""):to_cmd_string(v).replace(" ", "") for k,v in d.items() if not k in ignore}
         return ' '.join([f'--{k} {v}' for k,v in cmd_d.items() if v])
 
