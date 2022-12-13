@@ -180,11 +180,12 @@ class Pyfig:
             n_job_running = run_cmds([f'squeue -u {ii.user} -h -t pending,running -r | wc -l'])
             if n_job_running < cap:        
                 for sub in range(1, ii._n_submit+1):
-                    Slurm(**ii.slurm.d).sbatch(ii.slurm.sbatch + '\n' + ii._run_cmd + ' --_n_submit 0')
+                    # Slurm(**ii.slurm.d).sbatch(ii.slurm.sbatch + '\n' + ii._run_cmd + ' --_n_submit 0')
                     print(ii.slurm.sbatch + '\n' + ii._run_cmd + ' --_n_submit 0')
                     if sub > 5:
                         break
-            exit(f'{sub} submitted, {n_job_running} on cluster before, cap is {cap}')
+            raise 'submitted'
+            # exit(f'{sub} submitted, {n_job_running} on cluster before, cap is {cap}')
         
         if run_server:
             print('sshing to server and running this file')
@@ -199,6 +200,10 @@ class Pyfig:
                         name    = ii.exp_name,
                         run_cap = ii.sweep.n_sweep
                     )
+                
+                
+                print(ii.cmd)
+                
                 
                 local_out = run_cmds(['git commit -a -m "run_things"', 'git push origin main'], cwd=ii.project_path)
                 print(local_out)
@@ -226,26 +231,29 @@ class Pyfig:
     def _sub_cls(ii):
         return [v for v in ii.__dict__.values() if isinstance(v, Sub)]
     
-    def _get_dict(ii, get_prop=True, _ignore=[]):
-        ignore = ['d', 'cmd', 'submit', 'partial', 'sweep', 'save', 'load', 'log', 'merge', 'sbatch']
-        out = {}
-        for cls in [ii,] + ii._sub_cls:
-            for k,v in cls.__class__.__dict__.items():
-                if k.startswith('_'):
+    def _get_dict(ii, cls=None, get_prop=True, _ignore=['sweep', 'sbatch']):
+        ignore = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + _ignore
+        cls = ii if cls is None else cls
+        items = []
+        for k, v_cls in cls.__class__.__dict__.items():
+            if k.startswith('_'):
+                continue
+            if k in ignore:
+                continue
+            
+            v = getattr(cls, k)
+            
+            if isinstance(v, partial):
+                continue # v = copy(ii.__dict__[k])
+            if isinstance(v_cls, property):
+                if not get_prop:
                     continue
-                if k in ignore:
-                    continue
-                if isinstance(v, partial):
-                    continue # v = copy(ii.__dict__[k])
-                if isinstance(v, property):
-                    print(k, v)
-                    if not get_prop:
-                        continue
-                v = getattr(cls, k)
-                if isinstance(v, Sub): 
-                    v = v.d
-                out[k] = v
-        return out
+                
+            if isinstance(v, Sub):
+                items.extend(ii._get_dict(cls=v).items())
+            else:
+                items.append((k, v))
+        return dict(items)
         
 
     def partial(ii, f:Callable, get_dict=False, **kw):
