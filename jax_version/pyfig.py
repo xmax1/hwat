@@ -223,7 +223,7 @@ class Pyfig:
         return ' '.join([f' --{k}  {to_cmd_string(v)} ' for k,v in d.items()])
 
     @property
-    def d(ii, ignore=['d', 'cmd', 'submit', 'partial', 'sweep', 'save', 'load', 'log']):
+    def d(ii, ignore=['d', 'cmd', 'submit', 'partial', 'sweep', 'save', 'load', 'log', 'merge']):
         out = {}
         for k,v in ii.__class__.__dict__.items():
             if k.startswith('_') or k in ignore:
