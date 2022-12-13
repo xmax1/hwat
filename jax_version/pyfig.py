@@ -238,6 +238,7 @@ class Pyfig:
                 if isinstance(v, partial):
                     continue # v = copy(ii.__dict__[k])
                 if isinstance(v, property):
+                    print(k, v)
                     if not get_prop:
                         continue
                 print(k)
