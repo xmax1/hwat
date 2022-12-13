@@ -153,7 +153,7 @@ class Pyfig:
         _n_submit   =0  |   init    |   NA      |
                     >0  |   slurm   |   NA      |
         """
-        
+        print('FILE: ', __file__)
         run_init_local = (not submit) and (ii._n_submit < 0)
         run_init_cluster = submit and (ii._n_submit == 0)
         run_slurm = submit and (ii._n_submit > 0)
