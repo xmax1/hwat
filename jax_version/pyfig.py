@@ -249,8 +249,10 @@ class Pyfig:
 
     def merge(ii, d:dict):
         for k,v in d.items():
-            for cls in [ii]+ii._sub_cls:
+            for cls in [ii,] + ii._sub_cls:
                 if k in cls.__class__.__dict__:
+                    if isinstance(cls.__class__.__dict__[k], property):
+                        continue
                     try:
                         setattr(cls, k, copy(v))
                     except Exception:
