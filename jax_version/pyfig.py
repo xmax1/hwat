@@ -9,6 +9,7 @@ import sys
 import pprint
 from copy import copy
 import numpy as np
+from IPython import get_ipython
 
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum, iterate_folder
 from utils import flat_dict, mkdir, cmd_to_dict, dict_to_wandb
@@ -117,8 +118,8 @@ class Pyfig:
     
     # replace \n with -CR-, replace <space> with -WS-
     
-    _run_file = dict(ipynb = 'jupyter nbconvert --execute ', py = 'python ')
-    _run_cmd = property(lambda _: _._run_file[Path(__file__).suffix[1:]] + _.cmd)   # #pyfig-recurse
+    _run_terminal = dict(ipynb = 'jupyter nbconvert --to notebook --execute ', py = 'python ')
+    _run_cmd = property(lambda _: _._run_terminal[['ipynb', 'py'][get_ipython() is not None]] + _.cmd)   # #pyfig-recurse
     
     TMP:                Path    = Path('./dump/tmp')
     project_path:       Path    = property(lambda _: _.project_root / _.project)
