@@ -119,7 +119,6 @@ class Pyfig:
     # replace \n with -CR-, replace <space> with -WS-
     
     _run_terminal = dict(ipynb = 'jupyter nbconvert --to notebook --execute ', py = 'python ')
-    _run_cmd = property(lambda _: _._run_terminal[['ipynb', 'py'][get_ipython() is not None]] + _.cmd)   # #pyfig-recurse
     
     TMP:                Path    = Path('./dump/tmp')
     project_path:       Path    = property(lambda _: _.project_root / _.project)
@@ -137,7 +136,7 @@ class Pyfig:
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['sbatch',]
 
-    def __init__(ii, arg:dict={}, cap=3, wandb_mode='online', submit=False, sweep=False):
+    def __init__(ii, arg:dict={}, cap=3, wandb_mode='online', submit=False, sweep=False, notebook=False):
         ii._input_arg = arg 
         
         for k,v in Pyfig.__dict__.items():
@@ -208,8 +207,9 @@ class Pyfig:
                     )
                 
                 local_out = run_cmds(['git add .', f'git commit -m run_things', 'git push'], cwd=ii.project_path)
-                print(ii.server, ii.user, ii._run_cmd, ii.server_project_path)
-                server_out = run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.server_project_path)[0]
+                print(ii.server, ii.user, ii.server_project_path)
+                cmd = ii._run_terminal[['ipynb', 'py'][notebook]] + ii.cmd
+                server_out = run_cmds_server(ii.server, ii.user, ii.cmd, ii.server_project_path)[0]
                 print(server_out)
             
     @property
