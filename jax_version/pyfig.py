@@ -200,15 +200,16 @@ class Pyfig:
                         run_cap = ii.sweep.n_sweep
                     )
                 
-                local_out = run_cmds(['git add .', f'git commit -m run_things', 'git push'], cwd=ii.project_path)
+                local_out = run_cmds(['git add .', f'git commit -m "run_things"', 'git push origin main'], cwd=ii.project_path)
+                print(local_out)
                 print(ii.server, ii.user, ii.server_project_path)
-                git_cmd = 'git pull'
+                git_cmd = 'git pull origin main'
                 run_cmd = f'python {str(ii.run_name)} {ii.cmd}'
                 server_out = run_cmds_server(ii.server, ii.user, git_cmd, ii.server_project_path)[0]
                 print(server_out)
                 server_out = run_cmds_server(ii.server, ii.user, run_cmd, ii.run_dir)[0]
                 print(server_out)
-                exit()
+                exit('Submitted to server.')
             
     @property
     def cmd(ii, ignore=['sbatch', ]):

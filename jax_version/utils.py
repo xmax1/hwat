@@ -139,16 +139,16 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
     for k,v in zip(cmd, cmd):
         if v in booleans: 
             v=booleans.index(v)<3  # 0-2 True 3-5 False
-    
-        if k in ref:
-            v = type(ref[k])(v)
             
-        else:
-            try:
-                v = literal_eval(v)
-            except:
+        
+        try:
+            v = literal_eval(v)
+        except:
+            if k in ref.keys():
+                v = type(ref[k])(v)
+            else:
                 v = str(v)
-            print(f'Guessing type: {k} as {type(v)} \n')
+        print(f'Guessing type: {k} as {type(v)} \n')
         _d[k] = v
     return _d
 
@@ -172,10 +172,10 @@ def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path):
         print(cwd, cmd_1)
         stdin, stdout, stderr = client.exec_command(f'cd {str(cwd)}; {cmd_1}')
         # print('stdin:  ', stdin.readlines())
-        print('stdout: ', stdout.readlines())
-        print('stderr: ', stderr.readlines())
-        out += [stdout.readlines()] 
-        sleep(0.1)
+        x = stdout.readlines()
+        print('stdout: ', x)
+        out += [x] 
+        sleep(3)
     client.close()
     return out[0] if len(out) == 0 else out
     
