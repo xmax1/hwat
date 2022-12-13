@@ -162,16 +162,15 @@ def run_cmds(cmd:str|list,cwd:str|Path=None,input_req:str=None):
         sleep(0.1)
     return out[0] if len(out) == 0 else out
 
-def run_cmds_server(server:str,user:str,cmd:str|list,cwd=str|Path):
+def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path):
     out = []
-    client = paramiko.SSHClient()
+    client = paramiko.SSHClient()    
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # if not known host
-    client.connect(hostname=server, username=user)
-    client.exec_command(f'cd {cwd}')
-    with client as _r:
-        for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]):
-            out += [_r.exec_command(f'{cmd_1}')] # in, out, err
-            sleep(0.1)
+    client.connect(server, username=user)
+    for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]):
+        out += [client.exec_command(f'cd {str(cwd)}; {cmd_1}')] # in, out, err
+        sleep(0.1)
+    client.close()
     return out[0] if len(out) == 0 else out
 
 
