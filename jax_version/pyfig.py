@@ -212,33 +212,41 @@ class Pyfig:
                 exit('Submitted to server.')
             
     @property
-    def cmd(ii, ignore=['sbatch', ]):
-        d = flat_dict(ii.d)
-        for k,v in d.items():
-            print(k, v.__repr__())
-
-        exit()
-        cmd_d = {str(k).replace(" ", ""): to_cmd_string(v).replace(" ", "") for k,v in d.items() if not k in ignore}
+    def cmd(ii):
+        d = flat_dict(ii._get_dict(get_prop=False, _ignore=['sbatch',]))
+        d = {k: v.to_list() if isinstance(v, np.ndarray) else v for k,v in d.items()}
+        cmd_d = {str(k).replace(" ", ""): str(v).replace(" ", "") for k,v in d.items()}
         return ' '.join([f'--{k} {v}' for k,v in cmd_d.items() if v])
 
     @property
-    def d(ii, ignore=['d', 'cmd', 'submit', 'partial', 'sweep', 'save', 'load', 'log', 'merge']):
-        out = {}
-        for k,v in ii.__class__.__dict__.items():
-            if k.startswith('_') or k in ignore:
-                continue
-            if isinstance(v, partial):
-                v = copy(ii.__dict__[k]) # ‼ 🏳 Danger zone - partials may not be part of dict
-            else:
-                v = getattr(ii, k)
-            if isinstance(v, Sub): 
-                v = v.d
-            out[k] = v
-        return out
+    def d(ii):
+        return ii._get_dict(get_prop=True)
 
     @property
     def _sub_cls(ii):
         return [v for v in ii.__dict__.values() if isinstance(v, Sub)]
+    
+    def _get_dict(ii, get_prop=True, _ignore=[]):
+        ignore = ['d', 'cmd', 'submit', 'partial', 'sweep', 'save', 'load', 'log', 'merge'] + _ignore
+        out = {}
+        for cls in [ii,] + ii._sub_cls:
+            for k,v in cls.__class__.__dict__.items():
+                if k.startswith('_'):
+                    continue
+                if k in ignore:
+                    continue
+                if isinstance(v, partial):
+                    continue # v = copy(ii.__dict__[k])
+                if not get_prop:
+                    if isinstance(v, property):
+                        continue
+                    
+                v = getattr(cls, k)
+                if isinstance(v, Sub): 
+                    v = v.d
+                out[k] = v
+        return out
+        
 
     def partial(ii, f:Callable, get_dict=False, **kw):
         d = flat_any(ii.d)
