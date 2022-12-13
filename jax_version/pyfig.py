@@ -21,11 +21,10 @@ docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 
 class Pyfig:
 
-    project_root:   str     = Path().home()/'projects'
+    project_root:   str     = Path('~/projects')
     project:        str     = 'hwat'
-
-    data_dir:       Path    = project_root / 'data'  # not a property, might change
-    run_path:       Path    = property(lambda _: _.project_path / 'run.py')
+    run_path:       Path    = Path(__file__).parent.relative_to(Path().home()) / 'run.py'
+    
     exp_name:       str     = 'demo-final'
     exp_id:         str     = gen_alphanum(n=7)
     sweep_id:       str     = ''
@@ -116,9 +115,6 @@ class Pyfig:
             out_dir={(mkdir(_._p.exp_path/"out"))}
         """)
     
-    # replace \n with -CR-, replace <space> with -WS-
-    
-    _run_terminal = dict(ipynb = 'jupyter nbconvert --to notebook --execute ', py = 'python ')
     
     TMP:                Path    = Path('./dump/tmp')
     project_path:       Path    = property(lambda _: _.project_root / _.project)
@@ -126,8 +122,8 @@ class Pyfig:
     n_device:           int     = property(lambda _: count_gpu())
     exp_path:           Path    = property(lambda _: _.project_path/'exp'/_.exp_name/(_.exp_id + _.sweep_id))
 
-    server:             str     = 'svol.fysik.dtu.dk'   # SERVER
     user:               str     = user             # SERVER
+    server:             str     = 'svol.fysik.dtu.dk'   # SERVER
     git_remote:         str     = 'origin'      
     git_branch:         str     = 'main'        
     env:                str     = 'dex'                 # CONDA ENV
@@ -146,6 +142,7 @@ class Pyfig:
         
         ii.merge(ii._input_arg | cmd_to_dict(sys.argv[1:], ii.d))
         
+        
         """             |        submit         |       
                         |   True    |   False   | 
                         -------------------------
@@ -153,15 +150,13 @@ class Pyfig:
         _n_submit   =0  |   init    |   NA      |
                     >0  |   slurm   |   NA      |
         """
-        print('FILE: ', __file__)
         run_init_local = (not submit) and (ii._n_submit < 0)
         run_init_cluster = submit and (ii._n_submit == 0)
         run_slurm = submit and (ii._n_submit > 0)
         run_server = submit and (ii._n_submit < 0)
         
-        print(run_init_local, run_init_cluster, run_slurm, run_server)
-        
         if run_init_local or run_init_cluster:
+            print('Running __init__')
             run = wandb.init(
                     job_type    = ii.wandb_c.job_type,
                     entity      = ii.wandb_c.entity,
@@ -180,10 +175,9 @@ class Pyfig:
             ii.log(ii.d, create=True)
             
             
-            
         if run_slurm:
+            print('Submitting runs to slurm')
             n_job_running = run_cmds([f'squeue -u {ii.user} -h -t pending,running -r | wc -l'])
-            print(n_job_running)
             if n_job_running < cap:        
                 for sub in range(1, ii._n_submit+1):
                     Slurm(**ii.slurm.d).sbatch(ii.slurm.sbatch + '\n' + ii._run_cmd + ' --_n_submit 0')
@@ -193,10 +187,11 @@ class Pyfig:
             exit(f'{sub} submitted, {n_job_running} on cluster before, cap is {cap}')
         
         
-        
         if run_server:
+            print('sshing to server and running this file')
             if ii._n_submit < 0:
                 if sweep or ('sweep' in ii._input_arg):
+                    print('Running a sweep')
                     ii.sweep_id = wandb.sweep(
                         env     = f'conda activate {ii.env};',
                         sweep   = ii.sweep.d, 
@@ -208,15 +203,21 @@ class Pyfig:
                 
                 local_out = run_cmds(['git add .', f'git commit -m run_things', 'git push'], cwd=ii.project_path)
                 print(ii.server, ii.user, ii.server_project_path)
-                cmd = ii._run_terminal[['ipynb', 'py'][notebook]] + ii.cmd
-                server_out = run_cmds_server(ii.server, ii.user, ii.cmd, ii.server_project_path)[0]
+                run_cmd = f'python {str(ii.run_path)} {ii.cmd}'
+                run_cmd = f'python {str(ii.run_path)} {ii.cmd}'
+                print(cmd)
+                server_out = run_cmds_server(ii.server, ii.user, cmd, ii.server_project_path)[0]
                 print(server_out)
+                exit()
             
     @property
-    def cmd(ii,):
+    def cmd(ii, ignore=['sbatch', ]):
         d = flat_dict(ii.d)
-        to_cmd_string = lambda v: str(v).replace('\n', '-CR-').replace(' ', '-WS-')
-        return ' '.join([f' --{k}  {to_cmd_string(v)} ' for k,v in d.items()])
+        # to_cmd_string = lambda v: str(v).replace('\n', '-CR-').replace(' ', '-WS-')
+        to_cmd_string = lambda v: str(v)
+        
+        cmd_d = {str(k).replace(" ", ""):to_cmd_string(v).replace(" ", "") for k,v in d.items() if not k in ignore}
+        return ' '.join([f'--{k} {v}' for k,v in cmd_d.items() if v])
 
     @property
     def d(ii, ignore=['d', 'cmd', 'submit', 'partial', 'sweep', 'save', 'load', 'log', 'merge']):
@@ -270,7 +271,6 @@ class Pyfig:
     
     def save(ii, data, file_name):
         path:Path = ii.exp_path / file_name
-        assert path.suffix == 'pk'
         data_save_load(path, data)
         
     def load(ii, file_name):
@@ -291,6 +291,7 @@ class Pyfig:
 
 
 import pickle as pk
+
 
 file_interface_all = dict(
     pk = dict(
