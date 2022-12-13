@@ -134,7 +134,7 @@ class Pyfig:
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['sbatch',]
 
-    def __init__(ii, arg:dict={}, cap=3, wandb_mode='online'):
+    def __init__(ii, arg:dict={}, cap=3, wandb_mode='online', submit=False, sweep=False):
         ii._input_arg = arg 
         
         for k,v in Pyfig.__dict__.items():
@@ -144,7 +144,33 @@ class Pyfig:
         
         ii.merge(ii._input_arg | cmd_to_dict(sys.argv[1:], ii.d))
         
-        if ii._n_submit > 0:
+        """             |        submit         |       
+                        |   True    |   False   | 
+                        -------------------------
+                    <0  |   server  |   init    |
+        _n_submit   =0  |   init    |   NA      |
+                    >0  |   slurm   |   NA      |
+        """
+        
+        run_init_local = (not submit) and (ii._n_submit < 0)
+        run_init_cluster = submit and (ii._n_submit == 0)
+        run_slurm = submit and (ii._n_submit > 0)
+        run_server = submit and (ii._n_submit < 0)
+        
+        print(run_init_local, run_init_cluster, run_slurm, run_server)
+        
+        if run_init_local or run_init_cluster:
+            run = wandb.init(
+                    job_type    = ii.wandb_c.job_type,
+                    entity      = ii.wandb_c.entity,
+                    project     = ii.project,
+                    dir         = mkdir(ii.exp_path),
+                    config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
+                    mode        = wandb_mode,
+                    settings = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+                )
+            
+        if run_slurm:
             n_job_running = run_cmds([f'squeue -u {ii.user} -h -t pending,running -r | wc -l'])
             print(n_job_running)
             if n_job_running < cap:        
@@ -155,18 +181,24 @@ class Pyfig:
                         break
             exit(f'{sub} submitted, {n_job_running} on cluster before, cap is {cap}')
         
-        else:
-            run = wandb.init(
-                job_type    = ii.wandb_c.job_type,
-                entity      = ii.wandb_c.entity,
-                project     = ii.project,
-                dir         = mkdir(ii.exp_path),
-                config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
-                mode        = wandb_mode,
-                settings = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
-            )
-
-
+        if run_server:
+            if ii._n_submit < 0:
+                if sweep or ('sweep' in ii._input_arg):
+                    ii.sweep_id = wandb.sweep(
+                        env     = f'conda activate {ii.env};',
+                        sweep   = ii.sweep.d, 
+                        program = ii.run_path,
+                        project = ii.project,
+                        name    = ii.exp_name,
+                        run_cap = ii.sweep.n_sweep
+                    )
+                
+                local_out = run_cmds(['git add .', f'git commit -m run_things', 'git push'], cwd=ii.project_path)
+                print(local_out)
+                cmd = f'python -u {ii.run_path} ' + ii.commit_id + ii.cmd
+                server_out = run_cmds_server(ii.server, ii.user, cmd, cwd=ii.server_project_path)
+                print(server_out)
+            
         if ii.sweep_id:
             wandb.agent(ii.sweep_id, count=1)
 
@@ -197,24 +229,6 @@ class Pyfig:
     @property
     def _sub_cls(ii):
         return [v for v in ii.__dict__.values() if isinstance(v, Sub)]
-    
-    def submit(ii, sweep=False, commit_msg=None, commit_id=None):
-        commit_msg = commit_msg or ii.exp_id
-        
-        if ii._n_submit < 0:
-            if sweep or ('sweep' in ii._input_arg):
-                ii.sweep_id = wandb.sweep(
-                    env     = f'conda activate {ii.env};',
-                    sweep   = ii.sweep.d, 
-                    program = ii.run_path,
-                    project = ii.project,
-                    name    = ii.exp_name,
-                    run_cap = ii.sweep.n_sweep
-                )
-            
-            local_out = run_cmds(['git add .', f'git commit -m {commit_msg}', 'git push'], cwd=ii.project_path)
-            cmd = f'python -u {ii.run_path} ' + (commit_id or ii.commit_id) + ii.cmd
-            server_out = run_cmds_server(ii.server, ii.user, cmd, cwd=ii.server_project_path)
 
     def partial(ii, f:Callable, get_dict=False, **kw):
         d = flat_any(ii.d)
