@@ -141,13 +141,15 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
         if v in booleans: 
             v=booleans.index(v)<3  # 0-2 True 3-5 False
         if k in ref:
-            _d[k] = type(ref[k])(v)
+            v = type(ref[k])(v)
         else:
             try:
-                _d[k] = literal_eval(v)
+                v = literal_eval(v)
             except:
-                _d[k] = str(v)
+                v = str(v)
             print(f'Guessing type: {k} as {type(v)}')
+        v = v.replace('\n', '-CR-').replace(' ', '-WS-')
+        _d[k] = v
     return _d
 
 ### run things

@@ -99,7 +99,7 @@ class Pyfig:
         job_name        = property(lambda _: _._p.exp_name)  # this does not call the instance it is in
         sbatch          = property(lambda _: 
             f""" 
-            module purge 
+            module purge
             source ~/.bashrc 
             module load GCC 
             module load CUDA/11.4.1 
@@ -113,7 +113,9 @@ class Pyfig:
             nvidia-smi
             mv_cmd = f'mv {_._p.TMP}/o-$SLURM_JOB_ID.out {_._p.TMP}/e-$SLURM_JOB_ID.err $out_dir'
             out_dir={(mkdir(_._p.exp_path/"out"))}
-            """)
+        """)
+    
+    # replace \n with -CR-, replace <space> with -WS-
     
     _run_file = dict(ipynb = 'jupyter nbconvert --execute ', py = 'python ')
     _run_cmd = property(lambda _: _._run_file[Path(__file__).suffix[1:]] + _.cmd)   # #pyfig-recurse
@@ -206,6 +208,7 @@ class Pyfig:
                 
                 local_out = run_cmds(['git add .', f'git commit -m run_things', 'git push'], cwd=ii.project_path)
                 print(local_out)
+                print(ii.cmd)
                 cmd = f'python -u {ii.run_path} ' + ii.commit_id + ii.cmd
                 print(ii.server, ii.user, cmd, ii.server_project_path)
                 server_out = run_cmds_server(ii.server, ii.user, cmd, cwd=ii.server_project_path)
@@ -216,7 +219,7 @@ class Pyfig:
     @property
     def cmd(ii,):
         d = flat_dict(ii.d)
-        return ' '.join([f' --{k}  {str(v)} ' for k,v in d.items()])
+        return ' '.join([f' --{k}  {to_cmd_string(v)} ' for k,v in d.items()])
 
     @property
     def d(ii, ignore=['d', 'cmd', 'submit', 'partial', 'sweep', 'save', 'load', 'log']):
@@ -284,6 +287,13 @@ class Pyfig:
         for p in ['log.tmp', ii.exp_path/'log.out']:
             with open(p, mode) as f:
                 f.writelines(info)
+
+def to_cmd_string(v):
+    return v.replace('\n', '-CR-').replace(' ', '-WS-')
+
+    
+    
+
 
 import pickle as pk
 
