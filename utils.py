@@ -168,6 +168,7 @@ def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path):
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # if not known host
     client.connect(server, username=user)
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]):
+        
         out += [client.exec_command(f'cd {str(cwd)}; {cmd_1}')] # in, out, err
         sleep(0.1)
     client.close()

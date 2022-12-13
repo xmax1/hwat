@@ -207,8 +207,7 @@ class Pyfig:
                     )
                 
                 local_out = run_cmds(['git add .', f'git commit -m run_things', 'git push'], cwd=ii.project_path)
-                cmd = f'python -u {ii.run_path} ' + ii.commit_id + ii.cmd
-                server_out = run_cmds_server(ii.server, ii.user, cmd, cwd=ii.server_project_path)[0]
+                server_out = run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.server_project_path)[0]
                 print(server_out)
             
     @property
