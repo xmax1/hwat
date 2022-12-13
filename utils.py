@@ -17,6 +17,27 @@ from copy import copy
 
 this_dir = Path(__file__).parent
 
+### Pyfig Subclass 
+
+class Sub:
+    _p = None
+
+    def __init__(ii, parent=None):
+        ii._p = parent
+    
+    @property
+    def d(ii, ignore=['d', 'cmd', '_p']):
+        out={} # becomes class variable in call line, accumulates
+        for k,v in ii.__class__.__dict__.items():
+            if k.startswith('_') or k in ignore:
+                continue
+            if isinstance(v, partial): 
+                v = ii.__dict__[k]   # if getattr then calls the partial, which we don't want
+            else:
+                v = getattr(ii, k)
+            out[k] = v
+        return out
+
 ### metrics ###
 
 def collect_stats(k, v, new_d, p='tr', suf='', sep='/', sep_long='-'):

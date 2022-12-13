@@ -1,5 +1,20 @@
 
 
+# How to run
+### Definitions
+- Local (your laptop or a cloud development environment)
+- Server (the stepping stone to cluster)
+- Cluster (where the magic happens)
+
+### Commands
+- jupyter nbconvert --execute <notebook>
+
+### Local -> Server -> Cluster
+- 
+
+### Server -> Cluster
+- 
+
 # FIX 
 - Pretrain on diag gaussian
 - Loop over dense

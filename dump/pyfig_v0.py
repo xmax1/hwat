@@ -14,7 +14,7 @@ from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum, iterate_fo
 from utils import flat_dict, mkdir, cmd_to_dict, dict_to_wandb
 from utils import Sub
 
-from _user import user, server
+from user import server, sbatch_cmd, wandb_entity
 
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 
@@ -87,46 +87,22 @@ class Pyfig:
         entity          = 'hwat'
         wandb_run_path  = ''
 
-    class slurm(Sub):
-        mail_type       = 'FAIL'
-        partition       ='sm3090'
-        nodes           = 1                # n_node
-        ntasks          = 8                # n_cpu
-        cpus_per_task   = 1     
-        time            = '0-12:00:00'     # D-HH:MM:SS
-        gres            = 'gpu:RTX3090:1'
-        output          = property(lambda _: _._p.TMP /'o-%j.out')
-        error           = property(lambda _: _._p.TMP /'e-%j.err')
-        job_name        = property(lambda _: _._p.exp_name)  # this does not call the instance it is in
-        sbatch          = property(lambda _: )
-        sbatch_cmd = f""" 
-        module purge 
-        source ~/.bashrc 
-        module load GCC 
-        module load CUDA/11.4.1 
-        module load cuDNN/8.2.2.26-CUDA-11.4.1 
-        conda activate {_._p.env} 
-        export MKL_NUM_THREADS=1 
-        export NUMEXPR_NUM_THREADS=1 
-        export OMP_NUM_THREADS=1 
-        export OPENBLAS_NUM_THREADS=1
-        pwd
-        nvidia-smi
-        mv_cmd = f'mv {_._p.TMP}/o-$SLURM_JOB_ID.out {_._p.TMP}/e-$SLURM_JOB_ID.err $out_dir' 
-        """
-
     project_path:       Path    = property(lambda _: _.project_root / _.project)
     server_project_path:Path    = property(lambda _: _.project_path)
     n_device:           int     = property(lambda _: count_gpu())
 
+    iter_exp_dir:       bool    = False  # True is broken, bc properties
     exp_path:           Path    = property(lambda _: iterate_folder(_.project_exp_dir/_.exp_name,_.iter_exp_dir)/_.exp_id)
-    TMP:                Path    = Path('./dump/tmp')
+    project_exp_dir:    Path    = property(lambda _: _.project_path / 'exp')
+    project_cfg_dir:    Path    = property(lambda _: _.project_path / 'cfg')
+    TMP:                Path    = property(lambda _: _.project_exp_dir / 'tmp')
 
-    server:             str     = server   # SERVER
-    user:               str     = user             # SERVER
+    server:             str     = 'svol.fysik.dtu.dk'   # SERVER
+    user:               str     = 'amawi'     # SERVER
+    entity:             str     = 'xmax1'       # WANDB entity
     git_remote:         str     = 'origin'      
     git_branch:         str     = 'main'        
-    env:                str     = 'dex'                 # CONDA ENV
+    env:                str     = 'dex'            # CONDA ENV
     
     submit_state:       int  = -1
     _sys_arg:           list = sys.argv[1:]
