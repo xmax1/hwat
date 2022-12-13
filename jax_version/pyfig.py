@@ -237,10 +237,10 @@ class Pyfig:
                     continue
                 if isinstance(v, partial):
                     continue # v = copy(ii.__dict__[k])
-                if not get_prop:
-                    if isinstance(v, property):
+                if isinstance(v, property):
+                    if not get_prop:
                         continue
-                    
+                print(k)
                 v = getattr(cls, k)
                 if isinstance(v, Sub): 
                     v = v.d

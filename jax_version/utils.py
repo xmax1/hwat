@@ -139,8 +139,7 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
     for k,v in zip(cmd, cmd):
         if v in booleans: 
             v=booleans.index(v)<3  # 0-2 True 3-5 False
-            
-        
+    
         try:
             v = literal_eval(v)
         except:
