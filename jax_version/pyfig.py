@@ -170,6 +170,15 @@ class Pyfig:
                     settings = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
                 )
             
+            ii.wandb_c.wandb_run_path = run.path  
+            
+            if ii.sweep_id:
+                wandb.agent(ii.sweep_id, count=1)
+        
+            ii.log(ii.d, create=True)
+            
+            
+            
         if run_slurm:
             n_job_running = run_cmds([f'squeue -u {ii.user} -h -t pending,running -r | wc -l'])
             print(n_job_running)
@@ -180,6 +189,8 @@ class Pyfig:
                     if sub > 5:
                         break
             exit(f'{sub} submitted, {n_job_running} on cluster before, cap is {cap}')
+        
+        
         
         if run_server:
             if ii._n_submit < 0:
@@ -196,15 +207,11 @@ class Pyfig:
                 local_out = run_cmds(['git add .', f'git commit -m run_things', 'git push'], cwd=ii.project_path)
                 print(local_out)
                 cmd = f'python -u {ii.run_path} ' + ii.commit_id + ii.cmd
+                print(ii.server, ii.user, cmd, ii.server_project_path)
                 server_out = run_cmds_server(ii.server, ii.user, cmd, cwd=ii.server_project_path)
                 print(server_out)
             
-        if ii.sweep_id:
-            wandb.agent(ii.sweep_id, count=1)
-
-        ii.wandb_c.wandb_run_path = run.path  
         
-        ii.log(ii.d, create=True)
         
     @property
     def cmd(ii,):
