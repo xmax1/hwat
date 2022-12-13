@@ -215,8 +215,8 @@ class Pyfig:
     def cmd(ii, ignore=['sbatch', ]):
         d = flat_dict(ii.d)
         for k,v in d.items():
-            print(k, v.__repr__)
-            
+            print(k, v.__repr__())
+
         exit()
         cmd_d = {str(k).replace(" ", ""): to_cmd_string(v).replace(" ", "") for k,v in d.items() if not k in ignore}
         return ' '.join([f'--{k} {v}' for k,v in cmd_d.items() if v])
