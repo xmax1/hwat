@@ -219,6 +219,7 @@ class Pyfig:
     @property
     def cmd(ii,):
         d = flat_dict(ii.d)
+        to_cmd_string = lambda v: str(v).replace('\n', '-CR-').replace(' ', '-WS-')
         return ' '.join([f' --{k}  {to_cmd_string(v)} ' for k,v in d.items()])
 
     @property
@@ -288,8 +289,6 @@ class Pyfig:
             with open(p, mode) as f:
                 f.writelines(info)
 
-def to_cmd_string(v):
-    return v.replace('\n', '-CR-').replace(' ', '-WS-')
 
     
     
