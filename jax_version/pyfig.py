@@ -200,7 +200,7 @@ class Pyfig:
                         run_cap = ii.sweep.n_sweep
                     )
                 
-                local_out = run_cmds(['git add .', f'git commit -m "run_things"', 'git push origin main'], cwd=ii.project_path)
+                local_out = run_cmds(['git commit -a -m "run_things"', 'git push origin main'], cwd=ii.project_path)
                 print(local_out)
                 print(ii.server, ii.user, ii.server_project_path)
                 git_cmd = 'git pull origin main'
