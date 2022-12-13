@@ -153,13 +153,12 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
 ### run things
 
 def run_cmds(cmd:str|list,cwd:str|Path=None,input_req:str=None):
-    _out = []
+    out = []
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
         cmd_1 = [c.strip() for c in cmd_1.split(' ')]
-        _out += [subprocess.run(
-            cmd_1,cwd=cwd,input=input_req, capture_output=True)]
+        out += [subprocess.run(cmd_1,cwd=cwd,input=input_req, capture_output=True)]
         sleep(0.1)
-    return _out
+    return out[0] if len(out) == 0 else out
 
 def run_cmds_server(server:str,user:str,cmd:str|list,cwd=str|Path):
     _out = []

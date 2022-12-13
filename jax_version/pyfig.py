@@ -144,24 +144,28 @@ class Pyfig:
         
         ii.merge(ii._input_arg | cmd_to_dict(sys.argv[1:], ii.d))
         
-        run = wandb.init(
-            job_type    = ii.wandb_c.job_type,
-            entity      = ii.wandb_c.entity,
-            project     = ii.project,
-            dir         = mkdir(ii.exp_path),
-            config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
-            mode        = wandb_mode,
-            settings = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
-        )
-
         if ii._n_submit > 0:
             n_job_running = run_cmds([f'squeue -u {ii.user} -h -t pending,running -r | wc -l'])
+            print(n_job_running)
             if n_job_running < cap:        
                 for sub in range(1, ii._n_submit+1):
                     Slurm(**ii.slurm.d).sbatch(ii.slurm.sbatch + '\n' + ii._run_cmd + ' --_n_submit 0')
+                    print(ii.slurm.sbatch + '\n' + ii._run_cmd + ' --_n_submit 0')
                     if sub > 5:
                         break
             exit(f'{sub} submitted, {n_job_running} on cluster before, cap is {cap}')
+        
+        else:
+            run = wandb.init(
+                job_type    = ii.wandb_c.job_type,
+                entity      = ii.wandb_c.entity,
+                project     = ii.project,
+                dir         = mkdir(ii.exp_path),
+                config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
+                mode        = wandb_mode,
+                settings = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+            )
+
 
         if ii.sweep_id:
             wandb.agent(ii.sweep_id, count=1)
