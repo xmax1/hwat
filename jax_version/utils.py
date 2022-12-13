@@ -4,6 +4,7 @@ import paramiko
 import subprocess
 from time import sleep
 from itertools import product
+from functools import partial
 import random
 from typing import Any, Iterable
 import re
@@ -109,9 +110,7 @@ def mkdir(path: Path) -> Path:
     path = Path(path)
     if path.suffix != '':
         path = path.parent
-    if path.exists():
-        print('path exists, leaving alone')
-    else:
+    if not path.exists():
         path.mkdir(parents=True)
     return path
 

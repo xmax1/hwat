@@ -6,7 +6,7 @@ from simple_slurm import Slurm
 import wandb
 from pathlib import Path
 import sys
-from pprint import pprint
+import pprint
 from copy import copy
 import numpy as np
 
@@ -14,7 +14,7 @@ from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum, iterate_fo
 from utils import flat_dict, mkdir, cmd_to_dict, dict_to_wandb
 from utils import Sub
 
-from _user import user, server
+from _user import user
 
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 
@@ -27,7 +27,7 @@ class Pyfig:
     run_path:       Path    = property(lambda _: _.project_path / 'run.py')
     exp_name:       str     = 'demo-final'
     exp_id:         str     = gen_alphanum(n=7)
-    
+    sweep_id:       str     = ''
     
     seed:           int     = 808017424 # grr
     dtype:          str     = 'float32'
@@ -48,7 +48,7 @@ class Pyfig:
         a_z:        np.ndarray  = np.array([4.,])
 
         n_e:        int         = property(lambda _: int(sum(_.a_z)))
-        n_u:        int         = property(lambda _: (spin + _.n_e)//2 )
+        n_u:        int         = property(lambda _: (_.spin + _.n_e)//2 )
         n_d:        int         = property(lambda _: _.n_e - _.n_u)
         
         n_b:        int         = 512
@@ -80,7 +80,6 @@ class Pyfig:
         )
         n_sweep         = reduce(
             lambda i,j:i*j,[len(v['values']) for k,v in parameters.items() if 'values' in v])+1
-        sweep_id = ''
 
     class wandb_c(Sub):
         job_type        = 'training'
@@ -98,84 +97,83 @@ class Pyfig:
         output          = property(lambda _: _._p.TMP /'o-%j.out')
         error           = property(lambda _: _._p.TMP /'e-%j.err')
         job_name        = property(lambda _: _._p.exp_name)  # this does not call the instance it is in
-        sbatch          = property(lambda _: )
-        sbatch_cmd = f""" 
-        module purge 
-        source ~/.bashrc 
-        module load GCC 
-        module load CUDA/11.4.1 
-        module load cuDNN/8.2.2.26-CUDA-11.4.1 
-        conda activate {_._p.env} 
-        export MKL_NUM_THREADS=1 
-        export NUMEXPR_NUM_THREADS=1 
-        export OMP_NUM_THREADS=1 
-        export OPENBLAS_NUM_THREADS=1
-        pwd
-        nvidia-smi
-        mv_cmd = f'mv {_._p.TMP}/o-$SLURM_JOB_ID.out {_._p.TMP}/e-$SLURM_JOB_ID.err $out_dir' 
-        """
-
+        sbatch          = property(lambda _: 
+            f""" 
+            module purge 
+            source ~/.bashrc 
+            module load GCC 
+            module load CUDA/11.4.1 
+            module load cuDNN/8.2.2.26-CUDA-11.4.1 
+            conda activate {_._p.env} 
+            export MKL_NUM_THREADS=1 
+            export NUMEXPR_NUM_THREADS=1 
+            export OMP_NUM_THREADS=1 
+            export OPENBLAS_NUM_THREADS=1
+            pwd
+            nvidia-smi
+            mv_cmd = f'mv {_._p.TMP}/o-$SLURM_JOB_ID.out {_._p.TMP}/e-$SLURM_JOB_ID.err $out_dir'
+            out_dir={(mkdir(_._p.exp_path/"out"))}
+            """)
+    
+    _run_file = dict(ipynb = 'jupyter nbconvert --execute ', py = 'python ')
+    _run_cmd = property(lambda _: _._run_file[Path(__file__).suffix[1:]] + _.cmd)   # #pyfig-recurse
+    
+    TMP:                Path    = Path('./dump/tmp')
     project_path:       Path    = property(lambda _: _.project_root / _.project)
     server_project_path:Path    = property(lambda _: _.project_path)
     n_device:           int     = property(lambda _: count_gpu())
+    exp_path:           Path    = property(lambda _: _.project_path/'exp'/_.exp_name/(_.exp_id + _.sweep_id))
 
-    exp_path:           Path    = property(lambda _: iterate_folder(_.project_exp_dir/_.exp_name,_.iter_exp_dir)/_.exp_id)
-    TMP:                Path    = Path('./dump/tmp')
-
-    server:             str     = server   # SERVER
+    server:             str     = 'svol.fysik.dtu.dk'   # SERVER
     user:               str     = user             # SERVER
     git_remote:         str     = 'origin'      
     git_branch:         str     = 'main'        
     env:                str     = 'dex'                 # CONDA ENV
     
-    submit_state:       int  = -1
+    _n_submit:           int  = -1                  # #_n_submit-state-flow
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['sbatch',]
 
-    def __init__(ii,args:dict={},cap=40,sweep=False,wandb_mode='online',get_sys_arg=True):
+    def __init__(ii,args:dict={}, cap=3, wandb_mode='online'):
         
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
                 v = v(parent=ii)
                 setattr(ii, k, v)
         
-        ii.merge(cmd_to_dict(sys.argv[1:], ii.d))
-        ii.merge(args)
-
-        mkdir(ii.exp_path)
+        ii.merge(args  | cmd_to_dict(sys.argv[1:], ii.d))
         
         run = wandb.init(
             job_type    = ii.wandb_c.job_type,
             entity      = ii.wandb_c.entity,
             project     = ii.project,
-            dir         = './dump', # ii.exp_path,
+            dir         = mkdir(ii.exp_path),
             config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
             mode        = wandb_mode,
             settings = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
         )
 
-        if ii.submit_state > 0:
+        if ii._n_submit > 0:
             n_job_running = run_cmds([f'squeue -u {ii.user} -h -t pending,running -r | wc -l'])
-            if n_job_running > cap:
-                exit(f'There are {n_job_running} on the submit cap is {cap}')
-            print(f'{n_job_running} on the cluster')
+            if n_job_running < cap:        
+                for sub in range(ii._n_submit):
+                    Slurm(**ii.slurm.d).sbatch(ii.slurm.sbatch + '\n' + ii._run_cmd + ' --_n_submit 0')
+            exit(f'{sub} submitted, {n_job_running} on cluster before, cap is {cap}')
 
-            _slurm = Slurm(**ii.slurm.d)
-            n_run, ii.submit_state = ii.submit_state, 0            
-            for _ in range(n_run):
-                _slurm.sbatch(ii.slurm.sbatch \
-                    + f'out_dir={(mkdir(ii.exp_path/"out"))} {ii.cmd} | tee $out_dir/py.out date "+%B %V %T.%3N" ')
+        if ii.sweep_id:
+            wandb.agent(ii.sweep_id, count=1)
 
         ii.wandb_c.wandb_run_path = run.path  
-        print('run: ', run.path, '✅')
-
+        
+        ii.log(ii.d, create=True)
+        
     @property
     def cmd(ii,):
         d = flat_dict(ii.d)
         return ' '.join([f' --{k}  {str(v)} ' for k,v in d.items()])
 
     @property
-    def d(ii, ignore=['d', 'cmd', 'submit', 'partial', 'sweep']):
+    def d(ii, ignore=['d', 'cmd', 'submit', 'partial', 'sweep', 'save', 'load', 'log']):
         out = {}
         for k,v in ii.__class__.__dict__.items():
             if k.startswith('_') or k in ignore:
@@ -196,8 +194,7 @@ class Pyfig:
     def submit(ii, sweep=False, commit_msg=None, commit_id=None):
         commit_msg = commit_msg or ii.exp_id
         
-        ii.submit_state *= -1
-        if ii.submit_state > 0:
+        if ii._n_submit < 0:
             if sweep:
                 ii.sweep_id = wandb.sweep(
                     env     = f'conda activate {ii.env};',
@@ -207,7 +204,6 @@ class Pyfig:
                     name    = ii.exp_name,
                     run_cap = ii.sweep.n_sweep
                 )
-                ii.submit_state *= ii.sweep.n_sweep
             
             local_out = run_cmds(['git add .', f'git commit -m {commit_msg}', 'git push'], cwd=ii.project_path)
             cmd = f'python -u {ii.run_path} ' + (commit_id or ii.commit_id) + ii.cmd
@@ -243,8 +239,48 @@ class Pyfig:
     def commit_id(ii,)->str:
         process = run_cmds(['git log --pretty=format:%h -n 1'], cwd=ii.project_path)[0]
         return process.stdout.decode('utf-8')  
+    
+    def save(ii, data, file_name):
+        path:Path = ii.exp_path / file_name
+        assert path.suffix == 'pk'
+        data_save_load(path, data)
+        
+    def load(ii, file_name):
+        path:Path = ii.exp_path / file_name
+        assert path.suffix == 'pk'
+        data_save_load(path)
+        
+    def log(ii, info: dict, create=False):
+        mode = 'w' if create else 'a'
+        info = pprint.pformat(info)
+        for p in ['log.tmp', ii.exp_path/'log.out']:
+            with open(p, mode) as f:
+                f.writelines(info)
 
+import pickle as pk
+
+file_interface_all = dict(
+    pk = dict(
+        r = pk.load,
+        w = pk.dump,
+    )
+)      
+
+def data_save_load(path:Path, data=None):
+    file_type = path.suffix
+    mode = 'r' if data is None else 'w'
+    mode += 'b' if file_type in ['pk',] else ''
+    interface = file_interface_all[file_type][mode]
+    with open(path, mode) as f:
+        data = interface(data, f) if data is not None else interface(f)
+    return data
 
 
         
 
+""" Bone Zone
+
+| tee $out_dir/py.out date "+%B %V %T.%3N
+
+
+"""
