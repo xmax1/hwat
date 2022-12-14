@@ -144,14 +144,12 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
                 v = literal_eval(v)
                 v = np.array(v, dtype=v_ref.dtype)
             elif isinstance(v_ref, list):
-                v = [x for x in v.strip('[]').split(',')]
-                v = literal_eval(v)
+                v = [literal_eval(x) for x in v.strip('[]').split(',')]
             else:
                 v = type(v_ref)(v)
         else:
             print('arg not in pyfig')
         _d[k] = v
-        print(_d[k], type(v_ref))
     return _d
 
 ### run things
