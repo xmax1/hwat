@@ -118,6 +118,7 @@ class Pyfig:
     project:            str     = property(lambda _: 'hwat')
     run_dir:            Path    = property(lambda _: Path(__file__).parent.relative_to(_._home))
     project_dir:        Path    = property(lambda _: (_._home / 'projects' / _.project))
+    server_project_dir: Path    = property(lambda _: _.project_dir.relative_to(_._home))
     exp_path:           Path    = property(lambda _: _.run_dir/'exp'/_.exp_name/(_.exp_id + _.sweep_id))
         
     n_device:           int     = property(lambda _: count_gpu())
@@ -210,7 +211,7 @@ class Pyfig:
                 print(local_out)
                 git_cmd = 'git pull origin main'
                 
-                server_out = run_cmds_server(ii.server, ii.user, git_cmd, ii.project_dir)[0]
+                server_out = run_cmds_server(ii.server, ii.user, git_cmd, ii.server_project_dir)[0]
                 print(server_out)
                 server_out = run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.run_dir)[0]
                 print(server_out)
