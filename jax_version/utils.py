@@ -160,7 +160,7 @@ def run_cmds(cmd:str|list,cwd:str|Path=None,input_req:str=None):
         cmd_1 = [c.strip() for c in cmd_1.split(' ')]
         print(cmd_1)
         print(cwd)
-        out += [subprocess.run(cmd_1, cwd=cwd, capture_output=True)]
+        out += [subprocess.run(cmd_1, cwd=str(cwd), capture_output=True)]
     return out[0] if len(out) == 0 else out
 
 

@@ -20,9 +20,6 @@ docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 
 class Pyfig:
 
-    project_root:   str     = Path('~/projects')
-    project:        str     = 'hwat'
-    run_dir:       Path     = Path(__file__).parent.relative_to(Path().home())
     run_name:       Path    = 'run.py'
     
     exp_name:       str     = 'demo-final'
@@ -117,10 +114,13 @@ class Pyfig:
     
     
     TMP:                Path    = Path('./dump/tmp')
-    project_path:       Path    = property(lambda _: _.project_root / _.project)
-    server_project_path:Path    = property(lambda _: _.project_path)
+    _home:              Path    = property(lambda _: Path().home())
+    project:            str     = property(lambda _: 'hwat')
+    run_dir:            Path    = property(lambda _: Path(__file__).parent.relative_to(_._home))
+    project_dir:        Path    = property(lambda _: (_._home / 'projects' / _.project))
+    exp_path:           Path    = property(lambda _: _.run_dir/'exp'/_.exp_name/(_.exp_id + _.sweep_id))
+        
     n_device:           int     = property(lambda _: count_gpu())
-    exp_path:           Path    = property(lambda _: _.project_path/'exp'/_.exp_name/(_.exp_id + _.sweep_id))
 
     user:               str     = user             # SERVER
     server:             str     = 'svol.fysik.dtu.dk'   # SERVER
@@ -128,6 +128,7 @@ class Pyfig:
     git_branch:         str     = 'main'        
     env:                str     = 'dex'                 # CONDA ENV
     
+    _run_cmd:           str  = property(lambda _: f'python {str(_.run_name)} {_.cmd}')
     _n_submit:          int  = -1                  # #_n_submit-state-flow
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['sbatch',]
@@ -205,14 +206,13 @@ class Pyfig:
                 print(ii.cmd)
                 
                 
-                local_out = run_cmds(['git commit -a -m "run_things"', 'git push origin main'], cwd=ii.project_path)
+                local_out = run_cmds(['git commit -a -m "run_things"', 'git push origin main'], cwd=ii.project_dir)
                 print(local_out)
-                print(ii.server, ii.user, ii.server_project_path)
                 git_cmd = 'git pull origin main'
-                run_cmd = f'python {str(ii.run_name)} {ii.cmd}'
-                server_out = run_cmds_server(ii.server, ii.user, git_cmd, ii.server_project_path)[0]
+                
+                server_out = run_cmds_server(ii.server, ii.user, git_cmd, ii.project_dir)[0]
                 print(server_out)
-                server_out = run_cmds_server(ii.server, ii.user, run_cmd, ii.run_dir)[0]
+                server_out = run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.run_dir)[0]
                 print(server_out)
                 exit('Submitted to server.')
             
@@ -286,7 +286,7 @@ class Pyfig:
 
     @property
     def commit_id(ii,)->str:
-        process = run_cmds(['git log --pretty=format:%h -n 1'], cwd=ii.project_path)[0]
+        process = run_cmds(['git log --pretty=format:%h -n 1'], cwd=ii.project_dir)[0]
         return process.stdout.decode('utf-8')  
     
     def save(ii, data, file_name):
