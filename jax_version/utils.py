@@ -136,19 +136,20 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
     cmd = iter([x.strip() for x in cmd])
 
     for k,v in zip(cmd, cmd):
-        print(k, v)
         if v in booleans: 
             v=booleans.index(v)<3  # 0-2 True 3-5 False
-        try:
-            v = literal_eval(v)
-        except:
-            v = str(v)
-        if k in ref.keys():
+        elif k in ref.keys():
             v_ref = ref[k]
             if isinstance(v_ref, np.ndarray):
+                v = literal_eval(v)
                 v = np.array(v, dtype=v_ref.dtype)
+            elif isinstance(v_ref, list):
+                v = [x for x in v.strip('[]').split(',')]
+                v = literal_eval(v)
             else:
                 v = type(v_ref)(v)
+        else:
+            print('arg not in pyfig')
         _d[k] = v
         print(_d[k], type(v_ref))
     return _d
