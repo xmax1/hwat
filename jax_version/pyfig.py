@@ -142,7 +142,7 @@ class Pyfig:
                 v = v(parent=ii)
                 setattr(ii, k, v)
         
-        sys_arg = cmd_to_dict(sys.argv[1:], ii.d)
+        sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d))
         ii.merge(ii._input_arg | sys_arg)
         
         
