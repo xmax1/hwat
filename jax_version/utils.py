@@ -143,6 +143,7 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
         try:
             v = literal_eval(v)
         except:
+            print(k, k in ref.keys())
             if k in ref.keys():
                 v = type(ref[k])(v)
             else:
