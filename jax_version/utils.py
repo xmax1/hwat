@@ -169,7 +169,7 @@ def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path):
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]):
         print('server', cwd)
         stdin, stdout, stderr = client.exec_command(f'cd {str(cwd)}; {cmd_1}')
-        out += [stdin.readlines(), stdout.readlines(), stderr.readlines()]
+        out += [stdout.readlines(), stderr.readlines()]
     client.close()
     return out[0] if len(out) == 0 else out
     
