@@ -209,7 +209,8 @@ class Pyfig:
                 
                 local_out = run_cmds(['git commit -a -m "run_things"', 'git push origin main'], cwd=ii.project_dir)
                 print(local_out)
-                git_cmd = 'git pull origin main'
+                git_cmd = ['git fetch --all', 'git reset --hard origin/main']
+                # git_cmd = 'git pull origin main --force'
                 
                 server_out = run_cmds_server(ii.server, ii.user, git_cmd, ii.server_project_dir)[0]
                 print(server_out)
