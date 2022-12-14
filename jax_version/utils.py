@@ -149,6 +149,7 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
             else:
                 v = type(v_ref)(v)
         _d[k] = v
+        print(_d[k], type(v_ref))
     return _d
 
 ### run things
