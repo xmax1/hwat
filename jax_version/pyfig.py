@@ -165,7 +165,7 @@ class Pyfig:
                     job_type    = ii.wandb_c.job_type,
                     entity      = ii.wandb_c.entity,
                     project     = ii.project,
-                    dir         = mkdir(ii.exp_path),
+                    dir         = ii.exp_path,
                     config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
                     mode        = wandb_mode,
                     settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
@@ -183,8 +183,8 @@ class Pyfig:
             n_job_running = len(run_cmds([f'squeue -u amawi -t pending,running -h -r'], cwd='.')[0].stdout.decode('utf-8'))
             ii.log({'n_job_running': n_job_running})
             if n_job_running < cap:    
-                ii.n_submit = 0
-                for sub in range(1, ii.n_submit+1):
+                ii.n_submit, n = 0, ii.n_submit
+                for sub in range(1, n+1):
                     Slurm(**ii.slurm.d).sbatch(ii.slurm.sbatch + '\n' + ii._run_cmd )
                     ii.log({'slurm': ii.slurm.sbatch + '\n' + ii._run_cmd })
                     if sub > 5:
