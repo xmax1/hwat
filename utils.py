@@ -156,8 +156,7 @@ def run_cmds(cmd:str|list,cwd:str|Path=None,input_req:str=None):
     out = []
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
         cmd_1 = [c.strip() for c in cmd_1.split(' ')]
-        out += [subprocess.run(cmd_1,cwd=str(cwd),input=input_req, capture_output=True)]
-        print(out)
+        out += [subprocess.run(cmd_1, cwd=str(cwd),input=input_req, capture_output=True)]
         sleep(0.1)
     return out[0] if len(out) == 0 else out
 

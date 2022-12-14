@@ -158,8 +158,6 @@ def run_cmds(cmd:str|list,cwd:str|Path=None,input_req:str=None):
     out = []
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
         cmd_1 = [c.strip() for c in cmd_1.split(' ')]
-        print(cmd_1)
-        print(cwd)
         out += [subprocess.run(cmd_1, cwd=str(cwd), capture_output=True)]
     return out[0] if len(out) == 0 else out
 
@@ -171,13 +169,10 @@ def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path):
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # if not known host
     client.connect(server, username=user)
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]):
-        print(cwd, cmd_1)
+        print('server', cwd)
         stdin, stdout, stderr = client.exec_command(f'cd {str(cwd)}; {cmd_1}')
-        # print('stdin:  ', stdin.readlines())
         x = stdout.readlines()
-        print('stdout: ', x)
-        out += [x] 
-        sleep(3)
+        out += [x]
     client.close()
     return out[0] if len(out) == 0 else out
     

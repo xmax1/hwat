@@ -203,10 +203,6 @@ class Pyfig:
                         run_cap = ii.sweep.n_sweep
                     )
                 
-                
-                print(ii.cmd)
-                
-                
                 local_out = run_cmds(['git commit -a -m "run_things"', 'git push origin main'], cwd=ii.project_dir)
                 print(local_out)
                 git_cmd = ['git fetch --all', 'git reset --hard origin/main']
