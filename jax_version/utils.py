@@ -144,7 +144,11 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
                 v = literal_eval(v)
                 v = np.array(v, dtype=v_ref.dtype)
             elif isinstance(v_ref, list):
-                v = [literal_eval(x) for x in v.strip('[]').split(',')]
+                v = [x for x in v.strip('[]').split(',')]
+                try:
+                    v = literal_eval(v)
+                except:
+                    pass
             else:
                 v = type(v_ref)(v)
         else:

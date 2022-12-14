@@ -130,7 +130,7 @@ class Pyfig:
     env:                str     = 'dex'                 # CONDA ENV
     
     _run_cmd:           str  = property(lambda _: f'python {str(_.run_name)} {_.cmd}')
-    _n_submit:          int  = -1                  # #_n_submit-state-flow
+    n_submit:          int  = -1                  # #n_submit-state-flow
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['sbatch',]
 
@@ -150,13 +150,13 @@ class Pyfig:
                         |   True    |   False   | 
                         -------------------------
                     <0  |   server  |   init    |
-        _n_submit   =0  |   init    |   NA      |
+        n_submit   =0  |   init    |   NA      |
                     >0  |   slurm   |   NA      |
         """
-        run_init_local = (not submit) and (ii._n_submit < 0)
-        run_init_cluster = submit and (ii._n_submit == 0)
-        run_slurm = submit and (ii._n_submit > 0)
-        run_server = submit and (ii._n_submit < 0)
+        run_init_local = (not submit) and (ii.n_submit < 0)
+        run_init_cluster = submit and (ii.n_submit == 0)
+        run_slurm = submit and (ii.n_submit > 0)
+        run_server = submit and (ii.n_submit < 0)
         
         if run_init_local or run_init_cluster:
             print('Running __init__')
@@ -182,16 +182,16 @@ class Pyfig:
             n_job_running = len(run_cmds([f'squeue -u amawi -t pending,running -h -r'], cwd='.')[0].stdout.decode('utf-8'))
             ii.log({'n_job_running': n_job_running})
             if n_job_running < cap:        
-                for sub in range(1, ii._n_submit+1):
-                    Slurm(**ii.slurm.d).sbatch(ii.slurm.sbatch + '\n' + ii._run_cmd + ' --_n_submit 0')
-                    ii.log({'slurm': ii.slurm.sbatch + '\n' + ii._run_cmd + ' --_n_submit 0'})
+                for sub in range(1, ii.n_submit+1):
+                    Slurm(**ii.slurm.d).sbatch(ii.slurm.sbatch + '\n' + ii._run_cmd + ' --n_submit 0')
+                    ii.log({'slurm': ii.slurm.sbatch + '\n' + ii._run_cmd + ' --n_submit 0'})
                     if sub > 5:
                         break
             exit(f'{sub} submitted, {n_job_running} on cluster before, cap is {cap}')
         
         if run_server:
             print('sshing to server and running this file')
-            if ii._n_submit < 0:
+            if ii.n_submit < 0:
                 if sweep or ('sweep' in ii._input_arg):
                     print('Running a sweep')
                     ii.sweep_id = wandb.sweep(
@@ -211,7 +211,7 @@ class Pyfig:
                 server_out = run_cmds_server(ii.server, ii.user, git_cmd, ii.server_project_dir)[0]
                 print(server_out)
                 
-                cmd = ii._run_cmd + f' --_n_submit {max(1, sweep*ii.sweep.n_sweep)}'
+                cmd = ii._run_cmd + f' --n_submit {max(1, sweep*ii.sweep.n_sweep)}'
                 print(cmd)
                 server_out = run_cmds_server(ii.server, ii.user, cmd, ii.run_dir)[0]
                 print(server_out)
