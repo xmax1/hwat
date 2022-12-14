@@ -211,7 +211,7 @@ class Pyfig:
                 server_out = run_cmds_server(ii.server, ii.user, git_cmd, ii.server_project_dir)[0]
                 print(server_out)
                 
-                cmd = ii._run_cmd + f' --_n_submit {max(1, sweep*ii.n_sweep)}'
+                cmd = ii._run_cmd + f' --_n_submit {max(1, sweep*ii.sweep.n_sweep)}'
                 print(cmd)
                 server_out = run_cmds_server(ii.server, ii.user, cmd, ii.run_dir)[0]
                 print(server_out)
