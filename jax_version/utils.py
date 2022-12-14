@@ -138,14 +138,16 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
     for k,v in zip(cmd, cmd):
         if v in booleans: 
             v=booleans.index(v)<3  # 0-2 True 3-5 False
-        elif k in ref.keys():
-            v = type(ref[k])(v)
-        else:
-            try:
-                v = literal_eval(v)
-                print(f'Guessing type: {k} as {type(v)}')
-            except:
-                v = str(v)
+        try:
+            v = literal_eval(v)
+        except:
+            v = str(v)
+        if k in ref.keys():
+            v_ref = ref[k]
+            if isinstance(v_ref, np.ndarray):
+                v = np.array(v, dtype=v_ref.dtype)
+            else:
+                v = type(v_ref)(v)
         _d[k] = v
     return _d
 

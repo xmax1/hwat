@@ -179,7 +179,7 @@ class Pyfig:
             
         if run_slurm:
             print('Submitting runs to slurm')
-            n_job_running = run_cmds([f'squeue -u amawi -t pending,running -h | wc -l'], '.')[0].stdout.decode('utf-8')
+            n_job_running = len(run_cmds([f'squeue -u amawi -t pending,running -h -r'], '.')[0].stdout.decode('utf-8'))
             ii.log({'n_job_running': n_job_running})
             if n_job_running < cap:        
                 for sub in range(1, ii._n_submit+1):
