@@ -135,27 +135,25 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
     cmd = flat_list(cmd)
     cmd = iter([x.strip() for x in cmd])
 
-    print(ref.keys())
     for k,v in zip(cmd, cmd):
         if v in booleans: 
             v=booleans.index(v)<3  # 0-2 True 3-5 False
-    
-        try:
-            v = literal_eval(v)
-        except:
-            print(k, k in ref.keys())
-            if k in ref.keys():
-                v = type(ref[k])(v)
-            else:
+        elif k in ref.keys():
+            v = type(ref[k])(v)
+        else:
+            try:
+                v = literal_eval(v)
+                print(f'Guessing type: {k} as {type(v)}')
+            except:
                 v = str(v)
-        print(f'Guessing type: {k} as {type(v)} \n')
         _d[k] = v
     return _d
 
 ### run things
 
 
-def run_cmds(cmd:str|list,cwd:str|Path=None,input_req:str=None):
+def run_cmds(cmd:str|list,cwd:str|Path=None):
+    cwd = cwd or '.'
     out = []
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
         cmd_1 = [c.strip() for c in cmd_1.split(' ')]
