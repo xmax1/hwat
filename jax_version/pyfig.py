@@ -187,8 +187,7 @@ class Pyfig:
                     ii.log({'slurm': ii.slurm.sbatch + '\n' + ii._run_cmd + ' --_n_submit 0'})
                     if sub > 5:
                         break
-            raise 'submitted'
-            # exit(f'{sub} submitted, {n_job_running} on cluster before, cap is {cap}')
+            exit(f'{sub} submitted, {n_job_running} on cluster before, cap is {cap}')
         
         if run_server:
             print('sshing to server and running this file')
