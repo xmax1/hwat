@@ -106,7 +106,7 @@ def iterate_folder(folder: Path, iter_exp_dir):
 ### do things
 
 def mkdir(path: Path) -> Path:
-    path = Path(path).absolute()
+    path = Path(path)
     if path.suffix != '':
         path = path.parent
     if path.exists():

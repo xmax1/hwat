@@ -144,14 +144,14 @@ class Pyfig:
         
         sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d))
         ii.merge(ii._input_arg | sys_arg)
-        mkdir(ii.exp_path)
+        mkdir(ii.exp_path.relative_to('.'))
         
         
         """             |        submit         |       
                         |   True    |   False   | 
                         -------------------------
                     <0  |   server  |   init    |
-        n_submit   =0  |   init    |   NA      |
+        n_submit    =0  |   init    |   NA      |
                     >0  |   slurm   |   NA      |
         """
         run_init_local = (not submit) and (ii.n_submit < 0)
