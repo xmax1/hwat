@@ -210,7 +210,9 @@ class Pyfig:
                 
                 server_out = run_cmds_server(ii.server, ii.user, git_cmd, ii.server_project_dir)[0]
                 print(server_out)
-                server_out = run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.run_dir)[0]
+                
+                cmd = ii._run_cmd + f'--_n_submit {max(1, sweep*ii.n_sweep)}'
+                server_out = run_cmds_server(ii.server, ii.user, cmd, ii.run_dir)[0]
                 print(server_out)
                 exit('Submitted to server.')
             
