@@ -181,10 +181,11 @@ class Pyfig:
             print('Submitting runs to slurm')
             n_job_running = len(run_cmds([f'squeue -u amawi -t pending,running -h -r'], cwd='.')[0].stdout.decode('utf-8'))
             ii.log({'n_job_running': n_job_running})
-            if n_job_running < cap:        
+            if n_job_running < cap:    
+                ii.n_submit = 0
                 for sub in range(1, ii.n_submit+1):
-                    Slurm(**ii.slurm.d).sbatch(ii.slurm.sbatch + '\n' + ii._run_cmd + ' --n_submit 0')
-                    ii.log({'slurm': ii.slurm.sbatch + '\n' + ii._run_cmd + ' --n_submit 0'})
+                    Slurm(**ii.slurm.d).sbatch(ii.slurm.sbatch + '\n' + ii._run_cmd )
+                    ii.log({'slurm': ii.slurm.sbatch + '\n' + ii._run_cmd })
                     if sub > 5:
                         break
             exit(f'{sub} submitted, {n_job_running} on cluster before, cap is {cap}')
@@ -211,7 +212,8 @@ class Pyfig:
                 server_out = run_cmds_server(ii.server, ii.user, git_cmd, ii.server_project_dir)[0]
                 print(server_out)
                 
-                cmd = ii._run_cmd + f' --n_submit {max(1, sweep*ii.sweep.n_sweep)}'
+                ii.n_submit = max(1, ii.sweep.n_sweep)
+                cmd = ii._run_cmd
                 print(cmd)
                 server_out = run_cmds_server(ii.server, ii.user, cmd, ii.run_dir)[0]
                 print(server_out)
