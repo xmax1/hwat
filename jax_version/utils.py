@@ -136,6 +136,7 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
     cmd = iter([x.strip() for x in cmd])
 
     for k,v in zip(cmd, cmd):
+        print(k, v)
         if v in booleans: 
             v=booleans.index(v)<3  # 0-2 True 3-5 False
         try:
