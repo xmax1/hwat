@@ -183,8 +183,7 @@ class Pyfig:
             ii.log({'n_job_running': n_job_running})
             if n_job_running < cap:        
                 for sub in range(1, ii._n_submit+1):
-                    # Slurm(**ii.slurm.d).sbatch(ii.slurm.sbatch + '\n' + ii._run_cmd + ' --_n_submit 0')
-                    print(ii.slurm.sbatch + '\n' + ii._run_cmd + ' --_n_submit 0')
+                    Slurm(**ii.slurm.d).sbatch(ii.slurm.sbatch + '\n' + ii._run_cmd + ' --_n_submit 0')
                     ii.log({'slurm': ii.slurm.sbatch + '\n' + ii._run_cmd + ' --_n_submit 0'})
                     if sub > 5:
                         break
