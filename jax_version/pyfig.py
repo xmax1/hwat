@@ -129,12 +129,12 @@ class Pyfig:
     git_branch:         str     = 'main'        
     env:                str     = 'dex'                 # CONDA ENV
     
-    _run_cmd:           str  = property(lambda _: f'python {str(_.run_name)} {_.cmd}')
-    n_submit:          int  = -1                  # #n_submit-state-flow
+    _run_cmd:           str  = property(lambda _: f'python {str(_.run_name)} "{_.cmd}"')
+    n_submit:           int  = -1                  # #n_submit-state-flow
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['sbatch',]
 
-    def __init__(ii, arg:dict={}, cap=3, wandb_mode='online', submit=False, sweep=False, notebook=False):
+    def __init__(ii, arg:dict={}, cap=3, wandb_mode='online', submit=False, sweep=False):
         ii._input_arg = arg 
         
         for k,v in Pyfig.__dict__.items():
@@ -144,6 +144,7 @@ class Pyfig:
         
         sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d))
         ii.merge(ii._input_arg | sys_arg)
+        mkdir(ii.exp_path)
         
         
         """             |        submit         |       
@@ -212,7 +213,7 @@ class Pyfig:
                 server_out = run_cmds_server(ii.server, ii.user, git_cmd, ii.server_project_dir)[0]
                 print(server_out)
                 
-                ii.n_submit = max(1, ii.sweep.n_sweep)
+                ii.n_submit = max(1, ii.sweep.n_sweep * sweep)
                 cmd = ii._run_cmd
                 print(cmd)
                 server_out = run_cmds_server(ii.server, ii.user, cmd, ii.run_dir)[0]
