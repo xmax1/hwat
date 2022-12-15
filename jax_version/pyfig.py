@@ -94,8 +94,8 @@ class Pyfig:
         cpus_per_task   = 1     
         time            = '0-12:00:00'     # D-HH:MM:SS
         gres            = 'gpu:RTX3090:1'
-        output          = property(lambda _: _._p.TMP /'o-%j.out')
-        error           = property(lambda _: _._p.TMP /'e-%j.err')
+        output          = property(lambda _: _._p.exp_path /'o-%j.out')
+        error           = property(lambda _: _._p.exp_path /'e-%j.err')
         job_name        = property(lambda _: _._p.exp_name)  # this does not call the instance it is in
     
     TMP:                Path    = mkdir(Path('./dump/tmp'))
@@ -149,7 +149,7 @@ class Pyfig:
                 project     = ii.project,
                 dir         = ii.exp_path,
                 config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
-                mode        = wandb_mode,
+                mode        = ii.wandb_mode,
                 settings = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
             )
             if sweep or ('sweep' in arg):
@@ -186,9 +186,10 @@ class Pyfig:
         module load GCC
         module load CUDA/11.4.1
         module load cuDNN/8.2.2.26-CUDA-11.4.1
-        conda activate {ii.env}
-        mv_cmd="mv {ii.TMP}/o-$SLURM_JOB_ID.out {ii.TMP}/e-$SLURM_JOB_ID.err $out_dir"
-        out_dir={(mkdir(ii.exp_path/"out"))}"""
+        conda activate {ii.env}"""
+        # out_dir={mkdir(ii.exp_path)}"""
+        # mv_cmd="mv {ii.TMP}/o-$SLURM_JOB_ID.out {ii.TMP}/e-$SLURM_JOB_ID.err $out_dir"
+        # echo $mv_cmd
         return '\n'.join([' '.join(v.split()) for v in s.split('\n')])
     
     @property
