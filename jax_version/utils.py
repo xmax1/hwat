@@ -226,9 +226,8 @@ def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path):
     client.connect(server, username=user)
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]):
         print(cwd, '\n', cmd_1)
-        res = client.exec_command(f'cd {str(cwd)}; {cmd_1}')[0]
-        print(res)
-        out += [res.stdout, res.stderr]
+        stdin, stdout, stderr = client.exec_command(f'cd {str(cwd)}; {cmd_1}')
+        out += [stdout.readlines(), stderr.readlines()]
         [print(l) for l in out[-1]]
     client.close()
     for res in out:
