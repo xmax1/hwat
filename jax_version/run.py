@@ -46,7 +46,6 @@ def create_train_state(rng, r):
 	opt = optax.chain(optax.clip_by_block_rms(1.),optax.adamw(0.001))
 	return TrainState.create(apply_fn=model.apply, params=params, tx=opt)
 
-
 ### train step ###
 from jax import numpy as jnp
 from hwat import compute_ke_b, compute_pe_b

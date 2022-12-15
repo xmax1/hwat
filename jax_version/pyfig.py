@@ -140,38 +140,40 @@ class Pyfig:
         run_init_cluster = submit and (ii.n_job == 0)
         if run_init_local or run_init_cluster:
             ii.wandb_c.run = wandb.init(
-                entity      = ii.wandb_c.entity,
-                project     = ii.project,
+                entity      = ii.wandb_c.entity,  # team name is hwat
+                project     = ii.project,         # sub project in team
                 dir         = ii.exp_path,
                 config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
                 mode        = wandb_mode,
-                settings = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+                settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+                id          = ii.exp_id
             )
             if sweep or ('sweep' in arg):
                 wandb.agent(ii.sweep_id, count=1)
         
-        if submit:
-            if ii.n_job > 0 and ii._n_job_running < cap:
-                n, ii.n_job  = ii.n_job, 0
-                ii.log({'slurm': ii.sbatch + '\n' + ii._run_cmd})
-                for sub in range(1, n+1):
-                    Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
+        
+        if submit and ii.n_job > 0 and ii._n_job_running < cap:
+            n, ii.n_job  = ii.n_job, 0
+            ii.log({'slurm': ii.sbatch + '\n' + ii._run_cmd})
+            for sub in range(1, n+1):
+                Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
+            sys.exit(f'Submitted {sub} to slurm')
 
-            if ii.n_job < 0: 
-                if sweep or ('sweep' in arg):
-                    ii.sweep_id = wandb.sweep(**ii.wandb_c.d)
-                
-                _git_commit_cmd = ['git commit -a -m "run_things"', 'git push origin main']
-                _git_pull_cmd = ['git fetch --all', 'git reset --hard origin/main']
-                
-                run_cmds(_git_commit_cmd, cwd=ii.project_dir)
-                run_cmds_server(ii.server, ii.user, _git_pull_cmd, ii.server_project_dir)
-                
-                ii.n_job = max(1, ii.sweep.n_sweep*sweep)
-                run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.run_dir)
+        if submit and ii.n_job < 0: 
+            if sweep or ('sweep' in arg):
+                ii.sweep_id = wandb.sweep(**ii.wandb_c.d)
             
-            # ii.log()    
-            sys.exit(f'Submitted {ii.n_job} to {(ii.n_job>0)*"server"} {(ii.n_job==0)*"slurm"}')
+            _git_commit_cmd = ['git commit -a -m "run_things"', 'git push origin main']
+            _git_pull_cmd = ['git fetch --all', 'git reset --hard origin/main']
+            
+            run_cmds(_git_commit_cmd, cwd=ii.project_dir)
+            run_cmds_server(ii.server, ii.user, _git_pull_cmd, ii.server_project_dir)
+            
+            ii.n_job = max(1, ii.sweep.n_sweep*sweep)
+            run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.run_dir)
+        
+            print(f'Go to https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/runs/{ii.exp_id}')
+            sys.exit(f'Submitted {ii.n_job} to server')
     
     @property
     def sbatch(ii,):
