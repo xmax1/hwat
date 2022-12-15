@@ -98,17 +98,6 @@ class Pyfig:
         error           = property(lambda _: _._p.TMP /'e-%j.err')
         job_name        = property(lambda _: _._p.exp_name)  # this does not call the instance it is in
     
-    sbatch: str = property(lambda _:
-    f"""\
-    module purge
-    source ~/.bashrc
-    module load GCC
-    module load CUDA/11.4.1
-    module load cuDNN/8.2.2.26-CUDA-11.4.1
-    conda activate {_.env}
-    mv_cmd = f'mv {_.TMP}/o-$SLURM_JOB_ID.out {_.TMP}/e-$SLURM_JOB_ID.err $out_dir'
-    out_dir={(mkdir(_.exp_path/"out"))}""")
-    
     TMP:                Path    = Path('./dump/tmp')
     _home:              Path    = property(lambda _: Path().home())
     project:            str     = property(lambda _: 'hwat')
@@ -188,7 +177,20 @@ class Pyfig:
             
             # ii.log()    
             sys.exit(f'Submitted {ii.n_job} to {(ii.n_job>0)*"server"} {(ii.n_job==0)*"slurm"}')
-        
+    
+    @property
+    def sbatch(ii,):
+        s = f"""\
+        module purge
+        source ~/.bashrc
+        module load GCC
+        module load CUDA/11.4.1
+        module load cuDNN/8.2.2.26-CUDA-11.4.1
+        conda activate {ii.env}
+        mv_cmd = f'mv {ii.TMP}/o-$SLURM_JOB_ID.out {ii.TMP}/e-$SLURM_JOB_ID.err $out_dir'
+        out_dir={(mkdir(ii.exp_path/"out"))}"""
+        return '\n'.join([' '.join(v.split()) for v in s.split('\n')])
+    
     @property
     def cmd(ii):
         d = flat_dict(get_cls_dict(ii, sub_cls=True))
