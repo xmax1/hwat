@@ -125,7 +125,7 @@ class Pyfig:
     git_branch:         str     = 'main'        
     env:                str     = 'dex'                 # CONDA ENV
     
-    n_job:           int  = -1                  # #n_job-state-flow
+    n_job:              int  = -1                  # #n_job-state-flow
     _run_cmd:           str  = property(lambda _: f'python {str(_.run_name)} {_.cmd}')
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + ['sbatch', 'sweep']
@@ -187,7 +187,7 @@ class Pyfig:
                 run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.run_dir)
             
             # ii.log()    
-            sys.exit(f'Submitted {ii.n_job} to {(ii.n_job < 0)*"server"} {(ii.n_job > 0)*"slurm"}')
+            sys.exit(f'Submitted {ii.n_job} to {(ii.n_job>0)*"server"} {(ii.n_job==0)*"slurm"}')
         
     @property
     def cmd(ii):
