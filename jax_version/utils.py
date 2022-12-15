@@ -123,9 +123,9 @@ def add_to_Path(path: Path, string: str | Path):
 def npify(v):
     return jnp.array(v.numpy())
 
-def format_cmd_item(k, v):
+def format_cmd_item(v):
     v = v.replace('(', '[').replace(')', ']')
-    return k.replace(' ', ''), v.replace(' ', '')
+    return v.replace(' ', '')
 
 def to_cmd(d:dict):
     """ Accepted: int, float, str, list, dict, np.ndarray"""
@@ -137,7 +137,6 @@ def to_cmd(d:dict):
     
     return dict(prep_cmd_item(k,v) for k,v in d.items())
     
-
 def type_me(v, v_ref=None, is_cmd_item=False):
     def count_leading_char(s, char): 
         # space=r"^\s*" bracket=r'^[*'
@@ -149,26 +148,28 @@ def type_me(v, v_ref=None, is_cmd_item=False):
         bool, list of list (str, float, int), dictionary, str, explicit str (' "this" '), """
         v = format_cmd_item(v)
         
-        if v.startswith('['):
-            v = v.strip('[]')
-            v = v.split(',')
-            return [type_me(x, v_ref) for x in v]
-        
         if v.startswith('[['):
             v = v.strip('[]')
             nest_lst = v.split('],[')
             return [type_me('['+lst+']', v_ref[0], is_cmd_item=True) for lst in nest_lst]
-
+        
+        if v.startswith('['):
+            v = v.strip('[]')
+            v = v.split(',')
+            return [type_me(x, v_ref[0]) for x in v]
+        
         booleans = ['True', 'true', 't', 'False', 'false', 'f']
         if v in booleans: 
             return booleans.index(v) < 3  # 0-2 True 3-5 False
-    
-    if v_ref:
+
+    if not v_ref is None:
+        if isinstance(v, str):
+            v = v.strip('\'\"')
         return type(v_ref)(v)
     try:
         return literal_eval(v)
     except:
-        return str(v)
+        return str(v).strip('\'\"')
     
     
 def cmd_to_dict(cmd:str|list, ref:dict, delim:str=' --', d=None):
@@ -185,7 +186,8 @@ def cmd_to_dict(cmd:str|list, ref:dict, delim:str=' --', d=None):
 
     d = dict()
     for k,v in zip(cmd, cmd):
-        k,v = format_cmd_item(k, v)
+        v = format_cmd_item(v)
+        k = k.replace(' ', '')
         v_ref = ref.get(k, None)
         if v_ref is None:
             print(f'{k} not in ref')

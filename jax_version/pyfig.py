@@ -167,10 +167,10 @@ class Pyfig:
         if submit:
             if ii.n_job > 0 and ii._n_job_running < cap:
                 n, ii.n_job  = ii.n_job, 0
+                ii.log({'slurm': ii.sbatch + '\n' + ii._run_cmd})
                 for sub in range(1, n+1):
                     Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
-                ii.log({'slurm': ii.sbatch + '\n' + ii._run_cmd})
-            
+
             if ii.n_job < 0: 
                 if sweep or ('sweep' in arg):
                     ii.sweep_id = wandb.sweep(**ii.wandb_c.d)
@@ -185,7 +185,7 @@ class Pyfig:
                 run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.run_dir)
             
             # ii.log()    
-            sys.exit(f'Submitted {ii.n_job}{(sub+1)} to {(ii.n_job < 0)*"server"} {(ii.n_job > 0)*"slurm"}')
+            sys.exit(f'Submitted {ii.n_job} to {(ii.n_job < 0)*"server"} {(ii.n_job > 0)*"slurm"}')
         
     @property
     def cmd(ii):
