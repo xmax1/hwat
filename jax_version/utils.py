@@ -162,10 +162,20 @@ def type_me(v, v_ref=None, is_cmd_item=False):
         if v in booleans: 
             return booleans.index(v) < 3  # 0-2 True 3-5 False
 
-    if not v_ref is None:
+    # 
+    # if isinstance(v, type_ref):
+    #     return v
+    
+    if v_ref is not None:
+        type_ref = type(v_ref)
         if isinstance(v, str):
             v = v.strip('\'\"')
-        return type(v_ref)(v)
+        
+        if isinstance(v_ref, np.ndarray):
+            type_ref = np.array
+            
+        return type_ref(v)
+        
     try:
         return literal_eval(v)
     except:

@@ -138,7 +138,7 @@ class Pyfig:
                 setattr(ii, k, v)
         
         sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d))
-        print(sys_arg)
+        # print(sys_arg)
         ii._input_arg = arg | sys_arg
         ii.merge(ii._input_arg | {'wandb_mode': wandb_mode})
         mkdir(ii.exp_path)
@@ -222,14 +222,19 @@ class Pyfig:
 
     def merge(ii, merge:dict):
         for k,v in merge.items():
+            assigned = False
             for cls in [ii,] + list(ii._sub_cls.values()):
-                ref = cls.__class__.__dict__
-                if cls_filter(cls, k, v, ref=ref):
-                    v = type_me(v, v_ref=ref[k])
+                ref = get_cls_dict(cls,)
+                if k in ref:
+                    # print(v, ref[k], type(v), type(ref[k]))
+                    v = type_me(v, ref[k])
                     try:
                         setattr(cls, k, copy(v))
+                        assigned = True
                     except Exception:
-                        print(f'Unmerged {k}')
+                        print(f'Unmerged {k} at setattr')
+            if not assigned:
+                print(k, v, 'not assigned')
                         
     @property
     def _sub_cls(ii) -> dict:
