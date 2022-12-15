@@ -98,7 +98,7 @@ class Pyfig:
         error           = property(lambda _: _._p.TMP /'e-%j.err')
         job_name        = property(lambda _: _._p.exp_name)  # this does not call the instance it is in
     
-    TMP:                Path    = Path('./dump/tmp')
+    TMP:                Path    = mkdir(Path('./dump/tmp'))
     _home:              Path    = property(lambda _: Path().home())
     project:            str     = property(lambda _: 'hwat')
     run_dir:            Path    = property(lambda _: Path(__file__).parent.relative_to(_._home))
