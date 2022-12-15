@@ -124,9 +124,7 @@ class Pyfig:
                 v = v(parent=ii)
                 setattr(ii, k, v)
         
-        sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d))
-        ii._input_arg = arg | sys_arg
-        ii.merge(ii._input_arg | {'wandb_mode': wandb_mode})
+        ii.merge(arg | cmd_to_dict(sys.argv[1:], flat_any(ii.d)))
         mkdir(ii.exp_path)
         
         ii.log(ii.d, create=True)

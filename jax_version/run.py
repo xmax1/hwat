@@ -23,15 +23,12 @@ arg = dict(
 	n_corr = 20, 
 	n_step = 10000, 
 	log_metric_step = 50, 
-	exp_name = 'junk',
+	exp_name = 't1',
 	# sweep = {},
 )
 
-c = Pyfig(wandb_mode='disabled', arg=arg, submit=True)
+c = Pyfig(wandb_mode='online', arg=arg, submit=True, sweep=False)
 
-print(c.d)
-import sys
-sys.exit()
 n_device = c.n_device
 print(f'🤖 {n_device} GPUs available')
 
