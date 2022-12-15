@@ -123,38 +123,74 @@ def add_to_Path(path: Path, string: str | Path):
 def npify(v):
     return jnp.array(v.numpy())
 
-def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
+def format_cmd_item(k, v):
+    v = v.replace('(', '[').replace(')', ']')
+    return k.replace(' ', ''), v.replace(' ', '')
+
+def to_cmd(d:dict):
+    """ Accepted: int, float, str, list, dict, np.ndarray"""
+    
+    def prep_cmd_item(k:str, v:Any):
+        if isinstance(v, np.ndarray):
+            v = v.tolist()
+        return str(k).replace(" ", ""), str(v).replace(" ", "")
+    
+    return dict(prep_cmd_item(k,v) for k,v in d.items())
+    
+
+def type_me(v, v_ref=None, is_cmd_item=False):
+    def count_leading_char(s, char): 
+        # space=r"^\s*" bracket=r'^[*'
+        match = re.search(rf'^{char}*', s)
+        return 0 if not match else match.end()
+    
+    if is_cmd_item:
+        """ Accepted: 
+        bool, list of list (str, float, int), dictionary, str, explicit str (' "this" '), """
+        v = format_cmd_item(v)
+        
+        if v.startswith('['):
+            v = v.strip('[]')
+            v = v.split(',')
+            return [type_me(x, v_ref) for x in v]
+        
+        if v.startswith('[['):
+            v = v.strip('[]')
+            nest_lst = v.split('],[')
+            return [type_me('['+lst+']', v_ref[0], is_cmd_item=True) for lst in nest_lst]
+
+        booleans = ['True', 'true', 't', 'False', 'false', 'f']
+        if v in booleans: 
+            return booleans.index(v) < 3  # 0-2 True 3-5 False
+    
+    if v_ref:
+        return type(v_ref)(v)
+    try:
+        return literal_eval(v)
+    except:
+        return str(v)
+    
+    
+def cmd_to_dict(cmd:str|list, ref:dict, delim:str=' --', d=None):
     """
     fmt: [--flag, arg, --true_flag, --flag, arg1]
     # all flags double dash because of negative numbers duh """
-    booleans = ['True', 'true', 't', 'False', 'false', 'f']
+    
     cmd = ' '.join(cmd) if isinstance(cmd, list) else cmd
     cmd = [x.lstrip().lstrip('--').rstrip() for x in cmd.split(delim)]
     cmd = [x.split(' ', maxsplit=1) for x in cmd if ' ' in x]
     [x.append('True') for x in cmd if len(x) == 1]
-    cmd = flat_list(cmd)
+    cmd = flat_any(cmd)
     cmd = iter([x.strip() for x in cmd])
 
+    d = dict()
     for k,v in zip(cmd, cmd):
-        if v in booleans: 
-            v=booleans.index(v)<3  # 0-2 True 3-5 False
-        elif k in ref.keys():
-            v_ref = ref[k]
-            if isinstance(v_ref, np.ndarray):
-                v = literal_eval(v)
-                v = np.array(v, dtype=v_ref.dtype)
-            elif isinstance(v_ref, list):
-                v = [x for x in v.strip('[]').split(',')]
-                try:
-                    v = literal_eval(v)
-                except:
-                    pass
-            else:
-                v = type(v_ref)(v)
-        else:
-            print('arg not in pyfig')
-        _d[k] = v
-    return _d
+        k,v = format_cmd_item(k, v)
+        v_ref = ref.get(k, None)
+        if v_ref is None:
+            print(f'{k} not in ref')
+        d[k] = type_me(v, v_ref, is_cmd_item=True)
+    return d
 
 ### run things
 

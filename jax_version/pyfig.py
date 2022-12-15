@@ -9,9 +9,12 @@ import sys
 import pprint
 from copy import copy
 import numpy as np
+import re
+
 
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum
 from utils import flat_dict, mkdir, cmd_to_dict, dict_to_wandb
+from utils import type_me
 from utils import Sub
 
 from _user import user
@@ -45,12 +48,12 @@ class Pyfig:
         a_z:        np.ndarray  = np.array([4.,])
 
         n_e:        int         = property(lambda _: int(sum(_.a_z)))
-        n_u:        int         = property(lambda _: (_.spin + _.n_e)//2 )
+        n_u:        int         = property(lambda _: (_.spin + _.n_e)//2)
         n_d:        int         = property(lambda _: _.n_e - _.n_u)
         
         n_b:        int         = 512
         n_corr:     int         = 20
-        n_equil:    int         = 10000  # total number: n_equil_loop = equil_len / corr_len
+        n_equil:    int         = 10000
         acc_target: int         = 0.5
 
     class model(Sub):
@@ -65,24 +68,28 @@ class Pyfig:
 
     class sweep(Sub):
         method          = 'random'
-        name            = 'sweep'
-        metrics         = dict(
-            goal        = 'minimize',
-            name        = 'validation_loss',
-        )
+        metrics         = dict(goal = 'minimize', name = 'validation_loss')
         parameters = dict(
-            batch_size  = {'values' : [16, 32, 64]},
-            # epoch       = {'values' : [5, 10, 15]},
-            lr          = {'max'    : 0.1, 'min': 0.0001},
+            n_b  = {'values' : [16, 32, 64]},
+            lr   = {'max'    : 0.1, 'min': 0.0001},
         )
         n_sweep         = reduce(
             lambda i,j:i*j,[len(v['values']) for k,v in parameters.items() if 'values' in v])+1
 
     class wandb_c(Sub):
+        run             = None
         job_type        = 'training'
-        entity          = 'hwat'
-        wandb_run_path  = ''
-
+        entity          = property(lambda _: _._p.project)
+        name            = property(lambda _: _._p.exp_name)
+        program         = property(lambda _: _._p.run_dir/_._p.run_name)
+        project         = property(lambda _: _._p.project)
+        run_cap         = property(lambda _: _._p.sweep.n_sweep)
+        sweep           = property(lambda _: _._p.sweep.d)
+        wandb_mode      = 'disabled',
+        mode            = property(lambda _: _.wandb_mode)
+        settings        = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+        config          = property(lambda _: dict_to_wandb(_._i.d, ignore=_._p._wandb_ignore))
+        
     class slurm(Sub):
         mail_type       = 'FAIL'
         partition       ='sm3090'
@@ -94,24 +101,18 @@ class Pyfig:
         output          = property(lambda _: _._p.TMP /'o-%j.out')
         error           = property(lambda _: _._p.TMP /'e-%j.err')
         job_name        = property(lambda _: _._p.exp_name)  # this does not call the instance it is in
-        sbatch          = property(lambda _: 
-            f""" 
-            module purge
-            source ~/.bashrc 
-            module load GCC 
-            module load CUDA/11.4.1 
-            module load cuDNN/8.2.2.26-CUDA-11.4.1 
-            conda activate {_._p.env} 
-            export MKL_NUM_THREADS=1 
-            export NUMEXPR_NUM_THREADS=1 
-            export OMP_NUM_THREADS=1 
-            export OPENBLAS_NUM_THREADS=1
-            pwd
-            nvidia-smi
-            mv_cmd = f'mv {_._p.TMP}/o-$SLURM_JOB_ID.out {_._p.TMP}/e-$SLURM_JOB_ID.err $out_dir'
-            out_dir={(mkdir(_._p.exp_path/"out"))}
-        """)
     
+    sbatch: str = property(lambda _: 
+    f""" 
+    module purge
+    source ~/.bashrc 
+    module load GCC 
+    module load CUDA/11.4.1 
+    module load cuDNN/8.2.2.26-CUDA-11.4.1 
+    conda activate {_.env} 
+    mv_cmd = f'mv {_.TMP}/o-$SLURM_JOB_ID.out {_.TMP}/e-$SLURM_JOB_ID.err $out_dir'
+    out_dir={(mkdir(_.exp_path/"out"))}
+    """)
     
     TMP:                Path    = Path('./dump/tmp')
     _home:              Path    = property(lambda _: Path().home())
@@ -119,7 +120,7 @@ class Pyfig:
     run_dir:            Path    = property(lambda _: Path(__file__).parent.relative_to(_._home))
     project_dir:        Path    = property(lambda _: (_._home / 'projects' / _.project))
     server_project_dir: Path    = property(lambda _: _.project_dir.relative_to(_._home))
-    exp_path:           Path    = property(lambda _: _.run_dir/'exp'/_.exp_name/(_.exp_id + _.sweep_id))
+    exp_path:           Path    = property(lambda _: (_.run_dir/'exp'/_.exp_name/(_.exp_id + _.sweep_id)).relative_to('.'))
         
     n_device:           int     = property(lambda _: count_gpu())
 
@@ -129,97 +130,61 @@ class Pyfig:
     git_branch:         str     = 'main'        
     env:                str     = 'dex'                 # CONDA ENV
     
+    n_job:           int  = -1                  # #n_job-state-flow
     _run_cmd:           str  = property(lambda _: f'python {str(_.run_name)} "{_.cmd}"')
-    n_submit:           int  = -1                  # #n_submit-state-flow
     _sys_arg:           list = sys.argv[1:]
-    _wandb_ignore:      list = ['sbatch',]
-
-    def __init__(ii, arg:dict={}, cap=3, wandb_mode='online', submit=False, sweep=False):
-        ii._input_arg = arg 
+    _ignore:            list = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge']
+    _wandb_ignore:      list = _ignore + ['sbatch', 'sweep']
+    
+    def __init__(ii, arg:dict={}, cap=3, wandb_mode='online', submit=False, sweep=False): 
         
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
                 v = v(parent=ii)
                 setattr(ii, k, v)
         
-        sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d))
-        ii.merge(ii._input_arg | sys_arg)
-        mkdir(ii.exp_path.relative_to('.'))
+        ii._input_arg = arg | cmd_to_dict(sys.argv[1:], flat_any(ii.d))
+        ii.merge(ii._input_arg)
+        mkdir(ii.exp_path)
         
+        ii.log(ii.d, create=True)
         
         """             |        submit         |       
                         |   True    |   False   | 
                         -------------------------
                     <0  |   server  |   init    |
-        n_submit    =0  |   init    |   NA      |
-                    >0  |   slurm   |   NA      |
-        """
-        run_init_local = (not submit) and (ii.n_submit < 0)
-        run_init_cluster = submit and (ii.n_submit == 0)
-        run_slurm = submit and (ii.n_submit > 0)
-        run_server = submit and (ii.n_submit < 0)
+        n_job       =0  |   init    |   NA      |
+                    >0  |   slurm   |   NA      | """
         
+        run_init_local = (not submit) and (ii.n_job < 0)
+        run_init_cluster = submit and (ii.n_job == 0)
         if run_init_local or run_init_cluster:
-            print('Running __init__')
-            run = wandb.init(
-                    job_type    = ii.wandb_c.job_type,
-                    entity      = ii.wandb_c.entity,
-                    project     = ii.project,
-                    dir         = ii.exp_path,
-                    config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
-                    mode        = wandb_mode,
-                    settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
-                )
-            
-            ii.wandb_c.wandb_run_path = run.path  
-            
-            if ii.sweep_id:
-                wandb.agent(ii.sweep_id, count=1)
+            ii.wandb_c.run = wandb.init(**ii.wandb_c.d)
+            wandb.agent(ii.sweep_id, count=1)
         
-            ii.log(ii.d, create=True)
-            
-        if run_slurm:
-            print('Submitting runs to slurm')
-            n_job_running = len(run_cmds([f'squeue -u amawi -t pending,running -h -r'], cwd='.')[0].stdout.decode('utf-8'))
-            ii.log({'n_job_running': n_job_running})
-            if n_job_running < cap:    
-                ii.n_submit, n = 0, ii.n_submit
+        if submit:
+            if ii.n_job > 0 and ii.n_job_running < cap:
+                n, ii.n_job  = ii.n_job, 0
                 for sub in range(1, n+1):
-                    Slurm(**ii.slurm.d).sbatch(ii.slurm.sbatch + '\n' + ii._run_cmd )
-                    ii.log({'slurm': ii.slurm.sbatch + '\n' + ii._run_cmd })
-                    if sub > 5:
-                        break
-            exit(f'{sub} submitted, {n_job_running} on cluster before, cap is {cap}')
-        
-        if run_server:
-            print('sshing to server and running this file')
-            if ii.n_submit < 0:
-                if sweep or ('sweep' in ii._input_arg):
-                    print('Running a sweep')
-                    ii.sweep_id = wandb.sweep(
-                        env     = f'conda activate {ii.env};',
-                        sweep   = ii.sweep.d, 
-                        program = ii.run_dir / ii.run_name,
-                        project = ii.project,
-                        name    = ii.exp_name,
-                        run_cap = ii.sweep.n_sweep
-                    )
-                
-                local_out = run_cmds(['git commit -a -m "run_things"', 'git push origin main'], cwd=ii.project_dir)
-                print(local_out)
-                git_cmd = ['git fetch --all', 'git reset --hard origin/main']
-                # git_cmd = 'git pull origin main --force'
-                
-                server_out = run_cmds_server(ii.server, ii.user, git_cmd, ii.server_project_dir)[0]
-                print(server_out)
-                
-                ii.n_submit = max(1, ii.sweep.n_sweep * sweep)
-                cmd = ii._run_cmd
-                print(cmd)
-                server_out = run_cmds_server(ii.server, ii.user, cmd, ii.run_dir)[0]
-                print(server_out)
-                exit('Submitted to server.')
+                    Slurm(**ii.slurm.d).sbatch(ii.slurm.sbatch + '\n' + ii._run_cmd)
+                ii.log({'slurm': ii.slurm.sbatch + '\n' + ii._run_cmd})
             
+            if ii.n_job < 0: 
+                if sweep or ('sweep' in arg):
+                    ii.sweep_id = wandb.sweep(**ii.wandb_c.d)
+                
+                _git_commit_cmd = ['git commit -a -m "run_things"', 'git push origin main']
+                _git_pull_cmd = ['git fetch --all', 'git reset --hard origin/main']
+                
+                run_cmds(_git_commit_cmd, cwd=ii.project_dir)
+                run_cmds_server(ii.server, ii.user, _git_pull_cmd, ii.server_project_dir)
+                
+                ii.n_job = max(1, ii.sweep.n_sweep*sweep)
+                run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.run_dir)
+            
+            # ii.log()    
+            sys.exit(f'Submitted {ii.n_job}{(sub+1)} to {(ii.n_job < 0)*"server"} {(ii.n_job > 0)*"slurm"}')
+        
     @property
     def cmd(ii):
         d = flat_dict(ii._get_dict(get_prop=False))
@@ -229,37 +194,17 @@ class Pyfig:
 
     @property
     def d(ii):
-        return ii._get_dict(get_prop=True)
+        return ii._get_cls_dict(ii)
 
     @property
-    def _sub_cls(ii):
-        return [v for v in ii.__dict__.values() if isinstance(v, Sub)]
+    def commit_id(ii,)->str:
+        process = run_cmds(['git log --pretty=format:%h -n 1'], cwd=ii.project_dir)[0]
+        return process.stdout.decode('utf-8') 
     
-    def _get_dict(ii, cls=None, get_prop=True, _ignore=['sweep', 'sbatch']):
-        ignore = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + _ignore
-        cls = ii if cls is None else cls
-        items = []
-        for k, v_cls in cls.__class__.__dict__.items():
-            if k.startswith('_'):
-                continue
-            if k in ignore:
-                continue
-            
-            v = getattr(cls, k)
-            
-            if isinstance(v, partial):
-                continue # v = copy(ii.__dict__[k])
-            if isinstance(v_cls, property):
-                if not get_prop:
-                    continue
-                
-            if isinstance(v, Sub):
-                items.extend(ii._get_dict(cls=v).items())
-            else:
-                items.append((k, v))
-        return dict(items)
-        
-
+    @property
+    def n_job_running(ii,):
+        return len(run_cmds([f'squeue -u amawi -t pending,running -h -r'], cwd='.')[0].stdout.decode('utf-8'))
+    
     def partial(ii, f:Callable, get_dict=False, **kw):
         d = flat_any(ii.d)
         d_k = inspect.signature(f.__init__).parameters.keys()
@@ -269,30 +214,38 @@ class Pyfig:
             return d
         return f(**d)
 
-    def merge(ii, d:dict):
-        for k,v in d.items():
+    def merge(ii, merge:dict):
+        for k,v in merge.items():
             for cls in [ii,] + ii._sub_cls:
-                if k in cls.__class__.__dict__:
-                    if isinstance(cls.__class__.__dict__[k], property):
-                        continue
+                ref = cls.__class__.__dict__
+                if cls_filter(v, cls=cls, ref=ref):
+                    v = type_me(v, v_ref=ref[k])
                     try:
                         setattr(cls, k, copy(v))
                     except Exception:
                         print(f'Unmerged {k}')
-            
-    def _debug_print(ii, on=False, cls=True):
-        if on:
-            for k in vars(ii).keys():
-                if not k.startswith('_'):
-                    print(k, getattr(ii, k))    
-            if cls:
-                [print(k,v) for k,v in vars(ii.__class__).items() if not k.startswith('_')]
-
+                        
     @property
-    def commit_id(ii,)->str:
-        process = run_cmds(['git log --pretty=format:%h -n 1'], cwd=ii.project_dir)[0]
-        return process.stdout.decode('utf-8')  
+    def _sub_cls(ii):
+        return {k:v for k,v in ii.__dict__.items() if isinstance(v, Sub)}
     
+    def _get_cls_dict(ii, cls, ignore=None):
+        cls_d = cls.__class__.__dict__
+        items = []
+        for k,v in cls_d.items():
+            if cls_filter(cls, is_prop=True, is_fn=True, is_sub=True, ref=cls_d, ignore=ignore):
+                if isinstance(v, Sub):
+                    items.extend(ii._get_cls_dict(v, ignore=ignore).items())
+                else:
+                    items += (k, ii._get_from_cls(k, cls))  
+        return dict(items)
+    
+    @staticmethod
+    def _get_from_cls(cls, k, v):
+        if isinstance(v, partial):
+            return copy(cls.__dict__[k])
+        return getattr(cls, k)
+
     def save(ii, data, file_name):
         path:Path = ii.exp_path / file_name
         data_save_load(path, data)
@@ -308,19 +261,47 @@ class Pyfig:
         for p in ['log.tmp', ii.exp_path/'log.out']:
             with open(p, mode) as f:
                 f.writelines(info)
-
-
     
+def cls_filter(
+    cls, k, v, 
+    ref:list|dict=None,
+    is_fn=False, 
+    is_sub=False, 
+    is_prop=False, 
+    is_hidn=False,
+    ignore:list=None,
+    keep = False,
+):  
     
+    is_builtin = k.startswith('__')
+    should_ignore = k in (ignore if ignore else [])
+    not_in_ref = k in (ref if ref else [k])
+    
+    if not (is_builtin or should_ignore or not_in_ref):
+        keep |= is_hidn and k.startswith('_')
+        keep |= is_sub and isinstance(v, Sub)
+        keep |= is_fn and isinstance(v, partial)
+        keep |= is_prop and isinstance(cls.__class__.__dict__[k], property)
+    return keep
 
+# Data Interface
 
 import pickle as pk
-
+import yaml
+import json
 
 file_interface_all = dict(
     pk = dict(
         r = pk.load,
         w = pk.dump,
+    ),
+    yaml = dict(
+        r = yaml.load,
+        w = yaml.dump,
+    ),
+    json = dict(
+        r = json.load,
+        w = json.dump,
     )
 )      
 
@@ -338,7 +319,23 @@ def data_save_load(path:Path, data=None):
 
 """ Bone Zone
 
+export MKL_NUM_THREADS=1 
+export NUMEXPR_NUM_THREADS=1 
+export OMP_NUM_THREADS=1 
+export OPENBLAS_NUM_THREADS=1
+nvidia-smi`
+
 | tee $out_dir/py.out date "+%B %V %T.%3N
 
+
+env     = f'conda activate {ii.env};',
+# pyfig
+def _debug_print(ii, on=False, cls=True):
+        if on:
+            for k in vars(ii).keys():
+                if not k.startswith('_'):
+                    print(k, getattr(ii, k))    
+            if cls:
+                [print(k,v) for k,v in vars(ii.__class__).items() if not k.startswith('_')]
 
 """

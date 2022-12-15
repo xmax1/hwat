@@ -127,7 +127,6 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
     """
     fmt: [--flag, arg, --true_flag, --flag, arg1]
     # all flags double dash because of negative numbers duh """
-    booleans = ['True', 'true', 't', 'False', 'false', 'f']
     
     cmd = ' '.join(cmd) if isinstance(cmd, list) else cmd
     cmd = [x.lstrip().lstrip('--').rstrip() for x in cmd.split(delim)]
@@ -137,8 +136,7 @@ def cmd_to_dict(cmd:str|list,ref:dict,_d={},delim:str=' --'):
     cmd = iter([x.strip() for x in cmd])
 
     for k,v in zip(cmd, cmd):
-        if v in booleans: 
-            v=booleans.index(v)<3  # 0-2 True 3-5 False
+        
         if k in ref:
             v = type(ref[k])(v)
         else:
@@ -156,10 +154,12 @@ def run_cmds(cmd:str|list,cwd:str|Path=None,input_req:str=None):
     out = []
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
         cmd_1 = [c.strip() for c in cmd_1.split(' ')]
-        out += [subprocess.run(cmd_1, cwd=str(cwd),input=input_req, capture_output=True)]
-        sleep(0.1)
+        res = subprocess.run(cmd_1, cwd=str(cwd),input=input_req, capture_output=True)
+        print(cmd_1)
+        print(res.stdout)
+        print(res.stderr)
+        out += [res]
     return out[0] if len(out) == 0 else out
-
 
 def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path):
     out = []
@@ -167,8 +167,11 @@ def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path):
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # if not known host
     client.connect(server, username=user)
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]):
-        out += [client.exec_command(f'cd {str(cwd)}; {cmd_1}')] # in, out, err
-        sleep(0.1)
+        res = client.exec_command(f'cd {str(cwd)}; {cmd_1}')
+        print(cmd_1)
+        print(res.stdout)
+        print(res.stderr)
+        out += [res]
     client.close()
     return out[0] if len(out) == 0 else out
 
