@@ -187,7 +187,7 @@ class Pyfig:
         module load CUDA/11.4.1
         module load cuDNN/8.2.2.26-CUDA-11.4.1
         conda activate {ii.env}
-        mv_cmd = f'mv {ii.TMP}/o-$SLURM_JOB_ID.out {ii.TMP}/e-$SLURM_JOB_ID.err $out_dir'
+        mv_cmd="mv {ii.TMP}/o-$SLURM_JOB_ID.out {ii.TMP}/e-$SLURM_JOB_ID.err $out_dir"
         out_dir={(mkdir(ii.exp_path/"out"))}"""
         return '\n'.join([' '.join(v.split()) for v in s.split('\n')])
     
