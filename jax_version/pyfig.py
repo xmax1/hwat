@@ -115,7 +115,7 @@ class Pyfig:
     run_dir:            Path    = property(lambda _: Path(__file__).parent.relative_to(_._home))
     project_dir:        Path    = property(lambda _: (_._home / 'projects' / _.project))
     server_project_dir: Path    = property(lambda _: _.project_dir.relative_to(_._home))
-    exp_path:           Path    = property(lambda _: (_.run_dir/'exp'/_.exp_name/(_.exp_id + _.sweep_id)).relative_to('.'))
+    exp_path:           Path    = property(lambda _: Path('exp')/_.exp_name/(_.exp_id+_.sweep_id))
         
     n_device:           int     = property(lambda _: count_gpu())
 
@@ -126,7 +126,7 @@ class Pyfig:
     env:                str     = 'dex'                 # CONDA ENV
     
     n_job:           int  = -1                  # #n_job-state-flow
-    _run_cmd:           str  = property(lambda _: f'python {str(_.run_name)} "{_.cmd}"')
+    _run_cmd:           str  = property(lambda _: f'python {str(_.run_name)} {_.cmd}')
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + ['sbatch', 'sweep']
     

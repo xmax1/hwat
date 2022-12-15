@@ -29,6 +29,9 @@ arg = dict(
 
 c = Pyfig(wandb_mode='disabled', arg=arg, submit=True)
 
+print(c.d)
+import sys
+sys.exit()
 n_device = c.n_device
 print(f'🤖 {n_device} GPUs available')
 
