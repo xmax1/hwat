@@ -208,9 +208,9 @@ class Pyfig:
                 )
                 ii.submit_state *= ii.sweep.n_sweep
             
-            local_out = run_cmds(['git add .', f'git commit -m {commit_msg}', 'git push'], cwd=ii.project_path)
+            run_cmds(['git add .', f'git commit -m {commit_msg}', 'git push'], cwd=ii.project_path)
             cmd = f'python -u {ii.run_path} ' + (commit_id or ii.commit_id) + ii.cmd
-            server_out = run_cmds_server(ii.server, ii.user, cmd, cwd=ii.server_project_path)
+            run_cmds_server(ii.server, ii.user, cmd, cwd=ii.server_project_path)
 
     def partial(ii, f:Callable, get_dict=False, **kw):
         d = flat_any(ii.d)

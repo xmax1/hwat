@@ -155,10 +155,10 @@ def run_cmds(cmd:str|list,cwd:str|Path=None,input_req:str=None):
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
         cmd_1 = [c.strip() for c in cmd_1.split(' ')]
         res = subprocess.run(cmd_1, cwd=str(cwd),input=input_req, capture_output=True)
-        print(cmd_1)
-        print(res.stdout)
-        print(res.stderr)
-        out += [res]
+        out += [cmd_1, res.stdout, res.sterr]
+    for res in out:
+        for l in res: 
+            print(l)
     return out[0] if len(out) == 0 else out
 
 def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path):
@@ -168,11 +168,11 @@ def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path):
     client.connect(server, username=user)
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]):
         res = client.exec_command(f'cd {str(cwd)}; {cmd_1}')
-        print(cmd_1)
-        print(res.stdout)
-        print(res.stderr)
-        out += [res]
+        out += [cmd_1, res.stdout, res.sterr]
     client.close()
+    for res in out:
+        for l in res: 
+            print(l)
     return out[0] if len(out) == 0 else out
 
 

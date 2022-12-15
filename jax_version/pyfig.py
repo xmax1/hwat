@@ -22,6 +22,7 @@ from _user import user
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 
 class Pyfig:
+    # SUB CLASSES CANNOT CALL EACH OTHER
 
     run_name:       Path    = 'run.py'
     
@@ -82,13 +83,8 @@ class Pyfig:
         entity          = property(lambda _: _._p.project)
         name            = property(lambda _: _._p.exp_name)
         program         = property(lambda _: _._p.run_dir/_._p.run_name)
-        project         = property(lambda _: _._p.project)
-        run_cap         = property(lambda _: _._p.sweep.n_sweep)
-        sweep           = property(lambda _: _._p.sweep.d)
-        wandb_mode      = 'disabled',
+        wandb_mode      = 'disabled'
         mode            = property(lambda _: _.wandb_mode)
-        settings        = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
-        config          = property(lambda _: dict_to_wandb(_._i.d, ignore=_._p._wandb_ignore))
         
     class slurm(Sub):
         mail_type       = 'FAIL'
@@ -102,17 +98,16 @@ class Pyfig:
         error           = property(lambda _: _._p.TMP /'e-%j.err')
         job_name        = property(lambda _: _._p.exp_name)  # this does not call the instance it is in
     
-    sbatch: str = property(lambda _: 
-    f""" 
+    sbatch: str = property(lambda _:
+    f"""\
     module purge
-    source ~/.bashrc 
-    module load GCC 
-    module load CUDA/11.4.1 
-    module load cuDNN/8.2.2.26-CUDA-11.4.1 
-    conda activate {_.env} 
+    source ~/.bashrc
+    module load GCC
+    module load CUDA/11.4.1
+    module load cuDNN/8.2.2.26-CUDA-11.4.1
+    conda activate {_.env}
     mv_cmd = f'mv {_.TMP}/o-$SLURM_JOB_ID.out {_.TMP}/e-$SLURM_JOB_ID.err $out_dir'
-    out_dir={(mkdir(_.exp_path/"out"))}
-    """)
+    out_dir={(mkdir(_.exp_path/"out"))}""")
     
     TMP:                Path    = Path('./dump/tmp')
     _home:              Path    = property(lambda _: Path().home())
@@ -133,8 +128,7 @@ class Pyfig:
     n_job:           int  = -1                  # #n_job-state-flow
     _run_cmd:           str  = property(lambda _: f'python {str(_.run_name)} "{_.cmd}"')
     _sys_arg:           list = sys.argv[1:]
-    _ignore:            list = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge']
-    _wandb_ignore:      list = _ignore + ['sbatch', 'sweep']
+    _wandb_ignore:      list = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + ['sbatch', 'sweep']
     
     def __init__(ii, arg:dict={}, cap=3, wandb_mode='online', submit=False, sweep=False): 
         
@@ -144,7 +138,7 @@ class Pyfig:
                 setattr(ii, k, v)
         
         ii._input_arg = arg | cmd_to_dict(sys.argv[1:], flat_any(ii.d))
-        ii.merge(ii._input_arg)
+        ii.merge(ii._input_arg | {'wandb_mode': wandb_mode})
         mkdir(ii.exp_path)
         
         ii.log(ii.d, create=True)
@@ -159,15 +153,23 @@ class Pyfig:
         run_init_local = (not submit) and (ii.n_job < 0)
         run_init_cluster = submit and (ii.n_job == 0)
         if run_init_local or run_init_cluster:
-            ii.wandb_c.run = wandb.init(**ii.wandb_c.d)
-            wandb.agent(ii.sweep_id, count=1)
+            ii.wandb_c.run = wandb.init(
+                entity      = ii.wandb_c.entity,
+                project     = ii.project,
+                dir         = ii.exp_path,
+                config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
+                mode        = wandb_mode,
+                settings = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+            )
+            if sweep or ('sweep' in arg):
+                wandb.agent(ii.sweep_id, count=1)
         
         if submit:
-            if ii.n_job > 0 and ii.n_job_running < cap:
+            if ii.n_job > 0 and ii._n_job_running < cap:
                 n, ii.n_job  = ii.n_job, 0
                 for sub in range(1, n+1):
-                    Slurm(**ii.slurm.d).sbatch(ii.slurm.sbatch + '\n' + ii._run_cmd)
-                ii.log({'slurm': ii.slurm.sbatch + '\n' + ii._run_cmd})
+                    Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
+                ii.log({'slurm': ii.sbatch + '\n' + ii._run_cmd})
             
             if ii.n_job < 0: 
                 if sweep or ('sweep' in arg):
@@ -187,14 +189,14 @@ class Pyfig:
         
     @property
     def cmd(ii):
-        d = flat_dict(ii._get_dict(get_prop=False))
+        d = flat_dict(get_cls_dict(ii, sub_cls=True))
         d = {k: v.tolist() if isinstance(v, np.ndarray) else v for k,v in d.items()}
         cmd_d = {str(k).replace(" ", ""): str(v).replace(" ", "") for k,v in d.items()}
         return ' '.join([f'--{k} {v}' for k,v in cmd_d.items() if v])
 
     @property
     def d(ii):
-        return ii._get_cls_dict(ii)
+        return get_cls_dict(ii, sub_cls=True, prop=True)
 
     @property
     def commit_id(ii,)->str:
@@ -202,23 +204,25 @@ class Pyfig:
         return process.stdout.decode('utf-8') 
     
     @property
-    def n_job_running(ii,):
+    def _n_job_running(ii,):
         return len(run_cmds([f'squeue -u amawi -t pending,running -h -r'], cwd='.')[0].stdout.decode('utf-8'))
     
-    def partial(ii, f:Callable, get_dict=False, **kw):
-        d = flat_any(ii.d)
+    def partial(ii, f:Callable, d=None, get_d=False, print_d=False, **kw):
+        d = flat_any(d if d else ii.d)
         d_k = inspect.signature(f.__init__).parameters.keys()
         d = {k:copy(v) for k,v in d.items() if k in d_k}
         d = {k:v for k,v in d.items() if k in d_k} | kw
-        if get_dict:
+        if get_d:
             return d
+        if print_d:
+            pprint.pprint(d)
         return f(**d)
 
     def merge(ii, merge:dict):
         for k,v in merge.items():
-            for cls in [ii,] + ii._sub_cls:
+            for cls in [ii,] + list(ii._sub_cls.values()):
                 ref = cls.__class__.__dict__
-                if cls_filter(v, cls=cls, ref=ref):
+                if cls_filter(cls, k, v, ref=ref):
                     v = type_me(v, v_ref=ref[k])
                     try:
                         setattr(cls, k, copy(v))
@@ -226,26 +230,9 @@ class Pyfig:
                         print(f'Unmerged {k}')
                         
     @property
-    def _sub_cls(ii):
+    def _sub_cls(ii) -> dict:
         return {k:v for k,v in ii.__dict__.items() if isinstance(v, Sub)}
     
-    def _get_cls_dict(ii, cls, ignore=None):
-        cls_d = cls.__class__.__dict__
-        items = []
-        for k,v in cls_d.items():
-            if cls_filter(cls, is_prop=True, is_fn=True, is_sub=True, ref=cls_d, ignore=ignore):
-                if isinstance(v, Sub):
-                    items.extend(ii._get_cls_dict(v, ignore=ignore).items())
-                else:
-                    items += (k, ii._get_from_cls(k, cls))  
-        return dict(items)
-    
-    @staticmethod
-    def _get_from_cls(cls, k, v):
-        if isinstance(v, partial):
-            return copy(cls.__dict__[k])
-        return getattr(cls, k)
-
     def save(ii, data, file_name):
         path:Path = ii.exp_path / file_name
         data_save_load(path, data)
@@ -261,9 +248,55 @@ class Pyfig:
         for p in ['log.tmp', ii.exp_path/'log.out']:
             with open(p, mode) as f:
                 f.writelines(info)
+
+def get_cls_dict(
+        cls,
+        ref:list|dict=None,
+        sub_cls=False, 
+        fn=False, 
+        prop=False, 
+        hidn=False,
+        ignore:list=None
+    ) -> dict:
+        ignore = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + (ignore or [])
     
+        items = []
+        for k, v_cls in cls.__class__.__dict__.items():
+            
+            is_builtin = k.startswith('__')
+            should_ignore = k in ignore
+            not_in_ref = k in (ref if ref else [])
+            
+            if not (is_builtin or should_ignore or not_in_ref):
+                
+                if (not hidn) and k.startswith('_'):
+                    continue
+                    
+                is_fn = (not fn) and isinstance(v_cls, partial)
+                if is_fn:
+                    continue
+                
+                is_prop = (not prop) and isinstance(v_cls, property)
+                if is_prop:
+                    continue
+                
+                v = getattr(cls, k)
+                
+                if isinstance(v, Sub):
+                    if sub_cls:
+                        sub_d = get_cls_dict(v,
+                            ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore)
+                        items.append([k, sub_d])
+                    continue
+                
+                items.append([k, v])
+        return dict(items)
+
+
+
+
 def cls_filter(
-    cls, k, v, 
+    cls, k: str, v, 
     ref:list|dict=None,
     is_fn=False, 
     is_sub=False, 
