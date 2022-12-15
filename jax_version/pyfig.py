@@ -83,8 +83,6 @@ class Pyfig:
         entity          = property(lambda _: _._p.project)
         name            = property(lambda _: _._p.exp_name)
         program         = property(lambda _: _._p.run_dir/_._p.run_name)
-        wandb_mode      = 'disabled'
-        mode            = property(lambda _: _.wandb_mode)
         
     class slurm(Sub):
         mail_type       = 'FAIL'
@@ -127,7 +125,6 @@ class Pyfig:
                 setattr(ii, k, v)
         
         sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d))
-        # print(sys_arg)
         ii._input_arg = arg | sys_arg
         ii.merge(ii._input_arg | {'wandb_mode': wandb_mode})
         mkdir(ii.exp_path)
@@ -149,7 +146,7 @@ class Pyfig:
                 project     = ii.project,
                 dir         = ii.exp_path,
                 config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
-                mode        = ii.wandb_mode,
+                mode        = wandb_mode,
                 settings = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
             )
             if sweep or ('sweep' in arg):
