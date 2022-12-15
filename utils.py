@@ -127,7 +127,7 @@ def cmd_to_dict(cmd:str|list, ref:dict, _d={}, delim:str=' --'):
     """
     fmt: [--flag, arg, --true_flag, --flag, arg1]
     # all flags double dash because of negative numbers duh """
-    
+
     cmd = ' '.join(cmd) if isinstance(cmd, list) else cmd
     cmd = [x.strip(' ').lstrip('--') for x in cmd.split(delim)]
     cmd = [x.split(' ', maxsplit=1) for x in cmd if ' ' in x]

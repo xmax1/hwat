@@ -68,11 +68,11 @@ class Pyfig:
         terms_p_emb:    list    = ['rr', 'rr_len']
 
     class sweep(Sub):
-        method          = 'random'
-        metrics         = dict(goal = 'minimize', name = 'validation_loss')
+        method          = 'grid'
+        name            = 'tr/e_\mu'
+        # metrics       = dict(goal='minimize', )
         parameters = dict(
             n_b  = {'values' : [16, 32, 64]},
-            lr   = {'max'    : 0.1, 'min': 0.0001},
         )
         n_sweep         = reduce(
             lambda i,j:i*j,[len(v['values']) for k,v in parameters.items() if 'values' in v])+1
@@ -124,10 +124,19 @@ class Pyfig:
                 v = v(parent=ii)
                 setattr(ii, k, v)
         
-        ii.merge(arg | cmd_to_dict(sys.argv[1:], flat_any(ii.d)))
+        sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d))
+        print(sys_arg)
+
+        arg = arg | sys_arg
+        print(arg)
+        sweep = arg.pop('sweep')
+        print(arg)
+        ii.merge(arg)
         mkdir(ii.exp_path)
         
         ii.log(ii.d, create=True)
+        
+        print(sweep)
         
         """             |        submit         |       
                         |   True    |   False   | 
@@ -161,7 +170,12 @@ class Pyfig:
 
         if submit and ii.n_job < 0: 
             if sweep or ('sweep' in arg):
-                ii.sweep_id = wandb.sweep(**ii.wandb_c.d)
+                print(ii.sweep.d)
+                ii.sweep_id = wandb.sweep(
+                    # program = ii.run_dir / ii.run_name,
+                    sweep   = ii.sweep.d, 
+                    project = ii.project
+                )
             
             _git_commit_cmd = ['git commit -a -m "run_things"', 'git push origin main']
             _git_pull_cmd = ['git fetch --all', 'git reset --hard origin/main']

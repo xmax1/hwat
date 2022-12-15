@@ -186,13 +186,12 @@ def cmd_to_dict(cmd:str|list, ref:dict, delim:str=' --', d=None):
     """
     fmt: [--flag, arg, --true_flag, --flag, arg1]
     # all flags double dash because of negative numbers duh """
-    
-    cmd = ' '.join(cmd) if isinstance(cmd, list) else cmd
-    cmd = [x.lstrip().lstrip('--').rstrip() for x in cmd.split(delim)]
-    cmd = [x.split(' ', maxsplit=1) for x in cmd if ' ' in x]
-    [x.append('True') for x in cmd if len(x) == 1]
-    cmd = flat_any(cmd)
-    cmd = iter([x.strip() for x in cmd])
+    cmd = ' ' + (' '.join(cmd) if isinstance(cmd, list) else cmd)  # add initial space in case single flag
+    cmd = [x.strip().lstrip('--') for x in cmd.split(delim)]
+    arg_flag = [x.split(' ', maxsplit=1) for x in cmd if ' ' in x]
+    bool_flag = [(x, 'True') for x in cmd if not ' ' in cmd and len(x)>0]
+    cmd = iter(flat_any(arg_flag + bool_flag))
+    # cmd = iter([x.strip() for x in cmd])
 
     d = dict()
     for k,v in zip(cmd, cmd):
