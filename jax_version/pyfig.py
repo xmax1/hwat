@@ -183,7 +183,7 @@ class Pyfig:
                     # program = ii.run_dir / ii.run_name,
                     sweep   = ii.sweep.d | dict(name=ii.wandb_c.name), 
                     project = ii.project,
-                    entity=ii.wandb_c.entity,
+                    entity  = ii.wandb_c.entity,
                 )
                 n_step_grid = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v]
                 ii.n_job *= reduce(n_step_grid) if len(n_step_grid)>1 else n_step_grid[0]
