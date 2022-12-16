@@ -76,7 +76,6 @@ class Pyfig:
         parameters = dict(
             n_b  = {'values' : [16, 32, 64]},
         )
-        command = property(lambda _: _._p.wandb_cmd)
 
     class wandb_c(Sub):
         run             = None
@@ -115,7 +114,8 @@ class Pyfig:
     env:                str     = 'dex'                 # CONDA ENV
     
     n_job:              int  = -1                  # #n_job-state-flow
-    _run_cmd:           str  = property(lambda _: f'python {str(_.run_name)} {_.cmd*(~_.run_sweep) + _.wandb_cmd*_.run_sweep}')
+    _run_cmd:           str  = property(lambda _: f'python {str(_.run_name)} \
+                                            {_.cmd*(~bool(_.sweep_id_code)) + _.wandb_cmd*bool(_.sweep_id_code)}')
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + ['sbatch', 'sweep']
     
@@ -134,7 +134,6 @@ class Pyfig:
         ii.merge(arg)
         mkdir(ii.exp_path)
         
-        print(ii.sweep.command)
         
         ii.log(ii.d, create=True)
         
