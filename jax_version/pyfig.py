@@ -69,7 +69,9 @@ class Pyfig:
         terms_p_emb:    list    = ['rr', 'rr_len']
 
     class sweep(Sub):
+        name            = 'sweep'
         method          = 'grid'
+        project         = 'hwat'
         # name            = 'tr/e_\mu'
         # metrics       = dict(goal='minimize', )
         parameters = dict(
