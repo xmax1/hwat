@@ -117,7 +117,7 @@ def mkdir(path: Path) -> Path:
     return path
 
 def add_to_Path(path: Path, string: str | Path):
-        return Path(str(path) + str(string))
+    return Path(str(path) + str(string))
 
 ### convert things
 
@@ -162,10 +162,6 @@ def type_me(v, v_ref=None, is_cmd_item=False):
         booleans = ['True', 'true', 't', 'False', 'false', 'f']
         if v in booleans: 
             return booleans.index(v) < 3  # 0-2 True 3-5 False
-
-    # 
-    # if isinstance(v, type_ref):
-    #     return v
     
     if v_ref is not None:
         type_ref = type(v_ref)
@@ -201,7 +197,7 @@ def cmd_to_dict(cmd:str|list, ref:dict, delim:str=' --', d=None):
             print(f'{k} not in ref')
         d[k] = type_me(v, v_ref, is_cmd_item=True)
     return d
-
+    
 ### run things
 
 

@@ -76,6 +76,7 @@ class Pyfig:
         parameters = dict(
             n_b  = {'values' : [16, 32, 64]},
         )
+        command = property(lambda _: _._p.wandb_cmd)
 
     class wandb_c(Sub):
         run             = None
@@ -132,6 +133,8 @@ class Pyfig:
         run_sweep = arg.pop('run_sweep', False)
         ii.merge(arg)
         mkdir(ii.exp_path)
+        
+        print(ii.sweep.command)
         
         ii.log(ii.d, create=True)
         
@@ -218,6 +221,18 @@ class Pyfig:
         d = {k: v.tolist() if isinstance(v, np.ndarray) else v for k,v in d.items()}
         cmd_d = {str(k).replace(" ", ""): str(v).replace(" ", "") for k,v in d.items()}
         return ' '.join([f'--{k} {v}' for k,v in cmd_d.items() if v])
+    
+    @property
+    def wandb_cmd(ii):
+        cmd = ' ' + ii.cmd
+        cmd = [x.strip() for x in cmd.split(' --')][1:]
+        cmd = [x.split(' ', maxsplit=1) for x in cmd]
+        new_cmd = ''
+        for c in cmd:
+            new_cmd += ' --'+c[0].replace(' ', '')
+            if len(c) == 2:
+                new_cmd += f'={c[1].replace(" ", "")}'
+        return cmd
 
     @property
     def d(ii):
