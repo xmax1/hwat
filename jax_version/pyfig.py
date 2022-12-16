@@ -150,17 +150,19 @@ class Pyfig:
         run_init_local = (not submit) and (ii.n_job < 0)
         run_init_cluster = submit and (ii.n_job == 0)
         if run_init_local or run_init_cluster:
-            ii.wandb_c.run = wandb.init(
-                entity      = ii.wandb_c.entity,  # team name is hwat
-                project     = ii.project,         # sub project in team
-                dir         = ii.exp_path,
-                config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
-                mode        = wandb_mode,
-                settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
-                id          = ii.exp_id
-            )
             if ii.sweep_id and ii.sweep:
                 wandb.agent(ii.sweep_id, count=1)
+            else:
+                ii.wandb_c.run = wandb.init(
+                    entity      = ii.wandb_c.entity,  # team name is hwat
+                    project     = ii.project,         # sub project in team
+                    dir         = ii.exp_path,
+                    config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
+                    mode        = wandb_mode,
+                    settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+                    id          = ii.exp_id
+                )
+            
         
         if submit and ii.n_job > 0 and ii._n_job_running < cap:
             n, ii.n_job  = ii.n_job, 0
