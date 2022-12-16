@@ -96,6 +96,8 @@ def gen_alphanum(n: int = 7, test=False):
     return name
 
 def iterate_n_dir(folder: Path, iter_exp_dir, n_max=100):
+    if re.match(folder.name, '-[0-9]*'):
+        folder = folder.parent / folder.name.split('-')[0]
     if iter_exp_dir and folder.exists():
         for i in range(n_max+1):
             _folder = add_to_Path(folder, f'-{i}')

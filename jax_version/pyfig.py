@@ -115,7 +115,7 @@ class Pyfig:
     env:                str     = 'dex'                 # CONDA ENV
     
     n_job:              int  = -1                  # #n_job-state-flow
-    _run_cmd:           str  = property(lambda _: f'python {str(_.run_name)} {_.cmd}')
+    _run_cmd:           str  = property(lambda _: f'python {str(_.run_name)} {_.cmd*(~_.run_sweep) + _.wandb_cmd*_.run_sweep}')
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + ['sbatch', 'sweep']
     
@@ -224,6 +224,11 @@ class Pyfig:
     
     @property
     def wandb_cmd(ii):
+        d = flat_dict(get_cls_dict(ii, sub_cls=True, ignore=['sweep',] + list(ii.sweep.parameters.keys())))
+        d = {k: v.tolist() if isinstance(v, np.ndarray) else v for k,v in d.items()}
+        cmd_d = {str(k).replace(" ", ""): str(v).replace(" ", "") for k,v in d.items()}
+        return ' '.join([f' --{k}={v}' for k,v in cmd_d.items() if v])
+    
         cmd = ' ' + ii.cmd
         cmd = [x.strip() for x in cmd.split(' --')][1:]
         cmd = [x.split(' ', maxsplit=1) for x in cmd]
