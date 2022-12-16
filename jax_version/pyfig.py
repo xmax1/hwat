@@ -129,7 +129,7 @@ class Pyfig:
 
         arg = arg | sys_arg
         print(arg)
-        sweep = arg.pop('sweep')
+        sweep = arg.pop('sweep', False)
         print(arg)
         ii.merge(arg)
         mkdir(ii.exp_path)
