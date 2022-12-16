@@ -150,7 +150,6 @@ class Pyfig:
         
         # run local: init
         
-        
         if run_init_local or run_init_cluster:
             if ii.sweep_id:
                 wandb.init()
@@ -175,6 +174,8 @@ class Pyfig:
             sys.exit(f'Submitted {sub} to slurm')
 
         if submit and ii.n_job < 0: 
+            ii.n_job = 1
+            
             if run_sweep:
                 print(ii.sweep.d)
                 ii.sweep_id = wandb.sweep(
@@ -182,8 +183,8 @@ class Pyfig:
                     sweep   = ii.sweep.d | dict(project=ii.project, entity=ii.wandb_c.entity), 
                     # project = ii.project
                 )
-                steps = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v]
-                ii.n_job = reduce(steps) if len(steps)>1 else steps[0]
+                n_step_grid = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v]
+                ii.n_job *= reduce(n_step_grid) if len(n_step_grid)>1 else n_step_grid[0]
 
             _git_commit_cmd = ['git commit -a -m "run_things"', 'git push origin main']
             _git_pull_cmd = ['git fetch --all', 'git reset --hard origin/main']
