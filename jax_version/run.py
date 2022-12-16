@@ -27,7 +27,7 @@ arg = dict(
 	# sweep = {},
 )
 
-c = Pyfig(wandb_mode='online', arg=arg, submit=True, sweep=False)
+c = Pyfig(wandb_mode='online', arg=arg, submit=True, run_sweep=False)
 
 n_device = c.n_device
 print(f'🤖 {n_device} GPUs available')

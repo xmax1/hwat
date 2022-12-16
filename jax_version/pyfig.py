@@ -70,14 +70,11 @@ class Pyfig:
 
     class sweep(Sub):
         method          = 'grid'
-        
         # name            = 'tr/e_\mu'
         # metrics       = dict(goal='minimize', )
         parameters = dict(
             n_b  = {'values' : [16, 32, 64]},
         )
-        n_sweep         = reduce(
-            lambda i,j:i*j,[len(v['values']) for k,v in parameters.items() if 'values' in v])+1
 
     class wandb_c(Sub):
         run             = None
@@ -119,7 +116,7 @@ class Pyfig:
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + ['sbatch', 'sweep']
     
-    def __init__(ii, arg:dict={}, cap=3, wandb_mode='online', submit=False, sweep=False): 
+    def __init__(ii, arg:dict={}, cap=3, wandb_mode='online', submit=False, run_sweep=False): 
         
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
@@ -130,15 +127,11 @@ class Pyfig:
         print(sys_arg)
 
         arg = arg | sys_arg
-        print(arg)
-        sweep = arg.pop('sweep', False)
-        print(arg)
+        run_sweep = arg.pop('run_sweep', False)
         ii.merge(arg)
         mkdir(ii.exp_path)
         
         ii.log(ii.d, create=True)
-        
-        print(sweep)
         
         """             |        submit         |       
                         |   True    |   False   | 
@@ -150,7 +143,7 @@ class Pyfig:
         run_init_local = (not submit) and (ii.n_job < 0)
         run_init_cluster = submit and (ii.n_job == 0)
         if run_init_local or run_init_cluster:
-            if ii.sweep_id and ii.sweep:
+            if ii.sweep_id:
                 wandb.agent(ii.sweep_id, count=1)
             else:
                 ii.wandb_c.run = wandb.init(
@@ -169,18 +162,19 @@ class Pyfig:
             ii.log({'slurm': ii.sbatch + '\n' + ii._run_cmd})
             for sub in range(1, n+1):
                 Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
-                sleep(sweep*3)
+                sleep(run_sweep*3)
             sys.exit(f'Submitted {sub} to slurm')
 
         if submit and ii.n_job < 0: 
-            if sweep or ('sweep' in arg):
+            if run_sweep:
                 print(ii.sweep.d)
                 ii.sweep_id = wandb.sweep(
                     # program = ii.run_dir / ii.run_name,
                     sweep   = ii.sweep.d, 
                     project = ii.project
                 )
-                ii.n_job = ii.sweep.n_sweep
+                steps = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v]
+                ii.n_job = reduce(steps) if len(steps)>1 else steps[0]
 
             
             _git_commit_cmd = ['git commit -a -m "run_things"', 'git push origin main']
