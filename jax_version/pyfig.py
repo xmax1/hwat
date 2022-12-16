@@ -14,7 +14,7 @@ from time import sleep
 
 
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum
-from utils import flat_dict, mkdir, cmd_to_dict, dict_to_wandb
+from utils import flat_dict, mkdir, cmd_to_dict, dict_to_wandb, iterate_n_dir
 from utils import type_me
 from utils import Sub
 
@@ -29,7 +29,7 @@ class Pyfig:
     
     exp_name:       str     = 'demo-final'
     exp_id:         str     = gen_alphanum(n=7)
-    sweep_id:       str     = ''
+    sweep_id_code:  str     = ''
     
     seed:           int     = 808017424 # grr
     dtype:          str     = 'float32'
@@ -102,7 +102,8 @@ class Pyfig:
     run_dir:            Path    = property(lambda _: Path(__file__).parent.relative_to(_._home))
     project_dir:        Path    = property(lambda _: (_._home / 'projects' / _.project))
     server_project_dir: Path    = property(lambda _: _.project_dir.relative_to(_._home))
-    exp_path:           Path    = property(lambda _: Path('exp')/_.exp_name/(_.exp_id+_.sweep_id))
+    exp_path:           Path    = property(lambda _: iterate_n_dir(Path('exp')/_.exp_name, True)/(_.exp_id+_.sweep_id_code))
+    sweep_id:       str     = property(lambda _: f'{_.wandb_c.entity}/{_.project}/{_.sweep_id_code}')
         
     n_device:           int     = property(lambda _: count_gpu())
 
@@ -178,7 +179,7 @@ class Pyfig:
             
             if run_sweep:
                 print(ii.sweep.d)
-                ii.sweep_id = wandb.sweep(
+                ii.sweep_id_code = wandb.sweep(
                     # program = ii.run_dir / ii.run_name,
                     sweep   = ii.sweep.d | dict(project=ii.project, entity=ii.wandb_c.entity), 
                     # project = ii.project

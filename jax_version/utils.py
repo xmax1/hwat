@@ -94,7 +94,7 @@ def gen_alphanum(n: int = 7, test=False):
     name = ''.join([random.choice(characters) for _ in range(n)])
     return name
 
-def iterate_folder(folder: Path, iter_exp_dir):
+def iterate_n_dir(folder: Path, iter_exp_dir):
     if iter_exp_dir and folder.exists():
         for i in range(100):
             _folder = add_to_Path(folder, f'-{i}')
