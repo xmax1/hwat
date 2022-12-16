@@ -153,7 +153,7 @@ class Pyfig:
         
         if run_init_local or run_init_cluster:
             if ii.sweep_id:
-                wandb.init()
+                # wandb.init()
                 wandb.agent(sweep_id=ii.sweep_id, count=1)
             else:
                 ii.wandb_c.run = wandb.init(
