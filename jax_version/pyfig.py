@@ -179,7 +179,7 @@ class Pyfig:
                 print(ii.sweep.d)
                 ii.sweep_id = wandb.sweep(
                     # program = ii.run_dir / ii.run_name,
-                    sweep   = ii.sweep.d, 
+                    sweep   = ii.sweep.d | dict(project=ii.project, entity=ii.wandb_c.entity), 
                     # project = ii.project
                 )
                 steps = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v]
