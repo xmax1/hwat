@@ -10,6 +10,7 @@ import pprint
 from copy import copy
 import numpy as np
 import re
+from time import sleep
 
 
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum
@@ -69,7 +70,8 @@ class Pyfig:
 
     class sweep(Sub):
         method          = 'grid'
-        name            = 'tr/e_\mu'
+        
+        # name            = 'tr/e_\mu'
         # metrics       = dict(goal='minimize', )
         parameters = dict(
             n_b  = {'values' : [16, 32, 64]},
@@ -157,15 +159,15 @@ class Pyfig:
                 settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
                 id          = ii.exp_id
             )
-            if sweep or ('sweep' in arg):
+            if ii.sweep_id and ii.sweep:
                 wandb.agent(ii.sweep_id, count=1)
-        
         
         if submit and ii.n_job > 0 and ii._n_job_running < cap:
             n, ii.n_job  = ii.n_job, 0
             ii.log({'slurm': ii.sbatch + '\n' + ii._run_cmd})
             for sub in range(1, n+1):
                 Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
+                sleep(sweep*3)
             sys.exit(f'Submitted {sub} to slurm')
 
         if submit and ii.n_job < 0: 
@@ -207,7 +209,7 @@ class Pyfig:
     
     @property
     def cmd(ii):
-        d = flat_dict(get_cls_dict(ii, sub_cls=True))
+        d = flat_dict(get_cls_dict(ii, sub_cls=True, ignore=['sweep',]))
         d = {k: v.tolist() if isinstance(v, np.ndarray) else v for k,v in d.items()}
         cmd_d = {str(k).replace(" ", ""): str(v).replace(" ", "") for k,v in d.items()}
         return ' '.join([f'--{k} {v}' for k,v in cmd_d.items() if v])
