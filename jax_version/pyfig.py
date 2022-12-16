@@ -185,14 +185,11 @@ class Pyfig:
                 steps = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v]
                 ii.n_job = reduce(steps) if len(steps)>1 else steps[0]
 
-            
             _git_commit_cmd = ['git commit -a -m "run_things"', 'git push origin main']
             _git_pull_cmd = ['git fetch --all', 'git reset --hard origin/main']
             
             run_cmds(_git_commit_cmd, cwd=ii.project_dir)
             run_cmds_server(ii.server, ii.user, _git_pull_cmd, ii.server_project_dir)
-            
-            
             run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.run_dir)
         
             print(f'Go to https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/runs/{ii.exp_id}')
