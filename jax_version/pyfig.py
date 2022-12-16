@@ -176,6 +176,8 @@ class Pyfig:
                     sweep   = ii.sweep.d, 
                     project = ii.project
                 )
+                ii.n_job = ii.sweep.n_sweep
+
             
             _git_commit_cmd = ['git commit -a -m "run_things"', 'git push origin main']
             _git_pull_cmd = ['git fetch --all', 'git reset --hard origin/main']
@@ -183,7 +185,7 @@ class Pyfig:
             run_cmds(_git_commit_cmd, cwd=ii.project_dir)
             run_cmds_server(ii.server, ii.user, _git_pull_cmd, ii.server_project_dir)
             
-            ii.n_job = max(1, ii.sweep.n_sweep*sweep)
+            
             run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.run_dir)
         
             print(f'Go to https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/runs/{ii.exp_id}')
