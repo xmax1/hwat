@@ -71,7 +71,6 @@ class Pyfig:
     class sweep(Sub):
         name            = 'sweep'
         method          = 'grid'
-        project         = 'hwat'
         # name            = 'tr/e_\mu'
         # metrics       = dict(goal='minimize', )
         parameters = dict(
@@ -138,15 +137,24 @@ class Pyfig:
         """             |        submit         |       
                         |   True    |   False   | 
                         -------------------------
-                    <0  |   server  |   init    |
-        n_job       =0  |   init    |   NA      |
-                    >0  |   slurm   |   NA      | """
+                    <0  |   server/init  |   init    |
+        n_job       =0  |   init         |   NA      |
+                    >0  |   slurm        |   NA      | """
         
         run_init_local = (not submit) and (ii.n_job < 0)
         run_init_cluster = submit and (ii.n_job == 0)
+        
+        # sweep local: init -> sweep 
+        # sweep server: slurm 
+        # sweep cluster: init -> agent
+        
+        # run local: init
+        
+        
         if run_init_local or run_init_cluster:
             if ii.sweep_id:
-                wandb.agent(ii.sweep_id, count=1)
+                wandb.init()
+                wandb.agent(sweep_id=ii.sweep_id, count=1)
             else:
                 ii.wandb_c.run = wandb.init(
                     entity      = ii.wandb_c.entity,  # team name is hwat
@@ -156,8 +164,7 @@ class Pyfig:
                     mode        = wandb_mode,
                     settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
                     id          = ii.exp_id
-                )
-            
+                )    
         
         if submit and ii.n_job > 0 and ii._n_job_running < cap:
             n, ii.n_job  = ii.n_job, 0
@@ -173,7 +180,7 @@ class Pyfig:
                 ii.sweep_id = wandb.sweep(
                     # program = ii.run_dir / ii.run_name,
                     sweep   = ii.sweep.d, 
-                    project = ii.project
+                    # project = ii.project
                 )
                 steps = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v]
                 ii.n_job = reduce(steps) if len(steps)>1 else steps[0]
