@@ -127,19 +127,20 @@ class Pyfig:
     _useful = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
     
     def __init__(ii, wandb_mode='online', submit=False, run_sweep=False, debug=False, arg:dict={}, cap=3, **kw): 
-        arg.update(dict(run_sweep=run_sweep, debug=debug, wandb_mode=wandb_mode, submit=submit, cap=cap))
-        sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d))
-        arg = arg | sys_arg
-        debug_mode(arg.get('debug', False))
-        debug_pr(sys_arg)
-        
+    
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
                 v = v(parent=ii)
                 setattr(ii, k, v)
         
+        arg.update(dict(run_sweep=run_sweep, debug=debug, wandb_mode=wandb_mode, submit=submit, cap=cap))
+        sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d))
+        arg = arg | sys_arg
+        debug_mode(arg.get('debug', False))
+        debug_pr(sys_arg)
         ii.merge(arg)
         mkdir(ii.exp_path)
+        
     
         """             |        submit         |       
                         |   True    |   False   | 
@@ -275,7 +276,6 @@ class Pyfig:
             for cls in [ii,] + list(ii._sub_cls.values()):
                 ref = get_cls_dict(cls,)
                 if k in ref:
-                    # print(v, ref[k], type(v), type(ref[k]))
                     v = type_me(v, ref[k])
                     try:
                         setattr(cls, k, copy(v))
