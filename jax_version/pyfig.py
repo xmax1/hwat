@@ -182,7 +182,7 @@ class Pyfig:
 
         if submit and ii.n_job < 0: 
             print('here')
-            if run_sweep:
+            if ii.run_sweep:
                 ii.sweep_id_code = wandb.sweep(
                     sweep   = ii.sweep.d | dict(name=ii.wandb_c.name), 
                     project = ii.project,
