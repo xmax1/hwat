@@ -13,6 +13,7 @@ from ast import literal_eval
 import numpy as np
 import os
 import jax
+import pprint
 
 import numpy as np
 from copy import copy
@@ -61,7 +62,7 @@ def debug(on=False):
     else:
         os.environ['debug'] = ''
 
-def wpr(d:dict):
+def debug_pr(d:dict):
     if os.environ.get('debug') == 'debug':
         for k,v in d.items():
             typ = type(v) 
@@ -184,7 +185,7 @@ def cmd_to_dict(cmd:str|list, ref:dict, delim:str=' --', d=None):
     # all flags double dash because of negative numbers duh """
     cmd = ' ' + (' '.join(cmd) if isinstance(cmd, list) else cmd)  # add initial space in case single flag
     cmd = [x.strip().lstrip('--') for x in cmd.split(delim)][1:]
-    cmd = [x.split(' ', maxsplit=1) for x in cmd]
+    cmd = [x.split('=', maxsplit=1) if '=' in x else x.split('=', maxsplit=1) for x in cmd]
     [x.append('True') for x in cmd if len(x)==1]
     
     d = dict()
@@ -194,7 +195,7 @@ def cmd_to_dict(cmd:str|list, ref:dict, delim:str=' --', d=None):
         v_ref = ref.get(k, None)
         if v_ref is None:
             print(f'{k} not in ref')
-        print(k, v, v_ref)
+        debug_pr(dict(k=v))
         d[k] = type_me(v, v_ref, is_cmd_item=True)
     return d
     
