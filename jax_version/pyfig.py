@@ -15,7 +15,7 @@ from time import sleep
 
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum
 from utils import flat_dict, mkdir, cmd_to_dict, dict_to_wandb, iterate_n_dir
-from utils import type_me
+from utils import type_me, debug_pr
 from utils import Sub
 
 from _user import user
@@ -101,8 +101,7 @@ class Pyfig:
     server_project_dir: Path    = property(lambda _: _.project_dir.relative_to(_._home))
     exp_id:             str     = property(lambda _: _.run_id + _.sweep_id_code)
     iterate_state:      bool    = True
-    exp_path:           Path    = \
-        property(lambda _: iterate_n_dir(Path('exp')/_.exp_name, _._single_use_switch('iterate_state'))/_.exp_id)
+        
     sweep_id:       str         = property(lambda _: (f'{_.wandb_c.entity}/{_.project}/{_.sweep_id_code}')*bool({_.sweep_id_code}))
         
     n_device:           int     = property(lambda _: count_gpu())
@@ -113,18 +112,19 @@ class Pyfig:
     git_branch:         str     = 'main'        
     env:                str     = 'dex'                 # CONDA ENV
     
-    n_job:              int  = -1                  # #n_job-state-flow
-    _run_cmd:           str  = property(lambda _: f'python {str(_.run_name)} {_.cmd*(~bool(_.run_sweep)) + _.wandb_cmd*bool(_.run_sweep)}')
+    n_job:              int     = -1                  # #n_job-state-flow
     
-    _git_commit_cmd:    list = ['git commit -a -m "run_things"', 'git push origin main']
-    _git_pull_cmd:      list = ['git fetch --all', 'git reset --hard origin/main']
-    _sys_arg:           list = sys.argv[1:]
-    _wandb_ignore:      list = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + ['sbatch', 'sweep']
+    _exp_path:          str     = ''
+    _run_cmd:           str     = property(lambda _: f'python {str(_.run_name)} {_.cmd*(~bool(_.run_sweep)) + _.wandb_cmd*bool(_.run_sweep)}')
+    _git_commit_cmd:    list    = ['git commit -a -m "run_things"', 'git push origin main']
+    _git_pull_cmd:      list    = ['git fetch --all', 'git reset --hard origin/main']
+    _sys_arg:           list    = sys.argv[1:]
+    _wandb_ignore:      list    = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + ['sbatch', 'sweep']
     
     _useful = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
     
-    def __init__(ii, arg:dict={}, cap=3, wandb_mode='online', submit=False, run_sweep=False): 
-        arg.update(dict(run_sweep=run_sweep))
+    def __init__(ii, wandb_mode='online', submit=False, run_sweep=False, debug=False, arg:dict={}, cap=3, **kw): 
+        arg.update(dict(run_sweep=run_sweep, debug=debug, wandb_mode=wandb_mode, submit=submit, cap=cap))
         
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
@@ -132,13 +132,13 @@ class Pyfig:
                 setattr(ii, k, v)
         
         sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d))
-        print(sys_arg)
+        debug_pr(sys_arg)
 
         arg = arg | sys_arg
         ii.merge(arg)
-        
-        pprint.pprint(ii.d)
         ii.log(ii.d)
+        
+        
         
         """             |        submit         |       
                         |   True    |   False   | 
@@ -153,9 +153,6 @@ class Pyfig:
         # sweep local: init -> sweep 
         # sweep server: slurm 
         # sweep cluster: init -> agent
-        
-        # run local: init
-        
         if run_init_local or run_init_cluster:
             ii.log(dict(init=dict(sweep_id=ii.sweep_id)), create=True)
             if ii.sweep_id:
@@ -210,7 +207,15 @@ class Pyfig:
         state = getattr(ii, k)
         setattr(ii, k, False)
         return state
-        
+    
+    @property
+    def exp_path(ii,):
+        return ii._exp_path or iterate_n_dir(Path('exp')/ii.exp_name, ii._single_use_switch('iterate_state'))/ii.exp_id
+    
+    # @exp_path.setter
+    # def exp_path(ii, exp_path):
+    #     ii._exp_path = exp_path
+    
     @property
     def sbatch(ii,):
         s = f"""\
@@ -311,7 +316,6 @@ def get_cls_dict(
         ignore:list=None
     ) -> dict:
         ignore = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + (ignore or [])
-        print('ignore: ', ignore)
         items = []
         for k, v_cls in cls.__class__.__dict__.items():
             
@@ -341,28 +345,6 @@ def get_cls_dict(
 
 
 
-
-def cls_filter(
-    cls, k: str, v, 
-    ref:list|dict=None,
-    is_fn=False, 
-    is_sub=False, 
-    is_prop=False, 
-    is_hidn=False,
-    ignore:list=None,
-    keep = False,
-):  
-    
-    is_builtin = k.startswith('__')
-    should_ignore = k in (ignore if ignore else [])
-    not_in_ref = k in (ref if ref else [k])
-    
-    if not (is_builtin or should_ignore or not_in_ref):
-        keep |= is_hidn and k.startswith('_')
-        keep |= is_sub and isinstance(v, Sub)
-        keep |= is_fn and isinstance(v, partial)
-        keep |= is_prop and isinstance(cls.__class__.__dict__[k], property)
-    return keep
 
 # Data Interface
 
@@ -418,4 +400,31 @@ def _debug_print(ii, on=False, cls=True):
             if cls:
                 [print(k,v) for k,v in vars(ii.__class__).items() if not k.startswith('_')]
 
+
+
+
+
+def cls_filter(
+    cls, k: str, v, 
+    ref:list|dict=None,
+    is_fn=False, 
+    is_sub=False, 
+    is_prop=False, 
+    is_hidn=False,
+    ignore:list=None,
+    keep = False,
+):  
+    
+    is_builtin = k.startswith('__')
+    should_ignore = k in (ignore if ignore else [])
+    not_in_ref = k in (ref if ref else [k])
+    
+    if not (is_builtin or should_ignore or not_in_ref):
+        keep |= is_hidn and k.startswith('_')
+        keep |= is_sub and isinstance(v, Sub)
+        keep |= is_fn and isinstance(v, partial)
+        keep |= is_prop and isinstance(cls.__class__.__dict__[k], property)
+    return keep
+    
+    
 """
