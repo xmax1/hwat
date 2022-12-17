@@ -15,7 +15,7 @@ from time import sleep
 
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum
 from utils import flat_dict, mkdir, cmd_to_dict, dict_to_wandb, iterate_n_dir
-from utils import type_me, debug_pr
+from utils import type_me, debug_pr, debug_mode
 from utils import Sub
 
 from _user import user
@@ -113,7 +113,7 @@ class Pyfig:
     env:                str     = 'dex'                 # CONDA ENV
     
     n_job:              int     = -1                  # #n_job-state-flow
-    
+    debug:              bool    = False
     _exp_path:          str     = ''
     _run_cmd:           str     = property(lambda _: f'python {str(_.run_name)} {_.cmd*(~bool(_.run_sweep)) + _.wandb_cmd*bool(_.run_sweep)}')
     _git_commit_cmd:    list    = ['git commit -a -m "run_things"', 'git push origin main']
@@ -125,21 +125,19 @@ class Pyfig:
     
     def __init__(ii, wandb_mode='online', submit=False, run_sweep=False, debug=False, arg:dict={}, cap=3, **kw): 
         arg.update(dict(run_sweep=run_sweep, debug=debug, wandb_mode=wandb_mode, submit=submit, cap=cap))
+        sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d))
+        arg = arg | sys_arg
+        debug_mode(arg.get('debug', False))
+        debug_pr(sys_arg)
         
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
                 v = v(parent=ii)
                 setattr(ii, k, v)
         
-        sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d))
-        debug_pr(sys_arg)
-
-        arg = arg | sys_arg
         ii.merge(arg)
         ii.log(ii.d)
-        
-        
-        
+    
         """             |        submit         |       
                         |   True    |   False   | 
                         -------------------------

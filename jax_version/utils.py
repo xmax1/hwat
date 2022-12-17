@@ -56,7 +56,7 @@ def collect_stats(k, v, new_d, p='tr', suf='', sep='/', sep_long='-'):
 
 ### debug things
 
-def debug(on=False):
+def debug_mode(on=False):
     if on:
         os.environ['debug'] = 'debug'
     else:
