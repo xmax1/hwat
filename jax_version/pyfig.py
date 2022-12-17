@@ -25,17 +25,17 @@ docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 class Pyfig:
     # SUB CLASSES CANNOT CALL EACH OTHER
 
-    run_name:       Path    = 'run.py'
-    
-    exp_name:       str     = 'demo-final'
-    sweep_id_code:  str     = ''
-    run_id:         str     = gen_alphanum(n=7)
-    
-    seed:           int     = 808017424 # grr
-    dtype:          str     = 'float32'
-    n_step:         int     = 200
-    log_metric_step:int     = 100
-    log_state_step: int     = 10          
+    run_name:       Path        = 'run.py'
+        
+    exp_name:       str         = 'demo-final'
+    sweep_id_code:  str         = ''
+    run_id:         str         = gen_alphanum(n=7)
+        
+    seed:           int         = 808017424 # grr
+    dtype:          str         = 'float32'
+    n_step:         int         = 200
+    log_metric_step:int         = 100
+    log_state_step: int         = 10          
 	
     class data(Sub):
         """
@@ -139,7 +139,6 @@ class Pyfig:
                 setattr(ii, k, v)
         
         ii.merge(arg)
-        ii.log(ii.d)
     
         """             |        submit         |       
                         |   True    |   False   | 
@@ -298,11 +297,11 @@ class Pyfig:
         assert path.suffix == 'pk'
         data_save_load(path)
         
-    def log(ii, info: dict, create=False, log_name='log.out'):
+    def log(ii, info: dict, create=False, log_name='log.tmp'):
         mkdir(ii.exp_path)
         mode = 'w' if create else 'a'
         info = pprint.pformat(info)
-        for p in ['log.tmp', ii.exp_path/log_name]:
+        for p in [log_name, ii.exp_path/log_name]:
             with open(p, mode) as f:
                 f.writelines(info)
 

@@ -185,7 +185,7 @@ def cmd_to_dict(cmd:str|list, ref:dict, delim:str=' --', d=None):
     # all flags double dash because of negative numbers duh """
     cmd = ' ' + (' '.join(cmd) if isinstance(cmd, list) else cmd)  # add initial space in case single flag
     cmd = [x.strip().lstrip('--') for x in cmd.split(delim)][1:]
-    cmd = [x.split('=', maxsplit=1) if '=' in x else x.split('=', maxsplit=1) for x in cmd]
+    cmd = [x.split('=', maxsplit=1) if '=' in x else x.split(' ', maxsplit=1) for x in cmd]
     [x.append('True') for x in cmd if len(x)==1]
     
     d = dict()
