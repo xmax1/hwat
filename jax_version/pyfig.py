@@ -216,7 +216,7 @@ class Pyfig:
         return state
    
     def set_path(ii,):
-        if not Path('').name:
+        if not ii.exp_path.name:
             ii.exp_path = iterate_n_dir(Path('exp')/ii.exp_name, ii._single_use_switch('iterate_state'))/ii.exp_id
         
     @property
