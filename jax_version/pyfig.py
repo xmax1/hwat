@@ -177,7 +177,7 @@ class Pyfig:
             ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd, n_job=ii.n_job)), create=True, log_name='slurm_init.log')
             for sub in range(1, n+1):
                 Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
-                sleep(run_sweep*3)
+                sleep(ii.run_sweep*3)
             sys.exit(f'Submitted {sub} to slurm')
 
         if submit and ii.n_job < 0: 
@@ -191,7 +191,7 @@ class Pyfig:
                 n_step_grid = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v]
                 print(n_step_grid)
                 
-            ii.n_job = reduce(lambda a,b: a*b, n_step_grid if run_sweep else [1])
+            ii.n_job = reduce(lambda a,b: a*b, n_step_grid if ii.run_sweep else [1])
             
             print(ii.n_job)
             ii.log(dict(server_init=dict(run_cmd=ii._run_cmd, n_job=ii.n_job)), create=True, log_name='server_init.log')
