@@ -122,7 +122,7 @@ class Pyfig:
     
 
     _run_single_cmd:    str     = property(lambda _: f'python {str(_.run_name)} {_.cmd}')
-    _run_sweep_cmd:     str     = property(lambda _: f'wandb agent {_.sweep_id} {_.wandb_cmd}')
+    _run_sweep_cmd:     str     = property(lambda _: f'wandb agent {_.sweep_id}')
     _run_cmd:           str     = property(lambda _: _._run_sweep_cmd*_.run_sweep or _._run_single_cmd)
     
     
