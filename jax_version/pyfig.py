@@ -125,7 +125,6 @@ class Pyfig:
     _run_sweep_cmd:     str     = property(lambda _: f'wandb agent {_.sweep_id}')
     _run_cmd:           str     = property(lambda _: _._run_sweep_cmd*_.run_sweep or _._run_single_cmd)
     
-    
     _git_commit_cmd:    list    = ['git commit -a -m "run_things"', 'git push origin main']
     _git_pull_cmd:      list    = ['git fetch --all', 'git reset --hard origin/main']
     _sys_arg:           list    = sys.argv[1:]
@@ -162,6 +161,9 @@ class Pyfig:
         # sweep local: init -> sweep 
         # sweep server: slurm 
         # sweep cluster: init -> agent
+        
+        # wandb.agent(sweep_id, function=train) YOURE A FUCKING IDIOT go back to ashbourne, marryt someone you don't love and die slowly <3
+     
         if run_init_local or run_init_cluster:
             ii.log(dict(init=dict(sweep_id=ii.sweep_id)), create=True)
             run = wandb.init(
@@ -189,8 +191,10 @@ class Pyfig:
             ii.target_exp_path = ii.exp_path
             if ii.run_sweep:
                 ii.n_job = 0
+                d = dict(name=ii.wandb_c.name, program=ii._run_sweep_cmd.split(' ', maxsplit=1)[1])
+                print(ii._run_sweep_cmd.split(' ', maxsplit=1)[1])
                 ii.sweep_id_code = wandb.sweep(
-                    sweep   = ii.sweep.d | dict(name=ii.wandb_c.name, program=ii._run_sweep_cmd.split(' ', maxsplit=1)[1]), 
+                    sweep   = ii.sweep.d | d, 
                     entity  = ii.wandb_c.entity,
                     project = ii.project,
                 )

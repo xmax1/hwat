@@ -1,3 +1,6 @@
+from pyfig import Pyfig
+import numpy as np
+
 ### fancy logging variables, philosophically reminding us of the goal ###
 fancy = dict(
 		pe		= r'$V(X)',    				
@@ -9,9 +12,6 @@ fancy = dict(
 )
 
 ### pyfig ###
-from pyfig import Pyfig
-import numpy as np
-
 arg = dict(
 	charge = 0,
 	spin  = 0,
@@ -28,6 +28,10 @@ arg = dict(
 )
 
 c = Pyfig(wandb_mode='online', arg=arg, submit=True, run_sweep=False)
+
+# 	out = main(c)
+
+# def main(c:Pyfig):
 
 n_device = c.n_device
 print(f'🤖 {n_device} GPUs available')
@@ -119,9 +123,9 @@ for step in range(1, c.n_step+1):
 	if not (step % c.log_metric_step):
 		metrix = compute_metrix(v_tr)
 		wandb.log({'tr/step':step, **metrix})
-  
-  
-  
+
+
+
 """ live plotting in another notebook """
 """ copy lines and run in analysis while the exp is live """
 # api = wandb.Api()
@@ -129,4 +133,3 @@ for step in range(1, c.n_step+1):
 # c = run.config
 # h = run.history()
 # s = run.summary
-
