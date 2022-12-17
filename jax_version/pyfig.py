@@ -125,6 +125,7 @@ class Pyfig:
     _useful = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
     
     def __init__(ii, arg:dict={}, cap=3, wandb_mode='online', submit=False, run_sweep=False): 
+        arg.update(dict(run_sweep=run_sweep))
         
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
@@ -135,7 +136,6 @@ class Pyfig:
         print(sys_arg)
 
         arg = arg | sys_arg
-        run_sweep = arg.pop('run_sweep', False)
         ii.merge(arg)
         
         """             |        submit         |       
