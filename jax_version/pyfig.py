@@ -136,7 +136,7 @@ class Pyfig:
         arg.update(dict(run_sweep=run_sweep, debug=debug, wandb_mode=wandb_mode, submit=submit, cap=cap))
         sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d))
         arg = arg | sys_arg
-        debug_mode(arg.get('debug', False))
+        debug_mode(arg.get('debug', False))  # TURN DDEUG OFFF TENSORFLOW WILL DESTROY YOU
         debug_pr(sys_arg)
         ii.merge(arg)
         mkdir(ii.exp_path)

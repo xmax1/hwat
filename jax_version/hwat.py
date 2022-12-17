@@ -5,7 +5,6 @@ from jax import random as rnd
 from typing import Any
 import optax
 from flax.training.train_state import TrainState
-from utils import wpr
 from typing import Callable
 from flax import linen as nn
 from jax import vmap, jit, pmap
