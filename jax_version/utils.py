@@ -69,8 +69,12 @@ def debug_pr(d:dict):
             has_shape = hasattr(v, 'shape')
             shape = v.shape if has_shape else None
             dtype = v.dtype if hasattr(v, 'dtype') else None
-            mean = jnp.mean(v) if has_shape else v
-            std = jnp.std(v) if has_shape else None
+            try:
+                mean = jnp.mean(v) if has_shape else v
+                std = jnp.std(v) if has_shape else None
+            except:
+                mean = v
+                std = None
             print(k, f'\t mean={mean} \t std={std} \t shape={shape} \t dtype={dtype}') # \t type={typ}
 
 ### count things
@@ -172,9 +176,10 @@ def type_me(v, v_ref=None, is_cmd_item=False):
         if isinstance(v, list):
             v = np.asarray(v)
         
-        if isinstance(v, (np.ndarray, np.generic) ):
+        if isinstance(v, (np.ndarray, np.generic)):
+            if type(v.flatten()[0]) == str:
+                return v.tolist()
             return v
-            
             
         print(type_ref)
         return type_ref(v)
