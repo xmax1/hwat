@@ -176,6 +176,8 @@ class Pyfig:
             ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd, n_job=ii.n_job)), create=True, log_name='slurm_init.log')
             for sub in range(1, n+1):
                 Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
+                print('sub')
+                sleep(1)
             sys.exit(f'Submitted {sub} to slurm')
 
         if submit and ii.n_job < 0: 
