@@ -117,8 +117,8 @@ class Pyfig:
     wandb_mode: str = 'disabled'
     submit: bool = False
     cap: int = 40
+    
     target_exp_path:    str     = ''
-    exp_path:           str     = property(lambda _: iterate_n_dir(Path('exp')/_.exp_name, _._single_use_switch('iterate_state'))/_.exp_id)
     _run_cmd:           str     = property(lambda _: f'python {str(_.run_name)} {_.cmd*(~bool(_.run_sweep)) + _.wandb_cmd*bool(_.run_sweep)}')
     _git_commit_cmd:    list    = ['git commit -a -m "run_things"', 'git push origin main']
     _git_pull_cmd:      list    = ['git fetch --all', 'git reset --hard origin/main']
@@ -184,8 +184,8 @@ class Pyfig:
             if ii.run_sweep:
                 ii.sweep_id_code = wandb.sweep(
                     sweep   = ii.sweep.d | dict(name=ii.wandb_c.name), 
-                    project = ii.project,
                     entity  = ii.wandb_c.entity,
+                    project = ii.project,
                 )
                 n_step_grid = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v]
                 print(n_step_grid)
@@ -209,6 +209,11 @@ class Pyfig:
         setattr(ii, k, False)
         return state
    
+    @property
+    def exp_path(ii,):
+        if not ii.target_exp_path:
+            ii.target_exp_path = iterate_n_dir(Path('exp')/ii.exp_name, ii._single_use_switch('iterate_state'))/ii.exp_id
+        return ii.target_exp_path
     @property
     def sbatch(ii,):
         s = f"""\
