@@ -106,7 +106,7 @@ class Pyfig:
     sweep_id:       str         = property(lambda _: (f'{_.wandb_c.entity}/{_.project}/{_.sweep_id_code}')*bool({_.sweep_id_code}))
         
     n_device:           int     = property(lambda _: count_gpu())
-
+    run_sweep:          bool    = False
     user:               str     = user             # SERVER
     server:             str     = 'svol.fysik.dtu.dk'   # SERVER
     git_remote:         str     = 'origin'      
