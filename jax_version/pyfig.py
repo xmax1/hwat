@@ -310,36 +310,39 @@ def get_cls_dict(
         ignore:list=None,
         add:list=None
     ) -> dict:
+    # ref > ignore > add
         ignore = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + (ignore or [])
-        add = add or []
-        ref = ref or []
         
         items = []
         for k, v_cls in cls.__class__.__dict__.items():
             
-            is_builtin = k.startswith('__')
-            should_ignore = k in ignore
-            not_in_ref = not (k in ref)
+            keep = k in ref if ref else True
+            keep |= k in add if add else False
+            keep = False if (k in ignore) else keep
             
-            if (is_builtin or should_ignore or not_in_ref):
-                continue
-                
-            if (not hidn) and k.startswith('_') and not (k in add):
-                continue
-                
-            if (not fn) and isinstance(v_cls, partial) and not (k in add):
-                continue
+            if keep:
+                if not ref:
+                    if k.startswith('__'):
+                        continue
+                        
+                    if (not hidn) and k.startswith('_'):
+                        continue
+                        
+                    if (not fn) and isinstance(v_cls, partial):
+                        continue
+                    
+                    if (not prop) and isinstance(v_cls, property):
+                        continue
             
-            if (not prop) and isinstance(v_cls, property) and not (k in add):
-                continue
-            
-            v = getattr(cls, k)
-            
-            if (sub_cls or (k in ref))and isinstance(v, Sub):
-                v = get_cls_dict(v, ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore)
+                    v = getattr(cls, k)
+                    if (not sub_cls) and isinstance(v, Sub):
+                        continue
                 
-            items.append([k, v])
-                
+                v = getattr(cls, k)
+                if isinstance(v, Sub):
+                    v = get_cls_dict(v, ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore)
+                items.append([k, v])     
+                               
         return dict(items)
 
 
