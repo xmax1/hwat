@@ -117,9 +117,7 @@ class Pyfig:
     wandb_mode: str = 'disabled'
     submit: bool = False
     cap: int = 40
-    
-    target_exp_path:    str     = ''
-    
+    exp_path: str = Path('')
 
     _run_single_cmd:    str     = property(lambda _: f'python {str(_.run_name)} {_.cmd}')
     _run_sweep_cmd:     str     = property(lambda _: f'wandb agent {_.sweep_id}')
@@ -145,6 +143,7 @@ class Pyfig:
         debug_mode(arg.get('debug', False))  # TURN DDEUG OFFF TENSORFLOW WILL DESTROY YOU
         debug_pr(sys_arg)
         ii.merge(arg)
+        ii.set_path()
         mkdir(ii.exp_path)
         
     
@@ -179,7 +178,6 @@ class Pyfig:
             #     wandb.agent(sweep_id=ii.sweep_id, count=1)
                 
         if submit and ii.n_job > 0 and ii._n_job_running < cap:
-            ii.target_exp_path = ii.exp_path
             n, ii.n_job  = ii.n_job, 0
             ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd, n_job=ii.n_job)), create=True, log_name='slurm_init.log')
             for sub in range(1, n+1):
@@ -188,11 +186,10 @@ class Pyfig:
             sys.exit(f'Submitted {sub} to slurm')
 
         if submit and ii.n_job < 0: 
-            ii.target_exp_path = ii.exp_path
             if ii.run_sweep:
                 ii.n_job = 0
                 d = dict(name=ii.wandb_c.name, program=ii._run_single_cmd.split(' ', maxsplit=1)[1])
-                print(ii._run_sweep_cmd.split(' ', maxsplit=1)[1])
+                print(ii._run_single_cmd.split(' ', maxsplit=1)[1])
                 ii.sweep_id_code = wandb.sweep(
                     sweep   = ii.sweep.d | d, 
                     entity  = ii.wandb_c.entity,
@@ -218,11 +215,10 @@ class Pyfig:
         setattr(ii, k, False)
         return state
    
-    @property
-    def exp_path(ii,):
-        if not ii.target_exp_path:
-            ii.target_exp_path = iterate_n_dir(Path('exp')/ii.exp_name, ii._single_use_switch('iterate_state'))/ii.exp_id
-        return ii.target_exp_path
+    def set_path(ii,):
+        if not Path('').name:
+            ii.exp_path = iterate_n_dir(Path('exp')/ii.exp_name, ii._single_use_switch('iterate_state'))/ii.exp_id
+        
     @property
     def sbatch(ii,):
         s = f"""\
