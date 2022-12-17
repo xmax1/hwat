@@ -181,6 +181,7 @@ class Pyfig:
             sys.exit(f'Submitted {sub} to slurm')
 
         if submit and ii.n_job < 0: 
+            print('here')
             if run_sweep:
                 ii.sweep_id_code = wandb.sweep(
                     sweep   = ii.sweep.d | dict(name=ii.wandb_c.name), 
@@ -188,13 +189,16 @@ class Pyfig:
                     entity  = ii.wandb_c.entity,
                 )
                 n_step_grid = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v]
+                print(n_step_grid)
                 
             ii.n_job = reduce(lambda a,b: a*b, n_step_grid if run_sweep else [1])
             
+            print(ii.n_job)
             ii.log(dict(server_init=dict(run_cmd=ii._run_cmd, n_job=ii.n_job)), create=True, log_name='server_init.log')
             
             run_cmds(ii._git_commit_cmd, cwd=ii.project_dir)
             run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)
+            print('here')
             run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.run_dir)
         
             print(f'Go to https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{ii.exp_id}')
@@ -231,6 +235,7 @@ class Pyfig:
     @property
     def wandb_cmd(ii):
         d = flat_dict(get_cls_dict(ii, sub_cls=True, ignore=['sweep',] + list(ii.sweep.parameters.keys())))
+        print(d)
         d = {k: v.tolist() if isinstance(v, np.ndarray) else v for k,v in d.items()}
         cmd_d = {str(k).replace(" ", ""): str(v).replace(" ", "") for k,v in d.items()}
         return ' '.join([f' --{k}={v}' for k,v in cmd_d.items() if v])
@@ -316,7 +321,7 @@ def get_cls_dict(
         ignore:list=None
     ) -> dict:
         ignore = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + (ignore or [])
-    
+        print('ignore: ', ignore)
         items = []
         for k, v_cls in cls.__class__.__dict__.items():
             
@@ -329,24 +334,19 @@ def get_cls_dict(
                 if (not hidn) and k.startswith('_'):
                     continue
                     
-                is_fn = (not fn) and isinstance(v_cls, partial)
-                if is_fn:
+                if (not fn) and isinstance(v_cls, partial):
                     continue
                 
-                is_prop = (not prop) and isinstance(v_cls, property)
-                if is_prop:
+                if (not prop) and isinstance(v_cls, property):
                     continue
                 
                 v = getattr(cls, k)
                 
-                if isinstance(v, Sub):
-                    if sub_cls:
-                        sub_d = get_cls_dict(v,
-                            ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore)
-                        items.append([k, sub_d])
-                    continue
+                if sub_cls and isinstance(v, Sub):
+                    v = get_cls_dict(v, ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore)
                 
                 items.append([k, v])
+                
         return dict(items)
 
 
