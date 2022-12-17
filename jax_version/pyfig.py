@@ -69,16 +69,13 @@ class Pyfig:
         terms_p_emb:    list    = ['rr', 'rr_len']
 
     class sweep(Sub):
-        name            = 'sweep'
+        name            = 'demo'
         method          = 'grid'
-        # name            = 'tr/e_\mu'
-        # metrics       = dict(goal='minimize', )
         parameters = dict(
             n_b  = {'values' : [16, 32, 64]},
         )
 
     class wandb_c(Sub):
-        run             = None
         job_type        = 'training'
         entity          = property(lambda _: _._p.project)
         name            = property(lambda _: _._p.exp_name)
@@ -118,6 +115,9 @@ class Pyfig:
     n_job:              int  = -1                  # #n_job-state-flow
     _run_cmd:           str  = property(lambda _: f'python {str(_.run_name)} \
                                             {_.cmd*(~bool(_.sweep_id_code)) + _.wandb_cmd*bool(_.sweep_id_code)}')
+    
+    _git_commit_cmd:    list = ['git commit -a -m "run_things"', 'git push origin main']
+    _git_pull_cmd:      list = ['git fetch --all', 'git reset --hard origin/main']
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + ['sbatch', 'sweep']
     
@@ -134,8 +134,6 @@ class Pyfig:
         arg = arg | sys_arg
         run_sweep = arg.pop('run_sweep', False)
         ii.merge(arg)
-        mkdir(ii.exp_path)
-        ii.log(ii.d, create=True)
         
         """             |        submit         |       
                         |   True    |   False   | 
@@ -154,11 +152,12 @@ class Pyfig:
         # run local: init
         
         if run_init_local or run_init_cluster:
+            ii.log(dict(init=dict(sweep_id=ii.sweep_id)), create=True)
             if ii.sweep_id:
-                # wandb.init()
+                wandb.init()
                 wandb.agent(sweep_id=ii.sweep_id, count=1)
             else:
-                ii.wandb_c.run = wandb.init(
+                run = wandb.init(
                     entity      = ii.wandb_c.entity,  # team name is hwat
                     project     = ii.project,         # sub project in team
                     dir         = ii.exp_path,
@@ -170,31 +169,27 @@ class Pyfig:
         
         if submit and ii.n_job > 0 and ii._n_job_running < cap:
             n, ii.n_job  = ii.n_job, 0
-            ii.log({'slurm': ii.sbatch + '\n' + ii._run_cmd})
+            ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd, n_job=ii.n_job)), create=True, log_name='slurm_init.log')
             for sub in range(1, n+1):
                 Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
                 sleep(run_sweep*3)
             sys.exit(f'Submitted {sub} to slurm')
 
         if submit and ii.n_job < 0: 
-            ii.n_job = 1
-            
             if run_sweep:
-                print(ii.sweep.d)
                 ii.sweep_id_code = wandb.sweep(
-                    # program = ii.run_dir / ii.run_name,
                     sweep   = ii.sweep.d | dict(name=ii.wandb_c.name), 
                     project = ii.project,
                     entity  = ii.wandb_c.entity,
                 )
                 n_step_grid = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v]
-                ii.n_job *= reduce(n_step_grid) if len(n_step_grid)>1 else n_step_grid[0]
-
-            _git_commit_cmd = ['git commit -a -m "run_things"', 'git push origin main']
-            _git_pull_cmd = ['git fetch --all', 'git reset --hard origin/main']
+                
+            ii.n_job = reduce(lambda a,b: a*b, n_step_grid if run_sweep else [1])
             
-            run_cmds(_git_commit_cmd, cwd=ii.project_dir)
-            run_cmds_server(ii.server, ii.user, _git_pull_cmd, ii.server_project_dir)
+            ii.log(dict(server_init=dict(run_cmd=ii._run_cmd, n_job=ii.n_job)), create=True, log_name='server_init.log')
+            
+            run_cmds(ii._git_commit_cmd, cwd=ii.project_dir)
+            run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)
             run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.run_dir)
         
             print(f'Go to https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/runs/{ii.exp_id}')
@@ -298,10 +293,11 @@ class Pyfig:
         assert path.suffix == 'pk'
         data_save_load(path)
         
-    def log(ii, info: dict, create=False):
+    def log(ii, info: dict, create=False, log_name='log.out'):
+        mkdir(ii.exp_path)
         mode = 'w' if create else 'a'
         info = pprint.pformat(info)
-        for p in ['log.tmp', ii.exp_path/'log.out']:
+        for p in ['log.tmp', ii.exp_path/log_name]:
             with open(p, mode) as f:
                 f.writelines(info)
 
