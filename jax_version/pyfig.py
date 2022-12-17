@@ -119,7 +119,13 @@ class Pyfig:
     cap: int = 40
     
     target_exp_path:    str     = ''
-    _run_cmd:           str     = property(lambda _: f'python {str(_.run_name)} {_.cmd*(~bool(_.run_sweep)) + _.wandb_cmd*bool(_.run_sweep)}')
+    
+
+    _run_single_cmd:    str     = property(lambda _: f'python {str(_.run_name)} {_.cmd}')
+    _run_sweep_cmd:     str     = property(lambda _: f'wandb agent {_.sweep_id} {_.wandb_cmd}')
+    _run_cmd:           str     = property(lambda _: _._run_sweep_cmd*_.run_sweep or _._run_single_cmd)
+    
+    
     _git_commit_cmd:    list    = ['git commit -a -m "run_things"', 'git push origin main']
     _git_pull_cmd:      list    = ['git fetch --all', 'git reset --hard origin/main']
     _sys_arg:           list    = sys.argv[1:]
@@ -167,8 +173,8 @@ class Pyfig:
                     settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
                     id          = ii.exp_id
                 )    
-            if ii.sweep_id:
-                wandb.agent(sweep_id=ii.sweep_id, count=1)
+            # if ii.sweep_id:
+            #     wandb.agent(sweep_id=ii.sweep_id, count=1)
                 
         if submit and ii.n_job > 0 and ii._n_job_running < cap:
             ii.target_exp_path = ii.exp_path
@@ -183,7 +189,7 @@ class Pyfig:
             ii.target_exp_path = ii.exp_path
             if ii.run_sweep:
                 ii.sweep_id_code = wandb.sweep(
-                    sweep   = ii.sweep.d | dict(name=ii.wandb_c.name), 
+                    sweep   = ii.sweep.d | dict(name=ii.wandb_c.name, program = ii.run_name), 
                     entity  = ii.wandb_c.entity,
                     project = ii.project,
                 )
@@ -193,10 +199,10 @@ class Pyfig:
             ii.n_job = reduce(lambda a,b: a*b, n_step_grid if ii.run_sweep else [1])
             
             
-            ii.log(dict(server_init=dict(run_cmd=ii._run_cmd, n_job=ii.n_job)), create=True, log_name='server_init.log')
+            ii.log(dict(server_init=dict(run_cmd=ii._run_single_cmd, n_job=ii.n_job)), create=True, log_name='server_init.log')
             run_cmds(ii._git_commit_cmd, cwd=ii.project_dir)
             run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)
-            run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.run_dir)
+            run_cmds_server(ii.server, ii.user, ii._run_single_cmd, ii.run_dir)
 
             folder = f'runs/{ii.exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id_code}'
             print(f'Go to https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{folder}')
