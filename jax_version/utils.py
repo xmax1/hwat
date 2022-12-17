@@ -227,6 +227,7 @@ def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path):
     # for res in out:
     #     for l in res: 
     #         print(l)
+    print('End Server Command')
     return out[0] if len(out) == 0 else out
 
     

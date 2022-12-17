@@ -28,8 +28,8 @@ class Pyfig:
     run_name:       Path    = 'run.py'
     
     exp_name:       str     = 'demo-final'
-    exp_id:         str     = gen_alphanum(n=7)
     sweep_id_code:  str     = ''
+    run_id:         str     = gen_alphanum(n=7)
     
     seed:           int     = 808017424 # grr
     dtype:          str     = 'float32'
@@ -99,9 +99,10 @@ class Pyfig:
     run_dir:            Path    = property(lambda _: Path(__file__).parent.relative_to(_._home))
     project_dir:        Path    = property(lambda _: (_._home / 'projects' / _.project))
     server_project_dir: Path    = property(lambda _: _.project_dir.relative_to(_._home))
+    exp_id:             str     = property(lambda _: _.run_id + _.sweep_id_code)
     iterate_state:      bool    = True
     exp_path:           Path    = \
-        property(lambda _: iterate_n_dir(Path('exp')/_.exp_name, _._single_use_switch('iterate_state'))/(_.exp_id+_.sweep_id_code))
+        property(lambda _: iterate_n_dir(Path('exp')/_.exp_name, _._single_use_switch('iterate_state'))/_.exp_id)
     sweep_id:       str         = property(lambda _: (f'{_.wandb_c.entity}/{_.project}/{_.sweep_id_code}')*bool({_.sweep_id_code}))
         
     n_device:           int     = property(lambda _: count_gpu())
@@ -120,6 +121,8 @@ class Pyfig:
     _git_pull_cmd:      list = ['git fetch --all', 'git reset --hard origin/main']
     _sys_arg:           list = sys.argv[1:]
     _wandb_ignore:      list = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + ['sbatch', 'sweep']
+    
+    _useful = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
     
     def __init__(ii, arg:dict={}, cap=3, wandb_mode='online', submit=False, run_sweep=False): 
         
@@ -192,7 +195,7 @@ class Pyfig:
             run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)
             run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.run_dir)
         
-            print(f'Go to https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/runs/{ii.exp_id}')
+            print(f'Go to https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{ii.exp_id}')
             sys.exit(f'Submitted {ii.n_job} to server')
     
     def _single_use_switch(ii, k):
