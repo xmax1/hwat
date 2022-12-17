@@ -114,6 +114,9 @@ class Pyfig:
     
     n_job:              int     = -1                  # #n_job-state-flow
     debug:              bool    = False
+    wandb_mode: str = 'disabled'
+    submit: bool = False
+    cap: int = 40
     _exp_path:          str     = ''
     _run_cmd:           str     = property(lambda _: f'python {str(_.run_name)} {_.cmd*(~bool(_.run_sweep)) + _.wandb_cmd*bool(_.run_sweep)}')
     _git_commit_cmd:    list    = ['git commit -a -m "run_things"', 'git push origin main']
@@ -195,8 +198,9 @@ class Pyfig:
             run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)
             print('here')
             run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.run_dir)
-        
-            print(f'Go to https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{ii.exp_id}')
+
+            folder = f'runs/{ii.exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id_code}'
+            print(f'Go to https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{folder}')
             sys.exit(f'Submitted {ii.n_job} to server')
     
     def _single_use_switch(ii, k):
