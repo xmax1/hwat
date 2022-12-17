@@ -102,7 +102,9 @@ class Pyfig:
     run_dir:            Path    = property(lambda _: Path(__file__).parent.relative_to(_._home))
     project_dir:        Path    = property(lambda _: (_._home / 'projects' / _.project))
     server_project_dir: Path    = property(lambda _: _.project_dir.relative_to(_._home))
-    exp_path:           Path    = property(lambda _: iterate_n_dir(Path('exp')/_.exp_name, True)/(_.exp_id+_.sweep_id_code))
+    iterate_state:      bool    = True
+    exp_path:           Path    = \
+        property(lambda _: iterate_n_dir(Path('exp')/_.exp_name, _._single_use_switch('iterate_state'))/(_.exp_id+_.sweep_id_code))
     sweep_id:       str         = property(lambda _: (f'{_.wandb_c.entity}/{_.project}/{_.sweep_id_code}')*bool({_.sweep_id_code}))
         
     n_device:           int     = property(lambda _: count_gpu())
@@ -133,8 +135,6 @@ class Pyfig:
         run_sweep = arg.pop('run_sweep', False)
         ii.merge(arg)
         mkdir(ii.exp_path)
-        
-        
         ii.log(ii.d, create=True)
         
         """             |        submit         |       
@@ -200,6 +200,13 @@ class Pyfig:
             print(f'Go to https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/runs/{ii.exp_id}')
             sys.exit(f'Submitted {ii.n_job} to server')
     
+    def _single_use_switch(ii, k):
+        """ if True, turn False, return True
+        if False, keep False, return False """
+        state = getattr(ii, k)
+        setattr(ii, k, False)
+        return state
+        
     @property
     def sbatch(ii,):
         s = f"""\

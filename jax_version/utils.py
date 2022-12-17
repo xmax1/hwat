@@ -95,17 +95,14 @@ def gen_alphanum(n: int = 7, test=False):
     name = ''.join([random.choice(characters) for _ in range(n)])
     return name
 
-def iterate_n_dir(folder: Path, iter_exp_dir, n_max=100):
-    if re.match(folder.name, '-[0-9]*'):
-        folder = folder.parent / folder.name.split('-')[0]
-    if iter_exp_dir and folder.exists():
-        for i in range(n_max+1):
-            _folder = add_to_Path(folder, f'-{i}')
-            if not _folder.exists():
-                break
-            if n_max == i:
-                sys.exit('Too many folders')
-        folder = add_to_Path(_folder, f'-0')
+def iterate_n_dir(folder: Path, iterate_state, n_max=1000):
+    if iterate_state:
+        if re.match(folder.name, '-[0-9]*'):
+            for i in range(n_max+1):
+                folder = folder.parent / folder.name.split('-')[0]
+                folder = add_to_Path(folder, f'-{i}')
+                if not folder.exists():
+                    break
     return folder
 
 ### do things
