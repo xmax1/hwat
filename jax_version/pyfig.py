@@ -190,7 +190,7 @@ class Pyfig:
             if ii.run_sweep:
                 ii.n_job = 0
                 ii.sweep_id_code = wandb.sweep(
-                    sweep   = ii.sweep.d | dict(name=ii.wandb_c.name, program = ii.run_name, args=ii._run_single_cmd), 
+                    sweep   = ii.sweep.d | dict(name=ii.wandb_c.name, program=ii._run_sweep_cmd.split(' ', maxsplit=1)[1]), 
                     entity  = ii.wandb_c.entity,
                     project = ii.project,
                 )
