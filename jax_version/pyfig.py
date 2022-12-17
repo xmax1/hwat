@@ -27,7 +27,7 @@ class Pyfig:
 
     run_name:       Path        = 'run.py'
 
-    exp_name:       str         = 'demo-final'
+    exp_name:       str         = 'demo'
     sweep_id_code:  str         = ''
     run_id:         str         = gen_alphanum(n=7)
 
@@ -157,11 +157,7 @@ class Pyfig:
         # sweep cluster: init -> agent
         if run_init_local or run_init_cluster:
             ii.log(dict(init=dict(sweep_id=ii.sweep_id)), create=True)
-            if ii.sweep_id:
-                wandb.init()
-                wandb.agent(sweep_id=ii.sweep_id, count=1)
-            else:
-                run = wandb.init(
+            run = wandb.init(
                     entity      = ii.wandb_c.entity,  # team name is hwat
                     project     = ii.project,         # sub project in team
                     dir         = ii.exp_path,
@@ -170,18 +166,18 @@ class Pyfig:
                     settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
                     id          = ii.exp_id
                 )    
-        
+            if ii.sweep_id:
+                wandb.agent(sweep_id=ii.sweep_id, count=1)
+                
         if submit and ii.n_job > 0 and ii._n_job_running < cap:
             n, ii.n_job  = ii.n_job, 0
             ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd, n_job=ii.n_job)), create=True, log_name='slurm_init.log')
             for sub in range(1, n+1):
                 Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
-                print('sub')
                 sleep(1)
             sys.exit(f'Submitted {sub} to slurm')
 
         if submit and ii.n_job < 0: 
-            print('here')
             if ii.run_sweep:
                 ii.sweep_id_code = wandb.sweep(
                     sweep   = ii.sweep.d | dict(name=ii.wandb_c.name), 
@@ -197,7 +193,6 @@ class Pyfig:
             
             run_cmds(ii._git_commit_cmd, cwd=ii.project_dir)
             run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)
-            print('here')
             run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.run_dir)
 
             folder = f'runs/{ii.exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id_code}'
@@ -215,9 +210,9 @@ class Pyfig:
     def exp_path(ii,):
         return ii._exp_path or iterate_n_dir(Path('exp')/ii.exp_name, ii._single_use_switch('iterate_state'))/ii.exp_id
     
-    # @exp_path.setter
-    # def exp_path(ii, exp_path):
-    #     ii._exp_path = exp_path
+    @exp_path.setter
+    def exp_path(ii, exp_path):
+        ii._exp_path = exp_path
     
     @property
     def sbatch(ii,):
@@ -228,21 +223,18 @@ class Pyfig:
         module load CUDA/11.4.1
         module load cuDNN/8.2.2.26-CUDA-11.4.1
         conda activate {ii.env}"""
-        # out_dir={mkdir(ii.exp_path)}"""
-        # mv_cmd="mv {ii.TMP}/o-$SLURM_JOB_ID.out {ii.TMP}/e-$SLURM_JOB_ID.err $out_dir"
-        # echo $mv_cmd
         return '\n'.join([' '.join(v.split()) for v in s.split('\n')])
     
     @property
     def cmd(ii):
-        d = flat_dict(get_cls_dict(ii, sub_cls=True, ignore=['sweep',]))
+        d = flat_dict(get_cls_dict(ii, sub_cls=True, ignore=['sweep',], add=['exp_path',]))
         d = {k: v.tolist() if isinstance(v, np.ndarray) else v for k,v in d.items()}
         cmd_d = {str(k).replace(" ", ""): str(v).replace(" ", "") for k,v in d.items()}
         return ' '.join([f'--{k} {v}' for k,v in cmd_d.items() if v])
     
     @property
     def wandb_cmd(ii):
-        d = flat_dict(get_cls_dict(ii, sub_cls=True, ignore=['sweep',] + list(ii.sweep.parameters.keys())))
+        d = flat_dict(get_cls_dict(ii, sub_cls=True, ignore=['sweep',] + list(ii.sweep.parameters.keys()), add=['exp_path',]))
         d = {k: v.tolist() if isinstance(v, np.ndarray) else v for k,v in d.items()}
         cmd_d = {str(k).replace(" ", ""): str(v).replace(" ", "") for k,v in d.items()}
         cmd = ' '.join([f' --{k}={v}' for k,v in cmd_d.items() if v])
@@ -315,33 +307,38 @@ def get_cls_dict(
         fn=False, 
         prop=False, 
         hidn=False,
-        ignore:list=None
+        ignore:list=None,
+        add:list=None
     ) -> dict:
         ignore = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + (ignore or [])
+        add = add or []
+        ref = ref or []
+        
         items = []
         for k, v_cls in cls.__class__.__dict__.items():
             
             is_builtin = k.startswith('__')
             should_ignore = k in ignore
-            not_in_ref = k in (ref if ref else [])
+            not_in_ref = not (k in ref)
             
-            if not (is_builtin or should_ignore or not_in_ref):
+            if (is_builtin or should_ignore or not_in_ref):
+                continue
                 
-                if (not hidn) and k.startswith('_'):
-                    continue
-                    
-                if (not fn) and isinstance(v_cls, partial):
-                    continue
+            if (not hidn) and k.startswith('_') and not (k in add):
+                continue
                 
-                if (not prop) and isinstance(v_cls, property):
-                    continue
+            if (not fn) and isinstance(v_cls, partial) and not (k in add):
+                continue
+            
+            if (not prop) and isinstance(v_cls, property) and not (k in add):
+                continue
+            
+            v = getattr(cls, k)
+            
+            if (sub_cls or (k in ref))and isinstance(v, Sub):
+                v = get_cls_dict(v, ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore)
                 
-                v = getattr(cls, k)
-                
-                if sub_cls and isinstance(v, Sub):
-                    v = get_cls_dict(v, ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore)
-                
-                items.append([k, v])
+            items.append([k, v])
                 
         return dict(items)
 
