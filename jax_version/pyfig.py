@@ -26,11 +26,11 @@ class Pyfig:
     # SUB CLASSES CANNOT CALL EACH OTHER
 
     run_name:       Path        = 'run.py'
-        
+
     exp_name:       str         = 'demo-final'
     sweep_id_code:  str         = ''
     run_id:         str         = gen_alphanum(n=7)
-        
+
     seed:           int         = 808017424 # grr
     dtype:          str         = 'float32'
     n_step:         int         = 200
@@ -139,6 +139,7 @@ class Pyfig:
                 setattr(ii, k, v)
         
         ii.merge(arg)
+        mkdir(ii.exp_path)
     
         """             |        submit         |       
                         |   True    |   False   | 
