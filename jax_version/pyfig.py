@@ -114,8 +114,7 @@ class Pyfig:
     env:                str     = 'dex'                 # CONDA ENV
     
     n_job:              int  = -1                  # #n_job-state-flow
-    _run_cmd:           str  = property(lambda _: f'python {str(_.run_name)} \
-                                            {_.cmd*(~bool(_.sweep_id_code)) + _.wandb_cmd*bool(_.sweep_id_code)}')
+    _run_cmd:           str  = property(lambda _: f'python {str(_.run_name)} {_.cmd*(~bool(_.run_sweep)) + _.wandb_cmd*bool(_.run_sweep)}')
     
     _git_commit_cmd:    list = ['git commit -a -m "run_things"', 'git push origin main']
     _git_pull_cmd:      list = ['git fetch --all', 'git reset --hard origin/main']
@@ -137,6 +136,9 @@ class Pyfig:
 
         arg = arg | sys_arg
         ii.merge(arg)
+        
+        pprint.pprint(ii.d)
+        ii.log(ii.d)
         
         """             |        submit         |       
                         |   True    |   False   | 
