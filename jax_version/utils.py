@@ -199,7 +199,6 @@ def cmd_to_dict(cmd:str|list, ref:dict, delim:str=' --', d=None):
     
 ### run things
 
-
 def run_cmds(cmd:str|list,cwd:str|Path=None,input_req:str=None):
     out = []
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
@@ -211,21 +210,23 @@ def run_cmds(cmd:str|list,cwd:str|Path=None,input_req:str=None):
         print(res.stderr)
     return out[0] if len(out) == 0 else out
 
-
 def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path):
     out = []
     client = paramiko.SSHClient()    
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # if not known host
     client.connect(server, username=user)
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]):
-        print(cwd, '\n', cmd_1)
+        out += [f'{cwd}: {cmd_1}']
+        print(f'{cwd}: {cmd_1}')
         stdin, stdout, stderr = client.exec_command(f'cd {str(cwd)}; {cmd_1}')
-        out += [stdout.readlines(), stderr.readlines()]
-        [print(l.strip('\n')) for l in out[-1]]
+        '\n'.join(stderr.readlines())
+        out += ['\n'.join(stdout.readlines())]
+        print('\n'.join(stdout.readlines()))
+        out += ['\n'.join(stderr.readlines())]
     client.close()
-    for res in out:
-        for l in res: 
-            print(l)
+    # for res in out:
+    #     for l in res: 
+    #         print(l)
     return out[0] if len(out) == 0 else out
 
     
