@@ -175,7 +175,6 @@ class Pyfig:
             ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd, n_job=ii.n_job)), create=True, log_name='slurm_init.log')
             for sub in range(1, n+1):
                 Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
-                sleep(ii.run_sweep*3)
             sys.exit(f'Submitted {sub} to slurm')
 
         if submit and ii.n_job < 0: 
@@ -191,7 +190,6 @@ class Pyfig:
                 
             ii.n_job = reduce(lambda a,b: a*b, n_step_grid if ii.run_sweep else [1])
             
-            print(ii.n_job)
             ii.log(dict(server_init=dict(run_cmd=ii._run_cmd, n_job=ii.n_job)), create=True, log_name='server_init.log')
             
             run_cmds(ii._git_commit_cmd, cwd=ii.project_dir)
