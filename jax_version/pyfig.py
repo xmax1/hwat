@@ -117,7 +117,8 @@ class Pyfig:
     wandb_mode: str = 'disabled'
     submit: bool = False
     cap: int = 40
-    _exp_path:          str     = ''
+    target_exp_path:    str     = ''
+    exp_path:           str     = property(lambda _: iterate_n_dir(Path('exp')/_.exp_name, _._single_use_switch('iterate_state'))/_.exp_id)
     _run_cmd:           str     = property(lambda _: f'python {str(_.run_name)} {_.cmd*(~bool(_.run_sweep)) + _.wandb_cmd*bool(_.run_sweep)}')
     _git_commit_cmd:    list    = ['git commit -a -m "run_things"', 'git push origin main']
     _git_pull_cmd:      list    = ['git fetch --all', 'git reset --hard origin/main']
@@ -170,6 +171,7 @@ class Pyfig:
                 wandb.agent(sweep_id=ii.sweep_id, count=1)
                 
         if submit and ii.n_job > 0 and ii._n_job_running < cap:
+            ii.target_exp_path = ii.exp_path
             n, ii.n_job  = ii.n_job, 0
             ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd, n_job=ii.n_job)), create=True, log_name='slurm_init.log')
             for sub in range(1, n+1):
@@ -178,6 +180,7 @@ class Pyfig:
             sys.exit(f'Submitted {sub} to slurm')
 
         if submit and ii.n_job < 0: 
+            ii.target_exp_path = ii.exp_path
             if ii.run_sweep:
                 ii.sweep_id_code = wandb.sweep(
                     sweep   = ii.sweep.d | dict(name=ii.wandb_c.name), 
@@ -189,8 +192,8 @@ class Pyfig:
                 
             ii.n_job = reduce(lambda a,b: a*b, n_step_grid if ii.run_sweep else [1])
             
-            ii.log(dict(server_init=dict(run_cmd=ii._run_cmd, n_job=ii.n_job)), create=True, log_name='server_init.log')
             
+            ii.log(dict(server_init=dict(run_cmd=ii._run_cmd, n_job=ii.n_job)), create=True, log_name='server_init.log')
             run_cmds(ii._git_commit_cmd, cwd=ii.project_dir)
             run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)
             run_cmds_server(ii.server, ii.user, ii._run_cmd, ii.run_dir)
@@ -205,15 +208,7 @@ class Pyfig:
         state = getattr(ii, k)
         setattr(ii, k, False)
         return state
-    
-    @property
-    def exp_path(ii,):
-        return ii._exp_path or iterate_n_dir(Path('exp')/ii.exp_name, ii._single_use_switch('iterate_state'))/ii.exp_id
-    
-    @exp_path.setter
-    def exp_path(ii, exp_path):
-        ii._exp_path = exp_path
-    
+   
     @property
     def sbatch(ii,):
         s = f"""\

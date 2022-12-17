@@ -167,7 +167,6 @@ def type_me(v, v_ref=None, is_cmd_item=False):
         if v in booleans: 
             return booleans.index(v) < 3  # 0-2 True 3-5 False
     
-    print(v,v_ref,type(v_ref), type(v) )
     if v_ref is not None:
         type_ref = type(v_ref)
         if isinstance(v, str):
@@ -180,8 +179,7 @@ def type_me(v, v_ref=None, is_cmd_item=False):
             if type(v.flatten()[0]) == str:
                 return v.tolist()
             return v
-            
-        print(type_ref)
+
         return type_ref(v)
         
     try:
