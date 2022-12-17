@@ -191,7 +191,7 @@ class Pyfig:
             ii.target_exp_path = ii.exp_path
             if ii.run_sweep:
                 ii.n_job = 0
-                d = dict(name=ii.wandb_c.name, program=ii._run_sweep_cmd.split(' ', maxsplit=1)[1])
+                d = dict(name=ii.wandb_c.name, program=ii._run_single_cmd)
                 print(ii._run_sweep_cmd.split(' ', maxsplit=1)[1])
                 ii.sweep_id_code = wandb.sweep(
                     sweep   = ii.sweep.d | d, 
