@@ -215,6 +215,7 @@ def cmd_to_dict(cmd:str|list, ref:dict, delim:str=' --', d=None):
 
 
 def run_cmds(cmd:str|list, cwd:str|Path='.', input_req:str=None, _res=[]):
+    
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
         cmd_1 = [c.strip() for c in cmd_1.split(' ')]
         print(f'Run: {cmd_1} at {cwd}')

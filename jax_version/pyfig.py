@@ -95,11 +95,11 @@ class Pyfig:
     
     dump:               str     = property(lambda _: Path('dump'))
     TMP:                Path    = mkdir(Path('./dump/tmp'))
-    _home:              Path    = property(lambda _: Path().home())
     project:            str     = property(lambda _: 'hwat')
-    run_dir:            Path    = property(lambda _: Path(__file__).parent.relative_to(_._home))
-    project_dir:        Path    = property(lambda _: _._home / 'projects' / _.project)
-    _exp_id:             str     = gen_alphanum(n=7)
+    run_dir:            Path    = property(lambda _: Path(__file__).parent.relative_to(Path().home()))
+    project_dir:        Path    = property(lambda _: Path().home() / 'projects' / _.project)
+    server_project_dir: Path    = property(lambda _: _.project_dir.relative_to(Path().home()))
+    _exp_id:             str    = gen_alphanum(n=7)
         
     sweep_path_id:      str     = property(lambda _: (f'{_.wandb_c.entity}/{_.project}/{_.sweep_id}')*bool(_.sweep_id))
         
