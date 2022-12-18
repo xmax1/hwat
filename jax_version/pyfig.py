@@ -169,7 +169,7 @@ class Pyfig:
             if not ii.hostname == ii.server: # if on local, ssh to server and rerun
                 print('Submitting to server')
                 run_cmds([ii._git_commit_cmd, 'git push origin main'], cwd=ii.project_dir)
-                run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.project_dir)  
+                run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)  
                 run_cmds_server(ii.server, ii.user, ii._run_single_cmd, ii.run_dir)                
                 sys.exit(f'Submitted to server')
                 ##############################################################################
