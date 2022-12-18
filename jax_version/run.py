@@ -27,7 +27,7 @@ arg = dict(
 	# sweep = {},
 )
 
-c = Pyfig(wb_mode='disabled', arg=arg, submit=True, run_sweep=True)
+c = Pyfig(wb_mode='online', arg=arg, submit=True, run_sweep=True)
 
 # 	out = main(c)
 
