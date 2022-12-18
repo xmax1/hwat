@@ -114,7 +114,7 @@ class Pyfig:
     
     n_job:              int      = -1                  # #n_job-state-flow
     debug:              bool     = False
-    wandb_mode:         str      = 'disabled'
+    wb_mode:            str      = 'disabled'
     submit:             bool     = False
     cap:                int      = 40
     
@@ -140,8 +140,9 @@ class Pyfig:
     
     _useful = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
     
-    def __init__(ii, wandb_mode='online', submit=False, run_sweep=False, debug=False, notebook=False, arg:dict={}, cap=3, **kw): 
-    
+    def __init__(ii, arg={}, wb_mode='online', submit=False, run_sweep=False, notebook=False, debug=False, cap=3):
+        init_arg = dict(run_sweep=run_sweep, submit=submit, debug=debug, wb_mode=wb_mode, cap=cap)
+        
         print('init sub classes')
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
@@ -149,9 +150,8 @@ class Pyfig:
                 setattr(ii, k, v)
         
         print('updating configuration')
-        arg.update(dict(run_sweep=run_sweep,submit=submit, debug=debug, wandb_mode=wandb_mode,  cap=cap))
         sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d)) if not notebook else {}
-        ii.merge(arg | sys_arg)
+        ii.merge(arg | init_arg | sys_arg)
         ii.log(ii.d, create=True, log_name='post_var_init.log')
         
         if not ii.submit:
@@ -162,7 +162,7 @@ class Pyfig:
                     project     = ii.project,         # sub project in team
                     dir         = ii.exp_path,
                     config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
-                    mode        = wandb_mode,
+                    mode        = wb_mode,
                     settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
             )
                 
@@ -189,7 +189,6 @@ class Pyfig:
 
             n_sweep = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v] 
             n_job = reduce(lambda a,b: a*b, n_sweep if ii.run_sweep else [1])
-            ii.merge(dict(submit=False))
             if ii._n_job_running < cap:
                 ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd, n_job=ii.n_job)), \
                     create=True, log_name='slurm_init.log')
