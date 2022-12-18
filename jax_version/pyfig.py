@@ -154,7 +154,10 @@ class Pyfig:
         
         if not ii.submit:
             print('running script')
-            ii.set_path(iterate_dir=True, append_exp_id=True)
+            if 'not_set' in str(ii.exp_path):
+                ii.exp_path = mkdir(iterate_n_dir(ii.dump/ii.exp_name, True))
+            ii.exp_path /= ii._exp_id
+            
             run = wandb.init(
                     entity      = ii.wandb_c.entity,  # team name is hwat
                     project     = ii.project,         # sub project in team
@@ -176,8 +179,6 @@ class Pyfig:
     
             print(ii.hostname)
             
-            ii.set_path(iterate_dir=True, append_exp_id=False)
-            
             run_cmds([ii._git_commit_cmd, 'git push origin main'], cwd=ii.project_dir)
             
             if ii.run_sweep:
@@ -187,7 +188,9 @@ class Pyfig:
                     entity  = ii.wandb_c.entity,
                     project = ii.project,
                 )
-
+                
+            ii.exp_path = mkdir(iterate_n_dir(ii.dump/ii.exp_name, True) / ii.sweep_id)
+            
             n_sweep = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v] 
             n_job = reduce(lambda a,b: a*b, n_sweep if ii.run_sweep else [1])
             if ii._n_job_running < cap:
@@ -198,12 +201,11 @@ class Pyfig:
             folder = f'runs/{ii._exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id}'
             sys.exit(f'https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{folder}')
 
-    def set_path(ii, iterate_dir=True, append_exp_id=True):
+    def set_path(ii, iterate_dir=True, sweep=False):
         if str(ii.exp_path) == 'not_set':
             exp_name = iterate_n_dir(ii.dump/ii.exp_name, iterate_dir)
-            ii.exp_path = exp_name/(ii.sweep_id or '')
-        if append_exp_id:
-            ii.exp_path = Path(ii.exp_path) / ii._exp_id
+        
+        ii.exp_path = exp_name/(ii.sweep_id or '') 
         mkdir(ii.exp_path)
     
     def _outline(ii):
