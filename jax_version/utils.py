@@ -223,25 +223,20 @@ def run_cmds(cmd:str|list, cwd:str|Path='.', input_req:str=None, _res=[]):
             print(_res[-1].stdout, _res[-1].stderr)
     return _res[-1].stdout
 
-def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path):
-    out = []
+def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path, _res=[]):
     client = paramiko.SSHClient()    
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # if not known host
     client.connect(server, username=user)
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]):
-        out += [f'{cwd}: {cmd_1}']
-        print(f'{cwd}: {cmd_1}')
+        print(f'Remote run: {cmd_1} at {user}@{server}:{cwd}')
         stdin, stdout, stderr = client.exec_command(f'cd {str(cwd)}; {cmd_1}')
-        '\n'.join(stderr.readlines())
-        out += ['\n'.join(stdout.readlines())]
-        print('\n'.join(stdout.readlines()))
-        out += ['\n'.join(stderr.readlines())]
+        stderr = '\n'.join(stderr.readlines())
+        _res += ['\n'.join(stdout.readlines())]
+        print(_res[-1])
+        if stderr:
+            print(stderr)
     client.close()
-    # for res in out:
-    #     for l in res: 
-    #         print(l)
-    print('End Server Command')
-    return out[0] if len(out) == 0 else out
+    return _res[-1]
 
     
 # flatten things
