@@ -215,14 +215,12 @@ def cmd_to_dict(cmd:str|list, ref:dict, delim:str=' --', d=None):
 
 
 def run_cmds(cmd:str|list, cwd:str|Path='.', input_req:str=None, _res=[]):
-    
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
         cmd_1 = [c.strip() for c in cmd_1.split(' ')]
         print(f'Run: {cmd_1} at {cwd}')
-        _res += [subprocess.run(cmd_1, cwd=str(cwd), input=input_req, capture_output=True, text=True)]
-        if _res[-1].stderr:
-            print(_res[-1].stdout, _res[-1].stderr)
-    return _res[-1].stdout
+        _res = subprocess.run(cmd_1, cwd=str(cwd), capture_output=True, text=True)
+        print('stdout:', _res.stdout.replace("\n", " "), 'stderr:', _res.stderr.replace("\n", ";"))
+    return _res.stdout.replace('\n', ' ')
 
 def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path, _res=[]):
     client = paramiko.SSHClient()    
@@ -232,13 +230,12 @@ def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path, _res=[]):
         print(f'Remote run: {cmd_1} at {user}@{server}:{cwd}')
         stdin, stdout, stderr = client.exec_command(f'cd {str(cwd)}; {cmd_1}')
         stderr = '\n'.join(stderr.readlines())
-        _res += ['\n'.join(stdout.readlines())]
-        print(_res[-1])
-        if stderr:
-            print(stderr)
+        stdout = '\n'.join(stdout.readlines())
+        print('stdout:', stdout.replace("\n", " "), 'stderr:', stderr.replace("\n", ";"))
     client.close()
-    return _res[-1]
+    return stdout.replace("\n", " ")
 
+    
     
 # flatten things
 
