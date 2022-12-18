@@ -169,19 +169,20 @@ def type_me(v, v_ref=None, is_cmd_item=False):
         if v in booleans: 
             return booleans.index(v) < 3  # 0-2 True 3-5 False
     
-    print(v, v_ref, type(v))
     if v_ref is not None:
         type_ref = type(v_ref)
         if isinstance(v, str):
             v = v.strip('\'\"')
-        
-        if isinstance(v, list):
-            v = np.asarray(v)
-        
+            
         if isinstance(v, (np.ndarray, np.generic)):
-            if type(v.flatten()[0]) == str:
+            if isinstance(v.flatten()[0], str):
                 return v.tolist()
             return v
+        
+        if isinstance(v, list):
+            if isinstance(flat_any(v)[0], str):
+                return v
+            return np.asarray(v)
 
         return type_ref(v)
         
@@ -231,7 +232,7 @@ def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path, _res=[]):
         stdin, stdout, stderr = client.exec_command(f'cd {str(cwd)}; {cmd_1}')
         stderr = '\n'.join(stderr.readlines())
         stdout = '\n'.join(stdout.readlines())
-        print('stdout:', stdout.replace("\n", " "), 'stderr:', stderr.replace("\n", ";"))
+        print('stdout:', stdout, 'stderr:', stderr)
     client.close()
     return stdout.replace("\n", " ")
 
