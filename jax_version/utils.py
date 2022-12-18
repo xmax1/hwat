@@ -24,15 +24,16 @@ this_dir = Path(__file__).parent
 
 class Sub:
     _p = None
+    _ignore = ['d', '_d'] 
 
     def __init__(ii, parent=None):
         ii._p = parent
     
     @property
-    def d(ii, ignore=['d', 'cmd', '_p']):
+    def d(ii,):
         out={} # becomes class variable in call line, accumulates
         for k,v in ii.__class__.__dict__.items():
-            if k.startswith('_') or k in ignore:
+            if k.startswith('_') or k in ii._ignore:
                 continue
             if isinstance(v, partial): 
                 v = ii.__dict__[k]   # if getattr then calls the partial, which we don't want
@@ -211,16 +212,16 @@ def cmd_to_dict(cmd:str|list, ref:dict, delim:str=' --', d=None):
     
 ### run things
 
-def run_cmds(cmd:str|list,cwd:str|Path=None,input_req:str=None):
-    out = []
+
+
+def run_cmds(cmd:str|list, cwd:str|Path='.', input_req:str=None, _res=[]):
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
         cmd_1 = [c.strip() for c in cmd_1.split(' ')]
-        res = subprocess.run(cmd_1, cwd=str(cwd),input=input_req, capture_output=True)
-        out += [res]
-    for res in out:
-        print(res.stdout)
-        print(res.stderr)
-    return out[0] if len(out) == 0 else out
+        print(f'Run: {cmd_1} at {cwd}')
+        _res += [subprocess.run(cmd_1, cwd=str(cwd), input=input_req, capture_output=True, text=True)]
+        if _res[-1].stderr:
+            print(_res[-1].stdout, _res[-1].stderr)
+    return _res[-1].stdout
 
 def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path):
     out = []

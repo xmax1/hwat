@@ -65,11 +65,7 @@ class Pyfig:
         terms_s_emb:    list    = ['ra', 'ra_len']
         terms_p_emb:    list    = ['rr', 'rr_len']
 
-    class sweep(Sub):
-        _ignore = property(lambda _: ['sweep',]+list(_.parameters.keys()))
-        _arg = property(lambda _: _._p.get_cls_dict(_._p, sub_cls=True, ignore=_.ignore, to_cmd=True, flat=True))
-        _static_hypam = property(lambda _: dict((k, dict(value=v)) for k,v in _._arg.items()))
-        
+    class sweep(Sub):        
         program         = property(lambda _: _._p.run_name)
         name            = 'demo'
         method          = 'grid'
@@ -125,29 +121,41 @@ class Pyfig:
     exp_path:           Path     = Path('not_set')
     exp_name:           str      = 'junk'
     
+    commit_id           = property(lambda _: run_cmds('git log --pretty=format:%h -n 1', cwd=_.project_dir))
+    hostname: str       = property(lambda _: run_cmds('hostname'))
+    _n_job_running: int  = property(lambda _: len(run_cmds('squeue -u amawi -t pending,running -h -r', cwd='.')))
+    
+    _not_in_sweep = property(lambda _: \
+        get_cls_dict(_, sub_cls=True, ignore=['sweep',]+list(_.sweep.parameters.keys()), to_cmd=True, flat=True))
+    
     _run_single_cmd:    str      = property(lambda _: f'python {str(_.run_name)} {_.cmd}')
     _run_sweep_cmd:     str      = property(lambda _: f'wandb agent {_.sweep_path_id}')
     _run_cmd:           str      = property(lambda _: _._run_sweep_cmd*_.run_sweep or _._run_single_cmd)
      
-    _git_commit_cmd:    list     = ['git commit -a -m "insert msg here"',]
+    _git_commit_cmd:    list     = 'git commit -a -m "run"'
     _git_pull_cmd:      list     = ['git fetch --all', 'git reset --hard origin/main']
     _sys_arg:           list     = sys.argv[1:]
-    _wandb_ignore:      list     = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge', 'set_path'] + ['sbatch', 'sweep']
+    _ignore:            list     = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge', 'set_path', '_get_cls_dict']
+    _wandb_ignore:      list     = ['sbatch', 'sweep']
     
     _useful = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
     
-    def __init__(ii, wandb_mode='online', submit=False, run_sweep=False, debug=False, arg:dict={}, cap=3, **kw): 
+    def __init__(ii, wandb_mode='online', submit=False, run_sweep=False, debug=False, notebook=False, arg:dict={}, cap=3, **kw): 
     
+        print('init sub classes')
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
                 v = v(parent=ii)
                 setattr(ii, k, v)
         
+        print('updating configuration')
         arg.update(dict(run_sweep=run_sweep, debug=debug, wandb_mode=wandb_mode, submit=submit, cap=cap))
-        sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d))
+        sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d)) if not notebook else {}
         ii.merge(arg | sys_arg)
-      
+        ii.log(ii.d, create=True, log_name='post_var_init.log')
+        
         if not submit:
+            print('running script')
             ii.set_path(iterate_dir=True, append_exp_id=True)
             run = wandb.init(
                     entity      = ii.wandb_c.entity,  # team name is hwat
@@ -159,40 +167,36 @@ class Pyfig:
             )
                 
         else:
-            run_cmds(ii._git_commit_cmd, cwd=ii.project_dir)
+            print('setting up a submission')
+            run_cmds([ii._git_commit_cmd], cwd=ii.project_dir)
             run_cmds(['git push origin main'], cwd=ii.project_dir)
             
-            if not ii._hostname == ii.server: # if on local, ssh to server and rerun
+            if not ii.hostname == ii.server: # if on local, ssh to server and rerun
                 run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)
-                run_cmds_server(ii.server, ii.user, ii._run_single_cmd, ii.run_dir)
-                folder = f'runs/{ii._exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id}'
-                print(f'Go to https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{folder}')
-                
+                run_cmds_server(ii.server, ii.user, ii._run_single_cmd, ii.run_dir)                
                 sys.exit(f'Submitted {ii.n_job} to server')
                 ##############################################################################
               
             ii.set_path(iterate_dir=True, append_exp_id=False)
             
             if ii.run_sweep:
-                ii.sweep.parameters |= ii.sweep._static_hypam
+                ii.sweep.parameters |= dict((k, dict(value=v)) for k,v in ii._not_in_sweep.items())
                 ii.sweep_id = wandb.sweep(
                     sweep   = ii.sweep.d, 
                     entity  = ii.wandb_c.entity,
                     project = ii.project,
                 )
 
-            n_step_grid = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v] \
-                if ii.run_sweep else [1]
-            n_job = reduce(lambda a,b: a*b, n_step_grid)
+            n_sweep = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v] 
+            n_job = reduce(lambda a,b: a*b, n_sweep if ii.run_sweep else [1])
             
             if ii._n_job_running < cap:
                 ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd, n_job=ii.n_job)), \
                     create=True, log_name='slurm_init.log')
                 for sub in range(1, n_job+1):
                     Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
-                sys.exit(f'Submitted {sub} to slurm')
-            else:
-                sys.exit(f'{ii._n_job_running} already running on slurm, did not run. (cap {cap})')
+            folder = f'runs/{ii._exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id}'
+            sys.exit(f'https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{folder}')
 
     def set_path(ii, iterate_dir=True, append_exp_id=True):
         if str(ii.exp_path) == 'not_set':
@@ -201,7 +205,11 @@ class Pyfig:
         if append_exp_id:
             ii.exp_path = Path(ii.exp_path) / ii._exp_id
         mkdir(ii.exp_path)
-      
+    
+    def _outline(ii):
+        print(ii.project_dir)
+        
+    
     @property
     def sbatch(ii,):
         s = f"""\
@@ -215,26 +223,12 @@ class Pyfig:
     
     @property
     def cmd(ii):
-        ignore = ['sweep',]
-        cmd_d = get_cls_dict(ii, sub_cls=True, ignore=ignore, to_cmd=True, flat=True)
+        cmd_d = get_cls_dict(ii, sub_cls=True, ignore=ii._ignore + ['sweep',], to_cmd=True, flat=True)
         return ' '.join([f'--{k} {v}' for k,v in cmd_d.items() if v])
         
     @property
     def d(ii):
-        return get_cls_dict(ii, sub_cls=True, prop=True)
-
-    @property
-    def commit_id(ii,)->str:
-        process = run_cmds(['git log --pretty=format:%h -n 1'], cwd=ii.project_dir)[0]
-        return process.stdout.decode('utf-8') 
-    
-    @property
-    def _hostname():
-        return run_cmds(['hostname'])[0]
-    
-    @property
-    def _n_job_running(ii,):
-        return len(run_cmds([f'squeue -u amawi -t pending,running -h -r'], cwd='.')[0].stdout.decode('utf-8'))
+        return get_cls_dict(ii, sub_cls=True, prop=True, ignore=ii._ignore)
     
     def partial(ii, f:Callable, d=None, get_d=False, print_d=False, **kw):
         d = flat_any(d if d else ii.d)
@@ -295,7 +289,7 @@ def get_cls_dict(
         flat:bool=False
     ) -> dict:
     # ref > ignore > add
-        ignore = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge', 'set_path'] + (ignore or [])
+        ignore = cls._ignore + (ignore or [])
         
         items = []
         for k, v_cls in cls.__class__.__dict__.items():
@@ -305,8 +299,6 @@ def get_cls_dict(
             keep |= k in add if add else False
             
             if keep:
-                v = getattr(cls, k)
-                
                 if not ref:
                     if k.startswith('__'):
                         continue    
@@ -316,11 +308,12 @@ def get_cls_dict(
                         continue
                     if (not prop) and isinstance(v_cls, property):
                         continue
-                    if (not sub_cls) and isinstance(v, Sub):
-                        continue
+    
+                v = getattr(cls, k)
                 
-                if isinstance(v, Sub):
-                    v = get_cls_dict(v, ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore, to_cmd=to_cmd)
+                if sub_cls and isinstance(v, Sub) or (k in ref if ref else False):
+                    v = get_cls_dict(
+                        v, ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore, to_cmd=to_cmd, add=add)
                     if flat:
                         items.extend(v.items())
                         continue

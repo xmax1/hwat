@@ -150,11 +150,11 @@ def cmd_to_dict(cmd:str|list, ref:dict, _d={}, delim:str=' --'):
 
 ### run things
 
-def run_cmds(cmd:str|list,cwd:str|Path=None,input_req:str=None):
+def run_cmds(cmd:str|list,cwd:str|Path='.',input_req:str=None):
     out = []
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
         cmd_1 = [c.strip() for c in cmd_1.split(' ')]
-        res = subprocess.run(cmd_1, cwd=str(cwd),input=input_req, capture_output=True)
+        res = subprocess.run(cmd_1, cwd=str(cwd), input=input_req, capture_output=True)
         out += [cmd_1, res.stdout, res.sterr]
     for res in out:
         for l in res: 
