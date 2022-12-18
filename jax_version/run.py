@@ -23,11 +23,11 @@ arg = dict(
 	n_corr = 20, 
 	n_step = 10000, 
 	log_metric_step = 50, 
-	exp_name = 't1',
+	exp_name = 'demo',
 	# sweep = {},
 )
 
-c = Pyfig(wb_mode='online', arg=arg, submit=True, run_sweep=False)
+c = Pyfig(wb_mode='disabled', arg=arg, submit=True, run_sweep=True)
 
 # 	out = main(c)
 
