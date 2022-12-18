@@ -166,36 +166,37 @@ class Pyfig:
                 
         else:
             print('setting up a submission')
-            run_cmds([ii._git_commit_cmd], cwd=ii.project_dir)
             
             if not ii.hostname == ii.server: # if on local, ssh to server and rerun
-                run_cmds('git push origin main', cwd=ii.project_dir)
-                run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.project_dir)
+                run_cmds([ii._git_commit_cmd, 'git push origin main'], cwd=ii.project_dir)
+                run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.project_dir)  
                 run_cmds_server(ii.server, ii.user, ii._run_single_cmd, ii.run_dir)                
                 sys.exit(f'Submitted to server')
                 ##############################################################################
             
-            run_cmds('git pull origin main', cwd=ii.project_dir)
-            
-            ii.set_path(iterate_dir=True, append_exp_id=False)
-            
-            if ii.run_sweep:
-                ii.sweep.parameters |= dict((k, dict(value=v)) for k,v in ii._not_in_sweep.items())
-                ii.sweep_id = wandb.sweep(
-                    sweep   = ii.sweep.d, 
-                    entity  = ii.wandb_c.entity,
-                    project = ii.project,
-                )
+            else:
+                run_cmds([ii._git_commit_cmd, 'git push origin main'], cwd=ii.project_dir)
+                run_cmds('git pull origin main', cwd=ii.project_dir)
 
-            n_sweep = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v] 
-            n_job = reduce(lambda a,b: a*b, n_sweep if ii.run_sweep else [1])
-            if ii._n_job_running < cap:
-                ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd)), \
-                    create=True, log_name='slurm_init.log')
-                for sub in range(1, n_job+1):
-                    Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
-            folder = f'runs/{ii._exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id}'
-            sys.exit(f'https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{folder}')
+                ii.set_path(iterate_dir=True, append_exp_id=False)
+                
+                if ii.run_sweep:
+                    ii.sweep.parameters |= dict((k, dict(value=v)) for k,v in ii._not_in_sweep.items())
+                    ii.sweep_id = wandb.sweep(
+                        sweep   = ii.sweep.d, 
+                        entity  = ii.wandb_c.entity,
+                        project = ii.project,
+                    )
+
+                n_sweep = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v] 
+                n_job = reduce(lambda a,b: a*b, n_sweep if ii.run_sweep else [1])
+                if ii._n_job_running < cap:
+                    ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd)), \
+                        create=True, log_name='slurm_init.log')
+                    for sub in range(1, n_job+1):
+                        Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
+                folder = f'runs/{ii._exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id}'
+                sys.exit(f'https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{folder}')
 
     def set_path(ii, iterate_dir=True, append_exp_id=True):
         if str(ii.exp_path) == 'not_set':
