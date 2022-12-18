@@ -66,12 +66,18 @@ class Pyfig:
         terms_p_emb:    list    = ['rr', 'rr_len']
 
     class sweep(Sub):
+        _ignore = property(lambda _: ['sweep',]+list(_.parameters.keys()))
+        _arg = property(lambda _: _._p.get_cls_dict(_._p, sub_cls=True, ignore=_.ignore, to_cmd=True, flat=True))
+        _static_hypam = property(lambda _: dict((k, dict(value=v)) for k,v in _._arg.items()))
+        
         program         = property(lambda _: _._p.run_name)
         name            = 'demo'
         method          = 'grid'
         parameters = dict(
             n_b  = {'values' : [16, 32, 64]},
-        )
+        ) 
+        
+        
 
     class wandb_c(Sub):
         job_type        = 'training'
@@ -123,7 +129,7 @@ class Pyfig:
     _run_sweep_cmd:     str      = property(lambda _: f'wandb agent {_.sweep_path_id}')
     _run_cmd:           str      = property(lambda _: _._run_sweep_cmd*_.run_sweep or _._run_single_cmd)
      
-    _git_commit_cmd:    list     = ['git commit -a -m "run_things"', 'git push origin main']
+    _git_commit_cmd:    list     = ['git commit -a -m "insert msg here"',]
     _git_pull_cmd:      list     = ['git fetch --all', 'git reset --hard origin/main']
     _sys_arg:           list     = sys.argv[1:]
     _wandb_ignore:      list     = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge', 'set_path'] + ['sbatch', 'sweep']
@@ -141,18 +147,7 @@ class Pyfig:
         sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d))
         ii.merge(arg | sys_arg)
       
-        """             |        submit         |       
-                        |   True    |   False   | 
-                        -------------------------
-                    <0  |   server/init  |   init    |
-        n_job       =0  |   init         |   NA      |
-                    >0  |   slurm        |   NA      | """
-        run_init_local = (not submit) and (ii.n_job < 0)
-        run_init_cluster = submit and (ii.n_job == 0)
-        # sweep local: init -> sweep 
-        # sweep server: slurm 
-        # sweep cluster: init -> agent
-        if run_init_local or run_init_cluster:
+        if not submit:
             ii.set_path(iterate_dir=True, append_exp_id=True)
             run = wandb.init(
                     entity      = ii.wandb_c.entity,  # team name is hwat
@@ -163,22 +158,23 @@ class Pyfig:
                     settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
             )
                 
-        if submit and ii.n_job > 0 and ii._n_job_running < cap:
-            n, ii.n_job  = ii.n_job, 0
-            ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd, n_job=ii.n_job)), create=True, log_name='slurm_init.log')
-            for sub in range(1, n+1):
-                Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
-            sys.exit(f'Submitted {sub} to slurm')
-
-        if submit and ii.n_job < 0: 
+        else:
+            run_cmds(ii._git_commit_cmd, cwd=ii.project_dir)
+            run_cmds(['git push origin main'], cwd=ii.project_dir)
+            
+            if not ii._hostname == ii.server: # if on local, ssh to server and rerun
+                run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)
+                run_cmds_server(ii.server, ii.user, ii._run_single_cmd, ii.run_dir)
+                folder = f'runs/{ii._exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id}'
+                print(f'Go to https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{folder}')
+                
+                sys.exit(f'Submitted {ii.n_job} to server')
+                ##############################################################################
+              
             ii.set_path(iterate_dir=True, append_exp_id=False)
             
             if ii.run_sweep:
-                ii.n_job = 0
-                ignore = ['sweep',]+list(ii.sweep.parameters.keys())
-                arg = get_cls_dict(ii, sub_cls=True, ignore=ignore, to_cmd=True, flat=True)
-                ii.sweep.parameters |= dict((k, dict(value=v)) for k,v in arg.items())
-                
+                ii.sweep.parameters |= ii.sweep._static_hypam
                 ii.sweep_id = wandb.sweep(
                     sweep   = ii.sweep.d, 
                     entity  = ii.wandb_c.entity,
@@ -187,15 +183,16 @@ class Pyfig:
 
             n_step_grid = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v] \
                 if ii.run_sweep else [1]
-            ii.n_job = reduce(lambda a,b: a*b, n_step_grid)
-        
-            run_cmds(ii._git_commit_cmd, cwd=ii.project_dir)
-            run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)
-            run_cmds_server(ii.server, ii.user, ii._run_single_cmd, ii.run_dir)
-
-            folder = f'runs/{ii._exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id}'
-            print(f'Go to https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{folder}')
-            sys.exit(f'Submitted {ii.n_job} to server')
+            n_job = reduce(lambda a,b: a*b, n_step_grid)
+            
+            if ii._n_job_running < cap:
+                ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd, n_job=ii.n_job)), \
+                    create=True, log_name='slurm_init.log')
+                for sub in range(1, n_job+1):
+                    Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
+                sys.exit(f'Submitted {sub} to slurm')
+            else:
+                sys.exit(f'{ii._n_job_running} already running on slurm, did not run. (cap {cap})')
 
     def set_path(ii, iterate_dir=True, append_exp_id=True):
         if str(ii.exp_path) == 'not_set':
@@ -230,6 +227,10 @@ class Pyfig:
     def commit_id(ii,)->str:
         process = run_cmds(['git log --pretty=format:%h -n 1'], cwd=ii.project_dir)[0]
         return process.stdout.decode('utf-8') 
+    
+    @property
+    def _hostname():
+        return run_cmds(['hostname'])[0]
     
     @property
     def _n_job_running(ii,):
@@ -304,24 +305,20 @@ def get_cls_dict(
             keep |= k in add if add else False
             
             if keep:
+                v = getattr(cls, k)
+                
                 if not ref:
                     if k.startswith('__'):
-                        continue
-                        
+                        continue    
                     if (not hidn) and k.startswith('_'):
                         continue
-                        
                     if (not fn) and isinstance(v_cls, partial):
                         continue
-                    
                     if (not prop) and isinstance(v_cls, property):
                         continue
-            
-                    v = getattr(cls, k)
                     if (not sub_cls) and isinstance(v, Sub):
                         continue
                 
-                v = getattr(cls, k)
                 if isinstance(v, Sub):
                     v = get_cls_dict(v, ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore, to_cmd=to_cmd)
                     if flat:
