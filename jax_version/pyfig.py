@@ -167,14 +167,16 @@ class Pyfig:
         else:
             print('setting up a submission')
             run_cmds([ii._git_commit_cmd], cwd=ii.project_dir)
-            run_cmds(['git push origin main'], cwd=ii.project_dir)
             
             if not ii.hostname == ii.server: # if on local, ssh to server and rerun
+                run_cmds('git push origin main', cwd=ii.project_dir)
                 run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.project_dir)
                 run_cmds_server(ii.server, ii.user, ii._run_single_cmd, ii.run_dir)                
                 sys.exit(f'Submitted to server')
                 ##############################################################################
-              
+            
+            run_cmds('git pull origin main', cwd=ii.project_dir)
+            
             ii.set_path(iterate_dir=True, append_exp_id=False)
             
             if ii.run_sweep:
