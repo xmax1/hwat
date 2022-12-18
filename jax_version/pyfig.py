@@ -171,6 +171,8 @@ class Pyfig:
             sys.exit(f'Submitted {sub} to slurm')
 
         if submit and ii.n_job < 0: 
+            ii.set_path(iterate_dir=True, append_exp_id=False)
+            
             if ii.run_sweep:
                 ii.n_job = 0
                 ignore = ['sweep',]+list(ii.sweep.parameters.keys())
@@ -182,13 +184,11 @@ class Pyfig:
                     entity  = ii.wandb_c.entity,
                     project = ii.project,
                 )
-                
+
             n_step_grid = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v] \
                 if ii.run_sweep else [1]
             ii.n_job = reduce(lambda a,b: a*b, n_step_grid)
-            
-            ii.set_path(iterate_dir=True, append_exp_id=False)
-            
+        
             run_cmds(ii._git_commit_cmd, cwd=ii.project_dir)
             run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)
             run_cmds_server(ii.server, ii.user, ii._run_single_cmd, ii.run_dir)
@@ -291,7 +291,7 @@ def get_cls_dict(
         ignore:list=None,
         add:list=None,
         to_cmd:bool=False,
-        flat:   bool=False
+        flat:bool=False
     ) -> dict:
     # ref > ignore > add
         ignore = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge', 'set_path'] + (ignore or [])
@@ -323,7 +323,7 @@ def get_cls_dict(
                 
                 v = getattr(cls, k)
                 if isinstance(v, Sub):
-                    v = get_cls_dict(v, ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore, to_cmd=True)
+                    v = get_cls_dict(v, ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore, to_cmd=to_cmd)
                     if flat:
                         items.extend(v.items())
                         continue

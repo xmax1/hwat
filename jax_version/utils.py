@@ -206,7 +206,6 @@ def cmd_to_dict(cmd:str|list, ref:dict, delim:str=' --', d=None):
         v_ref = ref.get(k, None)
         if v_ref is None:
             print(f'{k} not in ref')
-        # debug_pr(dict(k=v))
         d[k] = type_me(v, v_ref, is_cmd_item=True)
     return d
     
