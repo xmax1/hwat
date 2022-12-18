@@ -126,7 +126,7 @@ class Pyfig:
     _git_commit_cmd:    list    = ['git commit -a -m "run_things"', 'git push origin main']
     _git_pull_cmd:      list    = ['git fetch --all', 'git reset --hard origin/main']
     _sys_arg:           list    = sys.argv[1:]
-    _wandb_ignore:      list    = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + ['sbatch', 'sweep']
+    _wandb_ignore:      list    = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge', 'set_path'] + ['sbatch', 'sweep']
     
     _useful = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
     
@@ -188,7 +188,15 @@ class Pyfig:
         if submit and ii.n_job < 0: 
             if ii.run_sweep:
                 ii.n_job = 0
-                d = dict(name=ii.wandb_c.name, program=ii._run_single_cmd.split(' ', maxsplit=1)[1])
+                
+                pprint.pprint(ii.d)
+                
+
+                d = dict(name=ii.wandb_c.name, program=ii.run_name)
+                print(ii.wandb_cmd)
+                base = cmd_to_dict(ii.wandb_cmd, flat_dict(ii.d))
+                base = dict((k, dict(value=v)) for k,v in base.items() )
+                ii.sweep.parameters |= base
                 print(ii._run_single_cmd.split(' ', maxsplit=1)[1])
                 ii.sweep_id_code = wandb.sweep(
                     sweep   = ii.sweep.d | d, 
@@ -316,7 +324,7 @@ def get_cls_dict(
         add:list=None
     ) -> dict:
     # ref > ignore > add
-        ignore = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge'] + (ignore or [])
+        ignore = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge', 'set_path'] + (ignore or [])
         
         items = []
         for k, v_cls in cls.__class__.__dict__.items():

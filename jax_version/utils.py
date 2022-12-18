@@ -168,6 +168,7 @@ def type_me(v, v_ref=None, is_cmd_item=False):
         if v in booleans: 
             return booleans.index(v) < 3  # 0-2 True 3-5 False
     
+    print(v, v_ref, type(v))
     if v_ref is not None:
         type_ref = type(v_ref)
         if isinstance(v, str):
@@ -205,7 +206,7 @@ def cmd_to_dict(cmd:str|list, ref:dict, delim:str=' --', d=None):
         v_ref = ref.get(k, None)
         if v_ref is None:
             print(f'{k} not in ref')
-        debug_pr(dict(k=v))
+        # debug_pr(dict(k=v))
         d[k] = type_me(v, v_ref, is_cmd_item=True)
     return d
     
