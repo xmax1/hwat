@@ -26,10 +26,7 @@ class Pyfig:
     # SUB CLASSES CANNOT CALL EACH OTHER
 
     run_name:       Path        = 'run.py'
-
-    exp_name:       str         = 'demo'
-    sweep_id_code:  str         = ''
-    run_id:         str         = gen_alphanum(n=7)
+    sweep_id:  str              = ''
 
     seed:           int         = 808017424 # grr
     dtype:          str         = 'float32'
@@ -69,6 +66,7 @@ class Pyfig:
         terms_p_emb:    list    = ['rr', 'rr_len']
 
     class sweep(Sub):
+        program         = property(lambda _: _._p.run_name)
         name            = 'demo'
         method          = 'grid'
         parameters = dict(
@@ -93,16 +91,16 @@ class Pyfig:
         error           = property(lambda _: _._p.exp_path /'e-%j.err')
         job_name        = property(lambda _: _._p.exp_name)  # this does not call the instance it is in
     
+    dump:               str     = property(lambda _: Path('dump'))
     TMP:                Path    = mkdir(Path('./dump/tmp'))
     _home:              Path    = property(lambda _: Path().home())
     project:            str     = property(lambda _: 'hwat')
     run_dir:            Path    = property(lambda _: Path(__file__).parent.relative_to(_._home))
     project_dir:        Path    = property(lambda _: (_._home / 'projects' / _.project))
     server_project_dir: Path    = property(lambda _: _.project_dir.relative_to(_._home))
-    exp_id:             str     = property(lambda _: _.run_id + _.sweep_id_code)
-    iterate_state:      bool    = True
+    _exp_id:             str     = gen_alphanum(n=7)
         
-    sweep_id:       str         = property(lambda _: (f'{_.wandb_c.entity}/{_.project}/{_.sweep_id_code}')*bool({_.sweep_id_code}))
+    sweep_path_id:      str     = property(lambda _: (f'{_.wandb_c.entity}/{_.project}/{_.sweep_id}')*bool(_.sweep_id))
         
     n_device:           int     = property(lambda _: count_gpu())
     run_sweep:          bool    = False
@@ -112,21 +110,23 @@ class Pyfig:
     git_branch:         str     = 'main'        
     env:                str     = 'dex'                 # CONDA ENV
     
-    n_job:              int     = -1                  # #n_job-state-flow
-    debug:              bool    = False
-    wandb_mode: str = 'disabled'
-    submit: bool = False
-    cap: int = 40
-    exp_path: str = Path('')
-
-    _run_single_cmd:    str     = property(lambda _: f'python {str(_.run_name)} {_.cmd}')
-    _run_sweep_cmd:     str     = property(lambda _: f'wandb agent {_.sweep_id}')
-    _run_cmd:           str     = property(lambda _: _._run_sweep_cmd*_.run_sweep or _._run_single_cmd)
+    n_job:              int      = -1                  # #n_job-state-flow
+    debug:              bool     = False
+    wandb_mode:         str      = 'disabled'
+    submit:             bool     = False
+    cap:                int      = 40
     
-    _git_commit_cmd:    list    = ['git commit -a -m "run_things"', 'git push origin main']
-    _git_pull_cmd:      list    = ['git fetch --all', 'git reset --hard origin/main']
-    _sys_arg:           list    = sys.argv[1:]
-    _wandb_ignore:      list    = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge', 'set_path'] + ['sbatch', 'sweep']
+    exp_path:           Path     = Path('not_set')
+    exp_name:           str      = 'junk'
+    
+    _run_single_cmd:    str      = property(lambda _: f'python {str(_.run_name)} {_.cmd}')
+    _run_sweep_cmd:     str      = property(lambda _: f'wandb agent {_.sweep_path_id}')
+    _run_cmd:           str      = property(lambda _: _._run_sweep_cmd*_.run_sweep or _._run_single_cmd)
+     
+    _git_commit_cmd:    list     = ['git commit -a -m "run_things"', 'git push origin main']
+    _git_pull_cmd:      list     = ['git fetch --all', 'git reset --hard origin/main']
+    _sys_arg:           list     = sys.argv[1:]
+    _wandb_ignore:      list     = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge', 'set_path'] + ['sbatch', 'sweep']
     
     _useful = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
     
@@ -139,32 +139,21 @@ class Pyfig:
         
         arg.update(dict(run_sweep=run_sweep, debug=debug, wandb_mode=wandb_mode, submit=submit, cap=cap))
         sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d))
-        arg = arg | sys_arg
-        debug_mode(arg.get('debug', False))  # TURN DDEUG OFFF TENSORFLOW WILL DESTROY YOU
-        debug_pr(sys_arg)
-        ii.merge(arg)
-        ii.set_path()
-        mkdir(ii.exp_path)
-        
-    
+        ii.merge(arg | sys_arg)
+      
         """             |        submit         |       
                         |   True    |   False   | 
                         -------------------------
                     <0  |   server/init  |   init    |
         n_job       =0  |   init         |   NA      |
                     >0  |   slurm        |   NA      | """
-        
         run_init_local = (not submit) and (ii.n_job < 0)
         run_init_cluster = submit and (ii.n_job == 0)
-        
         # sweep local: init -> sweep 
         # sweep server: slurm 
         # sweep cluster: init -> agent
-        
-        # wandb.agent(sweep_id, function=train) YOURE A FUCKING IDIOT go back to ashbourne, marryt someone you don't love and die slowly <3
-     
         if run_init_local or run_init_cluster:
-            ii.log(dict(init=dict(sweep_id=ii.sweep_id)), create=True)
+            ii.set_path(iterate_dir=True, append_exp_id=True)
             run = wandb.init(
                     entity      = ii.wandb_c.entity,  # team name is hwat
                     project     = ii.project,         # sub project in team
@@ -172,59 +161,50 @@ class Pyfig:
                     config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
                     mode        = wandb_mode,
                     settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
-                    id          = ii.exp_id
-                )    
-            # if ii.sweep_id:
-            #     wandb.agent(sweep_id=ii.sweep_id, count=1)
+            )
                 
         if submit and ii.n_job > 0 and ii._n_job_running < cap:
             n, ii.n_job  = ii.n_job, 0
             ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd, n_job=ii.n_job)), create=True, log_name='slurm_init.log')
             for sub in range(1, n+1):
                 Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
-                sleep(1)
             sys.exit(f'Submitted {sub} to slurm')
 
         if submit and ii.n_job < 0: 
             if ii.run_sweep:
                 ii.n_job = 0
+                ignore = ['sweep',]+list(ii.sweep.parameters.keys())
+                arg = get_cls_dict(ii, sub_cls=True, ignore=ignore, to_cmd=True, flat=True)
+                ii.sweep.parameters |= dict((k, dict(value=v)) for k,v in arg.items())
                 
-                print(ii.wandb_cmd)
-                # base = cmd_to_dict(ii.wandb_cmd, flat_dict(ii.d))
-                d = flat_dict(get_cls_dict(ii, sub_cls=True, ignore=['sweep',] + list(ii.sweep.parameters.keys()), add=['exp_path',]))
-                d = {k: v.tolist() if isinstance(v, np.ndarray) else v for k,v in d.items()}
-                d = {str(k).replace(" ", ""): str(v).replace(" ", "") for k,v in d.items()}
-                d = dict((k, dict(value=v)) for k,v in d.items() )
-                ii.sweep.parameters |= d
-                ii.sweep_id_code = wandb.sweep(
-                    sweep   = ii.sweep.d | dict(name=ii.wandb_c.name, program=ii.run_name), 
+                ii.sweep_id = wandb.sweep(
+                    sweep   = ii.sweep.d, 
                     entity  = ii.wandb_c.entity,
                     project = ii.project,
                 )
-                n_step_grid = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v]
                 
-            ii.n_job = reduce(lambda a,b: a*b, n_step_grid if ii.run_sweep else [1])
-            print('yes')
-            ii.log(dict(server_init=dict(run_cmd=ii._run_single_cmd, n_job=ii.n_job)), create=True, log_name='server_init.log')
+            n_step_grid = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v] \
+                if ii.run_sweep else [1]
+            ii.n_job = reduce(lambda a,b: a*b, n_step_grid)
+            
+            ii.set_path(iterate_dir=True, append_exp_id=False)
+            
             run_cmds(ii._git_commit_cmd, cwd=ii.project_dir)
             run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)
             run_cmds_server(ii.server, ii.user, ii._run_single_cmd, ii.run_dir)
 
-            folder = f'runs/{ii.exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id_code}'
+            folder = f'runs/{ii._exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id}'
             print(f'Go to https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{folder}')
             sys.exit(f'Submitted {ii.n_job} to server')
-    
-    def _single_use_switch(ii, k):
-        """ if True, turn False, return True
-        if False, keep False, return False """
-        state = getattr(ii, k)
-        setattr(ii, k, False)
-        return state
-   
-    def set_path(ii,):
-        if not ii.exp_path.name:
-            ii.exp_path = iterate_n_dir(Path('exp')/ii.exp_name, ii._single_use_switch('iterate_state'))/ii.exp_id
-        
+
+    def set_path(ii, iterate_dir=True, append_exp_id=True):
+        if str(ii.exp_path) == 'not_set':
+            exp_name = iterate_n_dir(ii.dump/ii.exp_name, iterate_dir)
+            ii.exp_path = exp_name/(ii.sweep_id or '')
+        if append_exp_id:
+            ii.exp_path = Path(ii.exp_path) / ii._exp_id
+        mkdir(ii.exp_path)
+      
     @property
     def sbatch(ii,):
         s = f"""\
@@ -238,19 +218,10 @@ class Pyfig:
     
     @property
     def cmd(ii):
-        d = flat_dict(get_cls_dict(ii, sub_cls=True, ignore=['sweep',], add=['exp_path',]))
-        d = {k: v.tolist() if isinstance(v, np.ndarray) else v for k,v in d.items()}
-        cmd_d = {str(k).replace(" ", ""): str(v).replace(" ", "") for k,v in d.items()}
+        ignore = ['sweep',]+list(ii.sweep.parameters.keys())
+        cmd_d = get_cls_dict(ii, sub_cls=True, ignore=ignore, to_cmd=True, flat=True)
         return ' '.join([f'--{k} {v}' for k,v in cmd_d.items() if v])
-    
-    @property
-    def wandb_cmd(ii):
-        d = flat_dict(get_cls_dict(ii, sub_cls=True, ignore=['sweep',] + list(ii.sweep.parameters.keys()), add=['exp_path',]))
-        d = {k: v.tolist() if isinstance(v, np.ndarray) else v for k,v in d.items()}
-        cmd_d = {str(k).replace(" ", ""): str(v).replace(" ", "") for k,v in d.items()}
-        cmd = ' '.join([f' --{k}={v}' for k,v in cmd_d.items() if v])
-        return cmd
-
+        
     @property
     def d(ii):
         return get_cls_dict(ii, sub_cls=True, prop=True)
@@ -267,8 +238,7 @@ class Pyfig:
     def partial(ii, f:Callable, d=None, get_d=False, print_d=False, **kw):
         d = flat_any(d if d else ii.d)
         d_k = inspect.signature(f.__init__).parameters.keys()
-        d = {k:copy(v) for k,v in d.items() if k in d_k}
-        d = {k:v for k,v in d.items() if k in d_k} | kw
+        d = {k:copy(v) for k,v in d.items() if k in d_k} | kw
         if get_d:
             return d
         if print_d:
@@ -319,7 +289,9 @@ def get_cls_dict(
         prop=False, 
         hidn=False,
         ignore:list=None,
-        add:list=None
+        add:list=None,
+        to_cmd:bool=False,
+        flat:   bool=False
     ) -> dict:
     # ref > ignore > add
         ignore = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge', 'set_path'] + (ignore or [])
@@ -328,8 +300,8 @@ def get_cls_dict(
         for k, v_cls in cls.__class__.__dict__.items():
             
             keep = k in ref if ref else True
-            keep |= k in add if add else False
             keep = False if (k in ignore) else keep
+            keep |= k in add if add else False
             
             if keep:
                 if not ref:
@@ -351,9 +323,18 @@ def get_cls_dict(
                 
                 v = getattr(cls, k)
                 if isinstance(v, Sub):
-                    v = get_cls_dict(v, ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore)
+                    v = get_cls_dict(v, ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore, to_cmd=True)
+                    if flat:
+                        items.extend(v.items())
+                        continue
+                    
                 items.append([k, v])     
-                               
+        
+        if to_cmd:
+            print(items)
+            items = ((k, (v.tolist() if isinstance(v, np.ndarray) else v)) for (k,v) in items)
+            items = ((str(k).replace(" ", ""), str(v).replace(" ", "")) for (k,v) in items)
+                  
         return dict(items)
 
 
@@ -413,7 +394,13 @@ def _debug_print(ii, on=False, cls=True):
             if cls:
                 [print(k,v) for k,v in vars(ii.__class__).items() if not k.startswith('_')]
 
-
+@property
+    def wandb_cmd(ii):
+        d = flat_dict(get_cls_dict(ii, sub_cls=True, ignore=['sweep',] + list(ii.sweep.parameters.keys()), add=['exp_path',]))
+        d = {k: v.tolist() if isinstance(v, np.ndarray) else v for k,v in d.items()}
+        cmd_d = {str(k).replace(" ", ""): str(v).replace(" ", "") for k,v in d.items()}
+        cmd = ' '.join([f' --{k}={v}' for k,v in cmd_d.items() if v])
+        return cmd
 
 
 
