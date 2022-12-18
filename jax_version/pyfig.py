@@ -175,9 +175,11 @@ class Pyfig:
                 ##############################################################################
     
             print(ii.hostname)
-            run_cmds([ii._git_commit_cmd, 'git push origin main'], cwd=ii.project_dir)
-            run_cmds('git pull origin main', cwd=ii.project_dir)
+            
             ii.set_path(iterate_dir=True, append_exp_id=False)
+            
+            run_cmds([ii._git_commit_cmd, 'git push origin main'], cwd=ii.project_dir)
+            
             
             if ii.run_sweep:
                 ii.sweep.parameters |= dict((k, dict(value=v)) for k,v in ii._not_in_sweep.items())
