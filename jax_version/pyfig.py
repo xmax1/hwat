@@ -218,7 +218,7 @@ class Pyfig:
     
     @property
     def cmd(ii):
-        ignore = ['sweep',]+list(ii.sweep.parameters.keys())
+        ignore = ['sweep',]
         cmd_d = get_cls_dict(ii, sub_cls=True, ignore=ignore, to_cmd=True, flat=True)
         return ' '.join([f'--{k} {v}' for k,v in cmd_d.items() if v])
         
@@ -331,7 +331,6 @@ def get_cls_dict(
                 items.append([k, v])     
         
         if to_cmd:
-            print(items)
             items = ((k, (v.tolist() if isinstance(v, np.ndarray) else v)) for (k,v) in items)
             items = ((str(k).replace(" ", ""), str(v).replace(" ", "")) for (k,v) in items)
                   
