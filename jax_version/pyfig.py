@@ -204,7 +204,7 @@ class Pyfig:
                 n_step_grid = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v]
                 
             ii.n_job = reduce(lambda a,b: a*b, n_step_grid if ii.run_sweep else [1])
-            
+            print('yes')
             ii.log(dict(server_init=dict(run_cmd=ii._run_single_cmd, n_job=ii.n_job)), create=True, log_name='server_init.log')
             run_cmds(ii._git_commit_cmd, cwd=ii.project_dir)
             run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)
