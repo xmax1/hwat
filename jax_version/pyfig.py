@@ -189,18 +189,15 @@ class Pyfig:
             if ii.run_sweep:
                 ii.n_job = 0
                 
-                pprint.pprint(ii.d)
-                
-                d = dict(name=ii.wandb_c.name, program=ii.run_name)
                 print(ii.wandb_cmd)
                 # base = cmd_to_dict(ii.wandb_cmd, flat_dict(ii.d))
                 d = flat_dict(get_cls_dict(ii, sub_cls=True, ignore=['sweep',] + list(ii.sweep.parameters.keys()), add=['exp_path',]))
                 d = {k: v.tolist() if isinstance(v, np.ndarray) else v for k,v in d.items()}
                 d = {str(k).replace(" ", ""): str(v).replace(" ", "") for k,v in d.items()}
-                base = dict((k, dict(value=v)) for k,v in d.items() )
-                ii.sweep.parameters |= base
+                d = dict((k, dict(value=v)) for k,v in d.items() )
+                ii.sweep.parameters |= d
                 ii.sweep_id_code = wandb.sweep(
-                    sweep   = ii.sweep.d | d, 
+                    sweep   = ii.sweep.d | dict(name=ii.wandb_c.name, program=ii.run_name), 
                     entity  = ii.wandb_c.entity,
                     project = ii.project,
                 )
