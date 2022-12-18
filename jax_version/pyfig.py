@@ -98,8 +98,7 @@ class Pyfig:
     _home:              Path    = property(lambda _: Path().home())
     project:            str     = property(lambda _: 'hwat')
     run_dir:            Path    = property(lambda _: Path(__file__).parent.relative_to(_._home))
-    project_dir:        Path    = property(lambda _: (_._home / 'projects' / _.project))
-    server_project_dir: Path    = property(lambda _: _.project_dir.relative_to(_._home))
+    project_dir:        Path    = property(lambda _: _._home / 'projects' / _.project)
     _exp_id:             str     = gen_alphanum(n=7)
         
     sweep_path_id:      str     = property(lambda _: (f'{_.wandb_c.entity}/{_.project}/{_.sweep_id}')*bool(_.sweep_id))
@@ -112,7 +111,6 @@ class Pyfig:
     git_branch:         str     = 'main'        
     env:                str     = 'dex'                 # CONDA ENV
     
-    n_job:              int      = -1                  # #n_job-state-flow
     debug:              bool     = False
     wb_mode:            str      = 'disabled'
     submit:             bool     = False
@@ -172,9 +170,9 @@ class Pyfig:
             run_cmds(['git push origin main'], cwd=ii.project_dir)
             
             if not ii.hostname == ii.server: # if on local, ssh to server and rerun
-                run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)
+                run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.project_dir)
                 run_cmds_server(ii.server, ii.user, ii._run_single_cmd, ii.run_dir)                
-                sys.exit(f'Submitted {ii.n_job} to server')
+                sys.exit(f'Submitted to server')
                 ##############################################################################
               
             ii.set_path(iterate_dir=True, append_exp_id=False)
@@ -190,7 +188,7 @@ class Pyfig:
             n_sweep = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v] 
             n_job = reduce(lambda a,b: a*b, n_sweep if ii.run_sweep else [1])
             if ii._n_job_running < cap:
-                ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd, n_job=ii.n_job)), \
+                ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd)), \
                     create=True, log_name='slurm_init.log')
                 for sub in range(1, n_job+1):
                     Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
