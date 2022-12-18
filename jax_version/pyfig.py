@@ -132,7 +132,7 @@ class Pyfig:
     _run_sweep_cmd:     str      = property(lambda _: f'wandb agent {_.sweep_path_id}')
     _run_cmd:           str      = property(lambda _: _._run_sweep_cmd*_.run_sweep or _._run_single_cmd)
      
-    _git_commit_cmd:    list     = 'git commit -a -m "run"'
+    _git_commit_cmd:    list     = 'git commit -a -m "run"' # !NB no spaces in msg 
     _git_pull_cmd:      list     = ['git fetch --all', 'git reset --hard origin/main']
     _sys_arg:           list     = sys.argv[1:]
     _ignore:            list     = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge', 'set_path', '_get_cls_dict']
@@ -149,12 +149,12 @@ class Pyfig:
                 setattr(ii, k, v)
         
         print('updating configuration')
-        arg.update(dict(run_sweep=run_sweep, debug=debug, wandb_mode=wandb_mode, submit=submit, cap=cap))
+        arg.update(dict(run_sweep=run_sweep,submit=submit, debug=debug, wandb_mode=wandb_mode,  cap=cap))
         sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d)) if not notebook else {}
         ii.merge(arg | sys_arg)
         ii.log(ii.d, create=True, log_name='post_var_init.log')
         
-        if not submit:
+        if not ii.submit:
             print('running script')
             ii.set_path(iterate_dir=True, append_exp_id=True)
             run = wandb.init(
@@ -189,7 +189,7 @@ class Pyfig:
 
             n_sweep = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v] 
             n_job = reduce(lambda a,b: a*b, n_sweep if ii.run_sweep else [1])
-            
+            ii.merge(dict(submit=False))
             if ii._n_job_running < cap:
                 ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd, n_job=ii.n_job)), \
                     create=True, log_name='slurm_init.log')
