@@ -1,16 +1,17 @@
 from pathlib import Path
-from jax import numpy as jnp
+import sys
 import paramiko
 import subprocess
 from time import sleep
 from itertools import product
+from functools import partial
 import random
 from typing import Any, Iterable
 import re
 from ast import literal_eval
-import numpy as np
 import os
-import jax
+import pprint
+import torch
 
 import numpy as np
 from copy import copy
@@ -21,15 +22,16 @@ this_dir = Path(__file__).parent
 
 class Sub:
     _p = None
+    _ignore = ['d', '_d'] 
 
     def __init__(ii, parent=None):
         ii._p = parent
     
     @property
-    def d(ii, ignore=['d', 'cmd', '_p']):
+    def d(ii,):
         out={} # becomes class variable in call line, accumulates
         for k,v in ii.__class__.__dict__.items():
-            if k.startswith('_') or k in ignore:
+            if k.startswith('_') or k in ii._ignore:
                 continue
             if isinstance(v, partial): 
                 v = ii.__dict__[k]   # if getattr then calls the partial, which we don't want
@@ -53,21 +55,25 @@ def collect_stats(k, v, new_d, p='tr', suf='', sep='/', sep_long='-'):
 
 ### debug things
 
-def debug(on=False):
+def debug_mode(on=False):
     if on:
         os.environ['debug'] = 'debug'
     else:
         os.environ['debug'] = ''
 
-def wpr(d:dict):
+def debug_pr(d:dict):
     if os.environ.get('debug') == 'debug':
         for k,v in d.items():
             typ = type(v) 
             has_shape = hasattr(v, 'shape')
             shape = v.shape if has_shape else None
             dtype = v.dtype if hasattr(v, 'dtype') else None
-            mean = jnp.mean(v) if has_shape else v
-            std = jnp.std(v) if has_shape else None
+            try:
+                mean = torch.mean(v) if has_shape else v
+                std = torch.std(v) if has_shape else None
+            except:
+                mean = v
+                std = None
             print(k, f'\t mean={mean} \t std={std} \t shape={shape} \t dtype={dtype}') # \t type={typ}
 
 ### count things
@@ -75,7 +81,8 @@ def wpr(d:dict):
 def count_gpu() -> int: 
     # output = run_cmd('echo $CUDA_VISIBLE_DEVICES', cwd='.') - one day 
     import os
-    return sum(c.isdigit() for c in os.environ.get('CUDA_VISIBLE_DEVICES'))
+    device = os.environ.get('CUDA_VISIBLE_DEVICES') or 'none'
+    return sum(c.isdigit() for c in device)
 
 def get_cartesian_product(*args):
     """ Cartesian product is the ordered set of all combinations of n sets """
@@ -92,15 +99,15 @@ def gen_alphanum(n: int = 7, test=False):
     name = ''.join([random.choice(characters) for _ in range(n)])
     return name
 
-def iterate_folder(folder: Path, iter_exp_dir):
-    if iter_exp_dir and folder.exists():
-        for i in range(100):
-            _folder = add_to_Path(folder, f'-{i}')
-            if not re.search(_folder.name, f'-[0-9]*'):
-                folder = _folder
-                break
-        else:
-            folder = add_to_Path(folder, f'-0')
+def iterate_n_dir(folder: Path, iterate_state, n_max=1000):
+    if iterate_state:
+        if not re.match(folder.name, '-[0-9]*'):
+            folder = add_to_Path(folder, '-0')
+        for i in range(n_max+1):
+            folder = folder.parent / folder.name.split('-')[0]
+            folder = add_to_Path(folder, f'-{i}')
+            if not folder.exists():
+                break   
     return folder
 
 ### do things
@@ -109,73 +116,126 @@ def mkdir(path: Path) -> Path:
     path = Path(path)
     if path.suffix != '':
         path = path.parent
-    if path.exists():
-        print('path exists, leaving alone')
-    else:
+    if not path.exists():
         path.mkdir(parents=True)
     return path
 
 def add_to_Path(path: Path, string: str | Path):
-        return Path(str(path) + str(string))
+    return Path(str(path) + str(string))
 
 ### convert things
 
 def npify(v):
-    return jnp.array(v.numpy())
+    return torch.tensor(v.numpy())
 
-def cmd_to_dict(cmd:str|list, ref:dict, _d={}, delim:str=' --'):
+def format_cmd_item(v):
+    v = v.replace('(', '[').replace(')', ']')
+    return v.replace(' ', '')
+
+def to_cmd(d:dict):
+    """ Accepted: int, float, str, list, dict, np.ndarray"""
+    
+    def prep_cmd_item(k:str, v:Any):
+        if isinstance(v, np.ndarray):
+            v = v.tolist()
+        return str(k).replace(" ", ""), str(v).replace(" ", "")
+    
+    return dict(prep_cmd_item(k,v) for k,v in d.items())
+    
+def type_me(v, v_ref=None, is_cmd_item=False):
+    def count_leading_char(s, char): 
+        # space=r"^\s*" bracket=r'^[*'
+        match = re.search(rf'^{char}*', s)
+        return 0 if not match else match.end()
+    
+    if is_cmd_item:
+        """ Accepted: 
+        bool, list of list (str, float, int), dictionary, str, explicit str (' "this" '), """
+        v = format_cmd_item(v)
+        
+        if v.startswith('[['):
+            v = v.strip('[]')
+            nest_lst = v.split('],[')
+            return np.asarray([type_me('['+lst+']', v_ref[0], is_cmd_item=True) for lst in nest_lst])
+        
+        if v.startswith('['):
+            v = v.strip('[]')
+            v = v.split(',')
+            return np.asarray([type_me(x, v_ref[0]) for x in v])
+        
+        booleans = ['True', 'true', 't', 'False', 'false', 'f']
+        if v in booleans: 
+            return booleans.index(v) < 3  # 0-2 True 3-5 False
+    
+    if v_ref is not None:
+        type_ref = type(v_ref)
+        if isinstance(v, str):
+            v = v.strip('\'\"')
+            
+        if isinstance(v, (np.ndarray, np.generic)):
+            if isinstance(v.flatten()[0], str):
+                return v.tolist()
+            return v
+        
+        if isinstance(v, list):
+            if isinstance(flat_any(v)[0], str):
+                return v
+            return np.asarray(v)
+
+        return type_ref(v)
+        
+    try:
+        return literal_eval(v)
+    except:
+        return str(v).strip('\'\"')
+    
+    
+def cmd_to_dict(cmd:str|list, ref:dict, delim:str=' --', d=None):
     """
     fmt: [--flag, arg, --true_flag, --flag, arg1]
     # all flags double dash because of negative numbers duh """
-
-    cmd = ' '.join(cmd) if isinstance(cmd, list) else cmd
-    cmd = [x.strip(' ').lstrip('--') for x in cmd.split(delim)]
-    cmd = [x.split(' ', maxsplit=1) for x in cmd if ' ' in x]
-    [x.append('True') for x in cmd if len(x) == 1]
-    cmd = flat_list(cmd)
-    cmd = iter([x.strip() for x in cmd])
-
-    for k,v in zip(cmd, cmd):
-        
-        if k in ref:
-            v = type(ref[k])(v)
-        else:
-            try:
-                v = literal_eval(v)
-            except:
-                v = str(v)
-            print(f'Guessing type: {k} as {type(v)}')
-        _d[k] = v
-    return _d
-
+    cmd = ' ' + (' '.join(cmd) if isinstance(cmd, list) else cmd)  # add initial space in case single flag
+    cmd = [x.strip().lstrip('--') for x in cmd.split(delim)][1:]
+    cmd = [x.split('=', maxsplit=1) if '=' in x else x.split(' ', maxsplit=1) for x in cmd]
+    [x.append('True') for x in cmd if len(x)==1]
+    
+    d = dict()
+    for k,v in cmd:
+        v = format_cmd_item(v)
+        k = k.replace(' ', '')
+        v_ref = ref.get(k, None)
+        if v_ref is None:
+            print(f'{k} not in ref')
+        d[k] = type_me(v, v_ref, is_cmd_item=True)
+    return d
+    
 ### run things
 
-def run_cmds(cmd:str|list,cwd:str|Path='.',input_req:str=None):
-    out = []
+
+
+def run_cmds(cmd:str|list, cwd:str|Path='.', input_req:str=None, _res=[]):
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
         cmd_1 = [c.strip() for c in cmd_1.split(' ')]
-        res = subprocess.run(cmd_1, cwd=str(cwd), input=input_req, capture_output=True)
-        out += [cmd_1, res.stdout, res.sterr]
-    for res in out:
-        for l in res: 
-            print(l)
-    return out[0] if len(out) == 0 else out
+        print(f'Run: {cmd_1} at {cwd}')
+        _res = subprocess.run(cmd_1, cwd=str(cwd), capture_output=True, text=True)
+        print('stdout:', _res.stdout.replace("\n", " "), 'stderr:', _res.stderr.replace("\n", ";"))
+    return _res.stdout.replace('\n', ' ')
 
-def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path):
-    out = []
+def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path, _res=[]):
     client = paramiko.SSHClient()    
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # if not known host
     client.connect(server, username=user)
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]):
-        res = client.exec_command(f'cd {str(cwd)}; {cmd_1}')
-        out += [cmd_1, res.stdout, res.sterr]
+        print(f'Remote run: {cmd_1} at {user}@{server}:{cwd}')
+        stdin, stdout, stderr = client.exec_command(f'cd {str(cwd)}; {cmd_1}')
+        stderr = '\n'.join(stderr.readlines())
+        stdout = '\n'.join(stdout.readlines())
+        print('stdout:', stdout, 'stderr:', stderr)
     client.close()
-    for res in out:
-        for l in res: 
-            print(l)
-    return out[0] if len(out) == 0 else out
+    return stdout.replace("\n", " ")
 
-
+    
+    
 # flatten things
 
 def flat_arr(v):
@@ -193,7 +253,7 @@ def flat_dict(d:dict):
             items.append((k, v))
     return dict(items)
 
-def flat_any(v: list|dict|jnp.ndarray|np.ndarray):
+def flat_any(v: list|dict|torch.Tensor|np.ndarray):
     if isinstance(v, list):
         return flat_list(v)
     if isinstance(v, dict):
@@ -224,68 +284,67 @@ def dict_to_wandb(
     return dict(_l)
 
 
-### jax ###
+# ### jax ###
 
-try:
-    from flax.core.frozen_dict import FrozenDict
-    from jax import random as rnd
+# try:
+#     from flax.core.frozen_dict import FrozenDict
+#     from jax import random as rnd
     
-    def gen_rng(rng, n_device):
-        """ rng generator for multi-gpu experiments """
-        rng, rng_p = jnp.split(rnd.split(rng, n_device+1), [1,])
-        return rng.squeeze(), rng_p	
+#     def gen_rng(rng, n_device):
+#         """ rng generator for multi-gpu experiments """
+#         rng, rng_p = torch.split(rnd.split(rng, n_device+1), [1,])
+#         return rng.squeeze(), rng_p	
         
 
-    def compute_metrix(d:dict, mode='tr', fancy=None, ignore = [], _d = {}):
+#     def compute_metrix(d:dict, mode='tr', fancy=None, ignore = [], _d = {}):
         
-        for k,v in d.items():
-            if any([ig in k for ig in ignore+['step']]):
-                continue 
+#         for k,v in d.items():
+#             if any([ig in k for ig in ignore+['step']]):
+#                 continue 
             
-            if not fancy is None:
-                k = fancy.get(k, k)
+#             if not fancy is None:
+#                 k = fancy.get(k, k)
 
-            v = jax.device_get(v)
+#             v = jax.device_get(v)
             
-            if isinstance(v, FrozenDict):
-                v = v.unfreeze()
+#             if isinstance(v, FrozenDict):
+#                 v = v.unfreeze()
             
-            v_mean = jax.tree_map(lambda x: x.mean(), v) if not np.isscalar(v) else v
-            v_std = jax.tree_map(lambda x: x.std(), v) if not np.isscalar(v) else 0.
+#             v_mean = jax.tree_map(lambda x: x.mean(), v) if not np.isscalar(v) else v
+#             v_std = jax.tree_map(lambda x: x.std(), v) if not np.isscalar(v) else 0.
 
-            group = mode
-            if 'grad' in k:
-                group = mode + '/grad'
-            elif 'param' in k:
-                group += '/param'
+#             group = mode
+#             if 'grad' in k:
+#                 group = mode + '/grad'
+#             elif 'param' in k:
+#                 group += '/param'
                 
-            _d = collect_stats(k, v_mean, _d, p=group, suf=r'_\mu$')
-            _d = collect_stats(k, v_std, _d, p=group+'/std', suf=r'_\sigma$')
+#             _d = collect_stats(k, v_mean, _d, p=group, suf=r'_\mu$')
+#             _d = collect_stats(k, v_std, _d, p=group+'/std', suf=r'_\sigma$')
 
-        return _d
+#         return _d
 
-    ### type testing ### 
+#     ### type testing ### 
 
-    def test_print_fp16_no_cast():
-        x = jnp.ones([1], dtype='float16')
-        print(x)  # FAILS
+#     def test_print_fp16_no_cast():
+#         x = torch.ones([1], dtype='float16')
+#         print(x)  # FAILS
 
-    def test_print_fp16():
-        x = jnp.ones([1], dtype='float16')
-        x = x.astype('float16')
-        print(x)  # OK
+#     def test_print_fp16():
+#         x = torch.ones([1], dtype='float16')
+#         x = x.astype('float16')
+#         print(x)  # OK
 
-    def test_print_fp32():
-        x = jnp.ones([1], dtype='float16')
-        x = x.astype('float16')
-        x = x.astype('float32')
-        print(x)  # OK
+#     def test_print_fp32():
+#         x = torch.ones([1], dtype='float16')
+#         x = x.astype('float16')
+#         x = x.astype('float32')
+#         print(x)  # OK
 
-    def test_print_fp32_to_fp16_cast():
-        x = jnp.ones([1], dtype='float32')
-        x = x.astype('float16')
-        print(x)  # FAILS
+#     def test_print_fp32_to_fp16_cast():
+#         x = torch.ones([1], dtype='float32')
+#         x = x.astype('float16')
+#         print(x)  # FAILS
 
-except:
-    print('no flax or jax installed')
-
+# except:
+#     print('no flax or jax installed')

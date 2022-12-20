@@ -154,7 +154,8 @@ def compute_pe_b(r, a=None, a_z=None):
 
 
 def compute_ke_b(state, r):
-	grad_fn = jax.grad(lambda r: state.apply_fn(state.params, r).sum())
+	
+ 	grad_fn = jax.grad(lambda r: state.apply_fn(state.params, r).sum())
 	
 	n_b, n_e, n_dim = r.shape
 	n_jvp = n_e * n_dim

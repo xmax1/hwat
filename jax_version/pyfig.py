@@ -183,6 +183,9 @@ class Pyfig:
             
             if ii.run_sweep:
                 ii.sweep.parameters |= dict((k, dict(value=v)) for k,v in ii._not_in_sweep.items())
+                
+                pprint.pprint(ii.sweep.parameters)
+                
                 ii.sweep_id = wandb.sweep(
                     sweep   = ii.sweep.d, 
                     entity  = ii.wandb_c.entity,
