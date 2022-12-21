@@ -41,7 +41,7 @@ from functools import partial
 import jax
 import optax
 from flax.training.train_state import TrainState
-from hwat import FermiNet
+from hwat_func import FermiNet
 
 @partial(jax.pmap, axis_name='dev', in_axes=(0,0))
 def create_train_state(rng, r):
@@ -52,7 +52,7 @@ def create_train_state(rng, r):
 
 ### train step ###
 from jax import numpy as jnp
-from hwat import compute_ke_b, compute_pe_b
+from hwat_func import compute_ke_b, compute_pe_b
 from typing import NamedTuple
 
 @partial(jax.pmap, in_axes=(0, 0))
@@ -82,7 +82,7 @@ def train_step(state, r_step):
 
 ### init variables ###
 from utils import gen_rng
-from hwat import init_r, get_center_points
+from hwat_func import init_r, get_center_points
 from jax import random as rnd
 
 rng, rng_p = gen_rng(rnd.PRNGKey(c.seed), c.n_device)
@@ -100,7 +100,7 @@ print(f"""exp/actual |
 
 
 ### init functions ### 
-from hwat import sample_b
+from hwat_func import sample_b
 
 state = create_train_state(rng_p, r)
 metro_hast = jax.pmap(partial(sample_b, n_corr=c.data.n_corr), in_axes=(0,0,0,0))
@@ -108,7 +108,7 @@ metro_hast = jax.pmap(partial(sample_b, n_corr=c.data.n_corr), in_axes=(0,0,0,0)
 
 ### train ###
 import wandb
-from hwat import keep_around_points
+from hwat_func import keep_around_points
 from utils import compute_metrix
 
 wandb.define_metric("*", step_metric="tr/step")

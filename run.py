@@ -35,14 +35,14 @@ def run(c: Pyfig):
 
     ### model (aka Trainmodel) ### 
     from functools import partial
-    from hwat import Ansatz_fb
+    from hwat_func import Ansatz_fb
     from torch import nn
     model = c.partial(Ansatz_fb)
     
     model: nn.Module
     
     ### train step ###
-    from hwat import compute_ke_b, compute_pe_b
+    from hwat_func import compute_ke_b, compute_pe_b
     
     def train_step(model, r):
 
@@ -68,7 +68,7 @@ def run(c: Pyfig):
 
 
     ### init variables ###
-    from hwat import init_r, get_center_points
+    from hwat_func import init_r, get_center_points
 
     center_points = get_center_points(c.data.n_e, c.data.a)
     r = init_r(n_device, c.data.n_b, c.data.n_e, center_points, std=0.1)
@@ -82,11 +82,11 @@ def run(c: Pyfig):
 
 
     ### init functions ### 
-    from hwat import sample_b
+    from hwat_func import sample_b
 
     ### train ###
     import wandb
-    from hwat import keep_around_points
+    from hwat_func import keep_around_points
     from utils import compute_metrix
     
     ### add in optimiser
