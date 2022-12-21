@@ -28,9 +28,9 @@ def logabssumdet(xs):
 		return log_psi, sgn_psi
 
 
-class FermiNetTorch(nn.Module):
+class Ansatz_fb(nn.Module):
 	def __init__(self, n_e, n_u, n_d, n_det, n_fb, n_pv, n_sv, a, with_sign=False):
-		super(FermiNetTorch, self).__init__()
+		super(Ansatz_fb, self).__init__()
 		self.n_e = n_e                  # number of electrons
 		self.n_u = n_u                  # number of up electrons
 		self.n_d = n_d                  # number of down electrons
@@ -224,13 +224,13 @@ def get_center_points(n_e, center, _r_cen=None):
 		_r_cen = center[[r_i % len(center)]] if _r_cen is None else torch.concatenate([_r_cen, center[[r_i % len(center)]]])
 	return _r_cen
 
-def init_r(rng, n_b, n_e, center_points, std=0.1):
+def init_r(n_device, n_b, n_e, center_points, std=0.1):
 	""" init r on different gpus with different rngs """
 	""" loop concatenate pattern """
-	sub_r = [center_points + rnd.normal(rng_i,(n_b,n_e,3))*std for rng_i in rng]
+	sub_r = [center_points + torch.randn((n_b,n_e,3))*std for i in range(n_device)]
 	return torch.stack(sub_r) if len(sub_r)>1 else sub_r[0][None, ...]
 
-def sample_b(rng, state, r_0, deltar_0, n_corr=10):
+def sample_b(state, r_0, deltar_0, n_corr=10):
 	""" metropolis hastings sampling with automated step size adjustment """
 	
 	deltar_1 = torch.clip(deltar_0 + 0.01*torch.randn((1,)), a_min=0.005, a_max=0.5)
@@ -260,7 +260,7 @@ def sample_b(rng, state, r_0, deltar_0, n_corr=10):
 
 ### Test Suite ###
 
-# def check_antisym(c, rng, r):
+# def check_antisym(c, r):
 # 	n_u, n_d, = c.data.n_u, c.data.n_d
 # 	r = r[:, :4]
 	
@@ -269,12 +269,12 @@ def sample_b(rng, state, r_0, deltar_0, n_corr=10):
 # 		return r.at[[i_0,i_1], :].set(r[[i_1,i_0], :])
 
 # 	@partial(jax.pmap, axis_name='dev', in_axes=(0,0))
-# 	def _create_train_state(rng, r):
+# 	def _create_train_state(r):
 # 		model = c.partial(FermiNet, with_sign=True)  
-# 		params = model.init(rng, r)['params']
+# 		params = model.init(r)['params']
 # 		return TrainState.create(apply_fn=model.apply, params=params, tx=c.opt.tx)
 	
-# 	state = _create_train_state(rng, r)
+# 	state = _create_train_state(r)
 
 # 	@partial(jax.pmap, in_axes=(0, 0))
 # 	def _check_antisym(state, r):

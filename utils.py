@@ -287,6 +287,36 @@ def dict_to_wandb(
     return dict(_l)
 
 
+
+try:
+
+    def compute_metrix(d:dict, mode='tr', fancy=None, ignore = [], _d = {}):
+        
+        for k,v in d.items():
+            if any([ig in k for ig in ignore+['step']]):
+                continue 
+            
+            if not fancy is None:
+                k = fancy.get(k, k)
+
+            # v = jax.device_get(v)
+            
+            v_mean = map(lambda x: x.mean(), v) if not np.isscalar(v) else v
+            v_std = map(lambda x: x.std(), v) if not np.isscalar(v) else 0.
+
+            group = mode
+            if 'grad' in k:
+                group = mode + '/grad'
+            elif 'param' in k:
+                group += '/param'
+                
+            _d = collect_stats(k, v_mean, _d, p=group, suf=r'_\mu$')
+            _d = collect_stats(k, v_std, _d, p=group+'/std', suf=r'_\sigma$')
+
+        return _d
+
+except: 
+    print('Metrix: No Torch')
 # ### jax ###
 
 # try:
