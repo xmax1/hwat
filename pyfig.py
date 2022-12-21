@@ -24,12 +24,12 @@ class Pyfig:
     # SUB CLASSES CANNOT CALL EACH OTHER
 
     run_name:       Path        = 'run.py'
-    sweep_id:  str              = ''
+    sweep_id:       str         = ''
 
     seed:           int         = 808017424 # grr
     dtype:          str         = 'float32'
-    n_step:         int         = 200
-    log_metric_step:int         = 100
+    n_step:         int         = 10000
+    log_metric_step:int         = 10
     log_state_step: int         = 10          
 	
     class data(Sub):
@@ -48,7 +48,7 @@ class Pyfig:
         n_u:        int         = property(lambda _: (_.spin + _.n_e)//2)
         n_d:        int         = property(lambda _: _.n_e - _.n_u)
         
-        n_b:        int         = 512
+        n_b:        int         = 256
         n_corr:     int         = 20
         n_equil:    int         = 10000
         acc_target: int         = 0.5
@@ -58,13 +58,13 @@ class Pyfig:
         n_sv:           int     = 32
         n_pv:           int     = 16
         n_fbv:          int     = property(lambda _: _.n_sv*3+_.n_pv*2)
-        n_fb:           int     = 2
+        n_fb:           int     = 3
         n_det:          int     = 1
         terms_s_emb:    list    = ['ra', 'ra_len']
         terms_p_emb:    list    = ['rr', 'rr_len']
 
     class sweep(Sub):        
-        program         = property(lambda _: _._p.run_name)
+        # program         = property(lambda _: _._p.run_name)
         name            = 'demo'
         method          = 'grid'
         parameters = dict(
@@ -112,8 +112,8 @@ class Pyfig:
     submit:             bool     = False
     cap:                int      = 40
     
-    exp_path:           Path     = Path('not_set')
-    exp_name:           str      = 'junk'
+    exp_path:           Path     = Path('')
+    exp_name:           str      = ''
     
     commit_id           = property(lambda _: run_cmds('git log --pretty=format:%h -n 1', cwd=_.project_dir))
     hostname: str       = property(lambda _: run_cmds('hostname'))
@@ -146,26 +146,28 @@ class Pyfig:
         print('updating configuration')
         sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d)) if not notebook else {}
         ii.merge(arg | init_arg | sys_arg)
-        ii.log(ii.d, create=True, log_name='post_var_init.log')
+        ii.log(ii.d, create=True, log_name='dump/post_var_init.log')
         
         if not ii.submit:
             print('running script')
-            if 'not_set' in str(ii.exp_path):
-                ii.exp_path = mkdir(iterate_n_dir(ii.dump/ii.exp_name, True))
+            if ii.exp_path == Path(''): 
+                print('setting exp_path')
+                ii.exp_path = iterate_n_dir(ii.dump/'exp'/ii.exp_name, True)
             ii.exp_path /= ii._exp_id
             
-            run = wandb.init(
+            ii._run = wandb.init(
                     entity      = ii.wandb_c.entity,  # team name is hwat
                     project     = ii.project,         # sub project in team
-                    dir         = ii.exp_path,
+                    dir         = mkdir(ii.exp_path),
                     config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
                     mode        = wb_mode,
                     settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
             )
                 
         else:
-            
+        
             if not re.match(ii.server, ii.hostname): # if on local, ssh to server and rerun
+                sys.exit('submit')
                 print('Submitting to server \n')
                 run_cmds([ii._git_commit_cmd, 'git push origin main --force'], cwd=ii.project_dir)
                 run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)  
@@ -200,17 +202,16 @@ class Pyfig:
             folder = f'runs/{ii._exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id}'
             sys.exit(f'https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{folder}')
 
-    def set_path(ii, iterate_dir=True, sweep=False):
-        if str(ii.exp_path) == 'not_set':
-            exp_name = iterate_n_dir(ii.dump/ii.exp_name, iterate_dir)
-        
-        ii.exp_path = exp_name/(ii.sweep_id or '') 
-        mkdir(ii.exp_path)
-    
+    def _convert(ii, device, dtype):
+        import torch
+        d = get_cls_dict(ii, sub_cls=True, flat=True)
+        d = {k:v for k,v in d.items() if isinstance(v, (np.ndarray, np.generic, list))}
+        d = {k:torch.tensor(v, dtype=dtype, device=device) for k,v in d.items() if not isinstance(v[0], str)}
+        ii.merge(d)
+
     def _outline(ii):
         print(ii.project_dir)
         
-    
     @property
     def sbatch(ii,):
         s = f"""\
@@ -269,7 +270,7 @@ class Pyfig:
         assert path.suffix == 'pk'
         data_save_load(path)
         
-    def log(ii, info: dict, create=False, log_name='log.tmp'):
+    def log(ii, info: dict, create=False, log_name='dump/log.tmp'):
         mkdir(ii.exp_path)
         mode = 'w' if create else 'a'
         info = pprint.pformat(info)

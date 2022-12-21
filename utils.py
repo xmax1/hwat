@@ -13,6 +13,7 @@ from typing import Union
 import os
 import pprint
 import torch
+import optree
 
 import numpy as np
 from copy import copy
@@ -46,15 +47,18 @@ class Sub:
 ### metrics ###
 
 def collect_stats(k, v, new_d, p='tr', suf='', sep='/', sep_long='-'):
-	depth = p.count('/')
-	if depth > 1:
-		sep = sep_long
-	if isinstance(v, dict):
-		for k_sub,v_sub in v.items():
-			collect_stats(k, v_sub, new_d, p=(p+sep+k_sub))
-	else:
-		new_d[p+sep+k+suf] = v
-	return new_d
+    depth = p.count('/')
+    if depth > 1:
+        sep = sep_long
+    if isinstance(v, dict):
+        for k_sub,v_sub in v.items():
+            collect_stats(k, v_sub, new_d, p=(p+sep+k_sub))
+    elif isinstance(v, list):
+        for i, v_sub in enumerate(v):
+            collect_stats(k, v_sub, new_d, p=(p+sep+k+str(i)))
+    else:
+        new_d[p+sep+k+suf] = v
+    return new_d
 
 ### debug things
 
@@ -156,15 +160,16 @@ def type_me(v, v_ref=None, is_cmd_item=False):
         bool, list of list (str, float, int), dictionary, str, explicit str (' "this" '), """
         v = format_cmd_item(v)
         
+        print(v, v_ref)
         if v.startswith('[['):
             v = v.strip('[]')
             nest_lst = v.split('],[')
-            return np.asarray([type_me('['+lst+']', v_ref[0], is_cmd_item=True) for lst in nest_lst])
+            return [type_me('['+lst+']', v_ref[0], is_cmd_item=True) for lst in nest_lst]
         
         if v.startswith('['):
             v = v.strip('[]')
             v = v.split(',')
-            return np.asarray([type_me(x, v_ref[0]) for x in v])
+            return [type_me(x, v_ref[0]) for x in v]
         
         booleans = ['True', 'true', 't', 'False', 'false', 'f']
         if v in booleans: 
@@ -174,7 +179,8 @@ def type_me(v, v_ref=None, is_cmd_item=False):
         type_ref = type(v_ref)
         if isinstance(v, str):
             v = v.strip('\'\"')
-            
+        
+        # print(type(v), type(v_ref), v, v_ref)
         if isinstance(v, (np.ndarray, np.generic)):
             if isinstance(v.flatten()[0], str):
                 return v.tolist()
@@ -184,6 +190,9 @@ def type_me(v, v_ref=None, is_cmd_item=False):
             if isinstance(flat_any(v)[0], str):
                 return v
             return np.asarray(v)
+        
+        if isinstance(v, torch.Tensor):
+            return v
 
         return type_ref(v)
         
@@ -244,8 +253,14 @@ def run_cmds_server(server:str, user:str, cmd:Union[str, list], cwd=Union[str, P
 def flat_arr(v):
     return v.reshape(v.shape[0], -1)
 
-def flat_list(lst_of_lst):
-    return [lst for sublst in lst_of_lst for lst in sublst]
+def flat_list(lst):
+    items = []
+    for v in lst:
+        if isinstance(v, list):
+            items.extend(flat_list(v))
+        else:
+            items += [v]
+    return items
 
 def flat_dict(d:dict):
     items = []
@@ -301,9 +316,9 @@ try:
 
             # v = jax.device_get(v)
             
-            v_mean = map(lambda x: x.mean(), v) if not np.isscalar(v) else v
-            v_std = map(lambda x: x.std(), v) if not np.isscalar(v) else 0.
-
+            v_mean = optree.tree_map(lambda x: x.mean() if not np.isscalar(x) else x, v)  if not np.isscalar(v) else v
+            v_std = optree.tree_map(lambda x: x.std() if not np.isscalar(x) else x, v)  if not np.isscalar(v) else v
+            
             group = mode
             if 'grad' in k:
                 group = mode + '/grad'
