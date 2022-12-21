@@ -7,90 +7,93 @@ from functorch import vmap, grad, vjp
 
 
 class Ansatz_fb(nn.Module):
-	def __init__(self, n_e, n_u, n_d, n_det, n_fb, n_pv, n_sv, a: torch.Tensor, with_sign=False):
-		super(Ansatz_fb, self).__init__()
-		self.n_e = n_e                  # number of electrons
-		self.n_u = n_u                  # number of up electrons
-		self.n_d = n_d                  # number of down electrons
-		self.n_det = n_det              # number of determinants
-		self.n_fb = n_fb                # number of feedforward blocks
-		self.n_pv = n_pv                # latent dimension for 2-electron
-		self.n_sv = n_sv                # latent dimension for 1-electron
-		self.a = a                      # nuclei positions
-		self.with_sign = with_sign      # return sign of wavefunction
+	def __init__(ii, n_e, n_u, n_d, n_det, n_fb, n_pv, n_sv, a: torch.Tensor, with_sign=False):
+		super(Ansatz_fb, ii).__init__()
+		ii.n_e = n_e                  # number of electrons
+		ii.n_u = n_u                  # number of up electrons
+		ii.n_d = n_d                  # number of down electrons
+		ii.n_det = n_det              # number of determinants
+		ii.n_fb = n_fb                # number of feedforward blocks
+		ii.n_pv = n_pv                # latent dimension for 2-electron
+		ii.n_sv = n_sv                # latent dimension for 1-electron
+		ii.a = a       
+		ii.n_a = len(a)               # nuclei positions
+		ii.with_sign = with_sign      # return sign of wavefunction
 
-		self.n1 = [4*self.a.shape[0]] + [self.n_sv]*self.n_fb
-		self.n2 = [4] + [self.n_pv]*(self.n_fb - 1)
-		assert (len(self.n1) == self.n_fb+1) and (len(self.n2) == self.n_fb)
-		self.Vs = nn.ModuleList([nn.Linear(3*self.n1[i]+2*self.n2[i], self.n1[i+1]) for i in range(self.n_fb)])
-		self.Ws = nn.ModuleList([nn.Linear(self.n2[i], self.n2[i+1]) for i in range(self.n_fb)])
+		ii.n1 = [4*ii.n_a,] + [ii.n_sv,]*ii.n_fb
+		ii.n2 = [4] + [ii.n_pv,]*ii.n_fb
+  
+		assert (len(ii.n1) == ii.n_fb+1) and (len(ii.n2) == ii.n_fb+1)
+		ii.Vs = nn.ModuleList([nn.Linear(3*ii.n1[i]+2*ii.n2[i], ii.n1[i+1]) for i in range(ii.n_fb)])
+		ii.Ws = nn.ModuleList([nn.Linear(ii.n2[i], ii.n2[i+1]) for i in range(ii.n_fb)])
 
-		self.V_half_u = nn.Linear(self.n_sv, self.n_sv // 2)
-		self.V_half_d = nn.Linear(self.n_sv, self.n_sv // 2)
+		ii.V_half_u = nn.Linear(ii.n_sv, ii.n_sv // 2)
+		ii.V_half_d = nn.Linear(ii.n_sv, ii.n_sv // 2)
 
-		self.wu = nn.Linear(self.n_sv // 2, self.n_u)
-		self.wd = nn.Linear(self.n_sv // 2, self.n_d)
+		ii.wu = nn.Linear(ii.n_sv // 2, ii.n_u)
+		ii.wd = nn.Linear(ii.n_sv // 2, ii.n_d)
 
 		# TODO: Multideterminant. If n_det > 1 we should map to n_det*n_u (and n_det*n_d) instead,
 		#  and then split these outputs in chunks of n_u (n_d)
 		# TODO: implement layers for sigma and pi
 
-	def forward(self, r: torch.Tensor):
+	def forward(ii, r: torch.Tensor):
 		
 		dtype, device = r.dtype, r.device
   
 		if len(r.shape) == 1:
-			r = r.reshape(self.n_e, 3) # (n_e, 3)
+			r = r.reshape(ii.n_e, 3) # (n_e, 3)
 
-		eye = torch.eye(self.n_e, device=device, dtype=dtype).unsqueeze(-1)
+		# print(r.shape, ii.a.shape)
+		eye = torch.eye(ii.n_e, device=device, dtype=dtype).unsqueeze(-1)
 
-		ra = r[:, None, :] - self.a[None, :, :] # (n_e, n_a, 3)
+		ra = r[:, None, :] - ii.a[None, :, :] # (n_e, n_a, 3)
 		ra_len = torch.norm(ra, dim=-1, keepdim=True) # (n_e, n_a, 1)
 
 		rr = r[None, :, :] - r[:, None, :] # (n_e, n_e, 1)
-		rr_len = torch.norm(rr+eye, dim=-1, keepdim=True) * (torch.ones((self.n_e, self.n_e, 1), device=device, dtype=dtype)-eye) # (n_e, n_e, 1) 
+		rr_len = torch.norm(rr+eye, dim=-1, keepdim=True) * (torch.ones((ii.n_e, ii.n_e, 1), device=device, dtype=dtype)-eye) # (n_e, n_e, 1) 
 		# TODO: Just remove '+eye' from above, it's unnecessary
 
-		s_v = torch.cat([ra, ra_len], dim=-1).reshape(self.n_e, -1) # (n_e, n_a*4)
+		s_v = torch.cat([ra, ra_len], dim=-1).reshape(ii.n_e, -1) # (n_e, n_a*4)
 		p_v = torch.cat([rr, rr_len], dim=-1) # (n_e, n_e, 4)
 
-		for l, (V, W) in enumerate(zip(self.Vs, self.Ws)):
-			sfb_v = [torch.tile(_v.mean(dim=0)[None, :], (self.n_e, 1)) for _v in torch.split(s_v, [self.n_u,], dim=0)]
-			pfb_v = [_v.mean(dim=0) for _v in torch.split(p_v, [self.n_u,], dim=0)]
+		for l, (V, W) in enumerate(zip(ii.Vs, ii.Ws)):
+			sfb_v = [torch.tile(_v.mean(dim=0)[None, :], (ii.n_e, 1)) for _v in torch.split(s_v, [ii.n_u,ii.n_d], dim=0)]
+			pfb_v = [_v.mean(dim=0) for _v in torch.split(p_v, [ii.n_u,ii.n_d], dim=0)]
 			
 			s_v = torch.cat( sfb_v + pfb_v + [s_v,], dim=-1) # s_v = torch.cat((s_v, sfb_v[0], sfb_v[1], pfb_v[0], pfb_v[0]), dim=-1)
-			s_v = torch.tanh(V(s_v)) + (s_v if (s_v.shape[-1]==self.n_sv) else 0.)
+			s_v = torch.tanh(V(s_v)) + (s_v if (s_v.shape[-1]==ii.n_sv) else 0.)
 			
-			if not (l == (self.n_fb-1)):
-				p_v = torch.tanh(W(p_v)) + (p_v if (p_v.shape[-1]==self.n_pv) else 0.)
+			if not (l == (ii.n_fb-1)):
+				p_v = torch.tanh(W(p_v)) + (p_v if (p_v.shape[-1]==ii.n_pv) else 0.)
   
-		s_u, s_d = torch.split(s_v, self.n_u, dim=0)
+		s_u, s_d = torch.split(s_v, [ii.n_u,ii.n_d], dim=0)
 
-		s_u = torch.tanh(self.V_half_u(s_u)) # spin dependent size reduction
-		s_d = torch.tanh(self.V_half_d(s_d))
+		s_u = torch.tanh(ii.V_half_u(s_u)) # spin dependent size reduction
+		s_d = torch.tanh(ii.V_half_d(s_d))
 
-		s_wu = self.wu(s_u) # map to phi orbitals
-		s_wd = self.wd(s_d)
+		s_wu = ii.wu(s_u) # map to phi orbitals
+		s_wd = ii.wd(s_d)
 
-		assert s_wd.shape == (self.n_d, self.n_d)
+		assert s_wd.shape == (ii.n_d, ii.n_d)
 
-		ra_u, ra_d = torch.split(ra, self.n_u, dim=0)
+		ra_u, ra_d = torch.split(ra, [ii.n_u, ii.n_d], dim=0)
 
 		# TODO: implement sigma = nn.Linear() before this
 		exp_u = torch.norm(ra_u, dim=-1, keepdim=True)
 		exp_d = torch.norm(ra_d, dim=-1, keepdim=True)
 
-		assert exp_d.shape == (self.n_d, self.a.shape[0], 1)
+		assert exp_d.shape == (ii.n_d, ii.a.shape[0], 1)
 
 		# TODO: implement pi = nn.Linear() before this
 		orb_u = (s_wu * (torch.exp(-exp_u).sum(axis=1)))[None, :, :]
 		orb_d = (s_wd * (torch.exp(-exp_d).sum(axis=1)))[None, :, :]
 
-		assert orb_u.shape == (1, self.n_u, self.n_u)
+		assert orb_u.shape == (1, ii.n_u, ii.n_u)
 
 		log_psi, sgn = logabssumdet([orb_u, orb_d])
 
-		if self.with_sign:
+		if ii.with_sign:
 			return log_psi, sgn
 		else:
 			return log_psi.squeeze()
@@ -155,9 +158,10 @@ def compute_pe_b(r, a=None, a_z=None):
 		pe_ra += (a_z/ra_len).sum((-1,-2))
 
 		if len(a_z) > 1:
+			print('here')
 			aa = torch.unsqueeze(a, -2) - torch.unsqueeze(a, -3)
 			aa_len = torch.linalg.norm(aa, axis=-1)
-			pe_aa += torch.tril(1./aa_len, diagonal=-1).sum((-1,-2))
+			pe_aa += torch.tril((a_z*a_z)/aa_len, diagonal=-1).sum((-1,-2))
 
 	return (pe_rr - pe_ra + pe_aa).squeeze()  
 
@@ -166,6 +170,7 @@ def compute_ke_b(model_fnv: nn.Module, r: torch.Tensor):
 	# MODEL IS FUNCTIONAL THAT IS VMAPPED
 	n_b, n_e, n_dim = r.shape
 	n_jvp = n_e * n_dim
+	# print(r.shape, 'jvp')
 	r_flat = r.reshape(n_b, n_jvp)
 	# print(r.shape, r.dtype)
 	eye_b = torch.eye(n_jvp, dtype=dtype, device=device).unsqueeze(0).repeat((n_b, 1, 1))

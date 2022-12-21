@@ -24,15 +24,15 @@ def logabssumdet(xs):
 class Ansatz_fb(nn.Module):
 	def __init__(self, n_e, n_u, n_d, n_det, n_fb, n_pv, n_sv, a: torch.Tensor, with_sign=False):
 		super(Ansatz_fb, self).__init__()
-		self.n_e = n_e                  # number of electrons
-		self.n_u = n_u                  # number of up electrons
-		self.n_d = n_d                  # number of down electrons
-		self.n_det = n_det              # number of determinants
-		self.n_fb = n_fb                # number of feedforward blocks
-		self.n_pv = n_pv                # latent dimension for 2-electron
-		self.n_sv = n_sv                # latent dimension for 1-electron
-		self.a = a                      # nuclei positions
-		self.with_sign = with_sign      # return sign of wavefunction
+		self.n_e = n_e                 	# number of electrons
+		self.n_u = n_u                 	# number of up electrons
+		self.n_d = n_d                 	# number of down electrons
+		self.n_det = n_det             	# number of determinants
+		self.n_fb = n_fb               	# number of feedforward blocks
+		self.n_pv = n_pv               	# latent dimension for 2-electron
+		self.n_sv = n_sv               	# latent dimension for 1-electron
+		self.a = a                     	# nuclei positions
+		self.with_sign = with_sign     	# return sign of wavefunction
 
 		self.n1 = [4*self.a.shape[0]] + [self.n_sv]*self.n_fb
 		self.n2 = [4] + [self.n_pv]*(self.n_fb - 1)
@@ -53,14 +53,15 @@ class Ansatz_fb(nn.Module):
 		if len(r.shape)==2:
 			r = r[None, ...]
 		n_batch = r.shape[0]
-
+		device, dtype = r.device, r.dtype
+  
 		eye = torch.eye(self.n_e, device=device, dtype=dtype).unsqueeze(-1)
 
 		ra = r[:, :, None, :] - self.a[:, :] # (n_batch, n_e, n_a, 3)
 		ra_len = torch.norm(ra, dim=-1, keepdim=True) # (n_batch, n_e, n_a, 1)
 
 		rr = r[:, None, :, :] - r[:, :, None, :] # (n_batch, n_e, n_e, 1)
-		rr_len = torch.norm(rr+eye, dim=-1, keepdim=True) * (torch.ones((self.n_e, self.n_e, 1))-eye) # (n_batch, n_e, n_e, 1) 
+		rr_len = torch.norm(rr+eye, dim=-1, keepdim=True) * (torch.ones((self.n_e, self.n_e, 1), device=device, dtype=dtype)-eye) # (n_batch, n_e, n_e, 1) 
 
 		s_v = torch.cat([ra, ra_len], dim=-1).reshape(n_batch, self.n_e, -1) # (n_batch, n_e, n_a*4)
 		p_v = torch.cat([rr, rr_len], dim=-1) # (n_batch, n_e, n_e, 4)
