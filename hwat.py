@@ -139,30 +139,30 @@ def compute_emb(r, terms, a=None):
 		z += [torch.linalg.norm(compute_vv(r, r)+eye, axis=-1, keepdims=True) * (torch.ones((n_e,n_e,1))-eye)]
 	return torch.concatenate(z, axis=-1)
 
-def logabssumdet(xs):
+# def logabssumdet(xs):
 	
-	dets = [x.reshape(-1) for x in xs if x.shape[-1] == 1]						# in case n_u or n_d=1, no need to compute determinant
-	dets = reduce(lambda a,b: a*b, dets) if len(dets)>0 else 1.					# take product of these cases
-	maxlogdet = 0.																# initialised for sumlogexp trick (for stability)
-	det = dets																	# if both cases satisfy n_u or n_d=1, this is the determinant
+# 	dets = [x.reshape(-1) for x in xs if x.shape[-1] == 1]						# in case n_u or n_d=1, no need to compute determinant
+# 	dets = reduce(lambda a,b: a*b, dets) if len(dets)>0 else 1.					# take product of these cases
+# 	maxlogdet = 0.																# initialised for sumlogexp trick (for stability)
+# 	det = dets																	# if both cases satisfy n_u or n_d=1, this is the determinant
 	
-	slogdets = [torch.linalg.slogdet(x) for x in xs if x.shape[-1]>1] 			# otherwise take slogdet
-	if len(slogdets)>0: 
-		sign_in, logdet = reduce(lambda a,b: (a[0]*b[0], a[1]+b[1]), slogdets)  # take product of n_u or n_d!=1 cases
-		maxlogdet = torch.max(logdet)												# adjusted for new inputs
-		det = sign_in * dets * torch.exp(logdet-maxlogdet)						# product of all these things is determinant
+# 	slogdets = [torch.linalg.slogdet(x) for x in xs if x.shape[-1]>1] 			# otherwise take slogdet
+# 	if len(slogdets)>0: 
+# 		sign_in, logdet = reduce(lambda a,b: (a[0]*b[0], a[1]+b[1]), slogdets)  # take product of n_u or n_d!=1 cases
+# 		maxlogdet = torch.max(logdet)												# adjusted for new inputs
+# 		det = sign_in * dets * torch.exp(logdet-maxlogdet)						# product of all these things is determinant
 	
-	psi_ish = torch.sum(det)
-	sgn_psi = torch.sign(psi_ish)
-	log_psi = torch.log(torch.abs(psi_ish)) + maxlogdet
-	return log_psi, sgn_psi
+# 	psi_ish = torch.sum(det)
+# 	sgn_psi = torch.sign(psi_ish)
+# 	log_psi = torch.log(torch.abs(psi_ish)) + maxlogdet
+# 	return log_psi, sgn_psi
 
 ### energy ###
 
 def compute_pe_b(r, a=None, a_z=None):
 	rr = torch.unsqueeze(r, -2) - torch.unsqueeze(r, -3)
 	rr_len = torch.linalg.norm(rr, axis=-1)
-	pe_rr = torch.tril(1./rr_len, k=-1).sum((1,2))
+	pe_rr = torch.tril(1./rr_len, k=-1).sum((-1,-2))
 
 	if a is None:
 		return pe_rr
@@ -170,29 +170,41 @@ def compute_pe_b(r, a=None, a_z=None):
 	a, a_z = a[None, :, :], a_z[None, None, :]
 	ra = torch.unsqueeze(r, -2) - torch.unsqueeze(a, -3)
 	ra_len = torch.linalg.norm(ra, axis=-1)
-	pe_ra = (a_z/ra_len).sum((1,2))   
+	pe_ra = (a_z/ra_len).sum((-1,-2))   
 
 	if len(a) > 1:  # len(a) = n_a
 		aa = torch.unsqueeze(a, -2) - torch.unsqueeze(a, -3)
 		aa_len = torch.linalg.norm(aa, axis=-1)
-		pe_aa = torch.tril(1./aa_len, k=-1).sum((1,2))
+		pe_aa = torch.tril(1./aa_len, k=-1).sum((-1,-2))
+	
 	return (pe_rr - pe_ra + pe_aa).squeeze()
 
 
-def compute_ke_b(state, r):
-	
-	grads = torch.autograd.grad(lambda r: state(r).sum(), r, create_graph=True)
-	
+from torch import vmap, grad, vjp 
+
+def compute_ke_b(model, r):
 	n_b, n_e, n_dim = r.shape
 	n_jvp = n_e * n_dim
-	r = r.reshape(n_b, n_jvp)
-	eye = torch.eye(n_jvp, dtype=r.dtype)[None, ...].repeat(n_b, axis=0)
+	eye_b = torch.eye(n_jvp).unsqueeze(0).repeat((n_b, 1, 1))
+	model_v = vmap(model)
+	grad_fn = grad(lambda _r: model_v(_r).sum())
+	r_flat, fn = vjp(grad_fn, r_flat)
+	return torch.stack([fn(eye_b[..., i])[0] for i in range(n_jvp)], -1)
+
+# def compute_ke_b(state, r):
 	
-	def _body_fun(i, val):
-		primal, tangent = jax.jvp(grad_fn, (r,), (eye[..., i],))  
-		return val + (primal[:, i]**2).squeeze() + (tangent[:, i]).squeeze()
+# 	grads = torch.autograd.grad(lambda r: state(r).sum(), r, create_graph=True)
 	
-	return (- 0.5 * jax.lax.fori_loop(0, n_jvp, _body_fun, torch.zeros(n_b,))).squeeze()
+# 	n_b, n_e, n_dim = r.shape
+# 	n_jvp = n_e * n_dim
+# 	r = r.reshape(n_b, n_jvp)
+# 	eye = torch.eye(n_jvp, dtype=r.dtype)[None, ...].repeat(n_b, axis=0)
+	
+# 	def _body_fun(i, val):
+# 		primal, tangent = jax.jvp(grad_fn, (r,), (eye[..., i],))  
+# 		return val + (primal[:, i]**2).squeeze() + (tangent[:, i]).squeeze()
+	
+# 	return (- 0.5 * jax.lax.fori_loop(0, n_jvp, _body_fun, torch.zeros(n_b,))).squeeze()
 
 ### sampling ###
 def keep_around_points(r, points, l=1.):
@@ -221,22 +233,21 @@ def init_r(rng, n_b, n_e, center_points, std=0.1):
 def sample_b(rng, state, r_0, deltar_0, n_corr=10):
 	""" metropolis hastings sampling with automated step size adjustment """
 	
-	deltar_1 = torch.clip(deltar_0 + 0.01*rnd.normal(rng), a_min=0.005, a_max=0.5)
+	deltar_1 = torch.clip(deltar_0 + 0.01*torch.randn((1,)), a_min=0.005, a_max=0.5)
 
 	acc = []
 	for deltar in [deltar_0, deltar_1]:
 		
 		for _ in torch.arange(n_corr):
-			rng, rng_alpha = rnd.split(rng, 2)
 
 			p_0 = (torch.exp(state.apply_fn(state.params, r_0))**2)  			# ❗can make more efficient with where statement at end
 			
-			r_1 = r_0 + rnd.normal(rng, r_0.shape, dtype=r_0.dtype)*0.02
+			r_1 = r_0 + torch.randn_like(r_0)*deltar
 			
 			p_1 = torch.exp(state.apply_fn(state.params, r_1))**2
 			p_1 = torch.where(torch.isnan(p_1), 0., p_1)
 
-			p_mask = (p_1/p_0) > rnd.uniform(rng_alpha, p_1.shape)			# metropolis hastings
+			p_mask = (p_1/p_0) > torch.rand_like(p_1)		# metropolis hastings
 			
 			r_0 = torch.where(p_mask[..., None, None], r_1, r_0)
 	
@@ -249,41 +260,41 @@ def sample_b(rng, state, r_0, deltar_0, n_corr=10):
 
 ### Test Suite ###
 
-def check_antisym(c, rng, r):
-	n_u, n_d, = c.data.n_u, c.data.n_d
-	r = r[:, :4]
+# def check_antisym(c, rng, r):
+# 	n_u, n_d, = c.data.n_u, c.data.n_d
+# 	r = r[:, :4]
 	
-	@partial(jax.vmap, in_axes=(0, None, None))
-	def swap_rows(r, i_0, i_1):
-		return r.at[[i_0,i_1], :].set(r[[i_1,i_0], :])
+# 	@partial(jax.vmap, in_axes=(0, None, None))
+# 	def swap_rows(r, i_0, i_1):
+# 		return r.at[[i_0,i_1], :].set(r[[i_1,i_0], :])
 
-	@partial(jax.pmap, axis_name='dev', in_axes=(0,0))
-	def _create_train_state(rng, r):
-		model = c.partial(FermiNet, with_sign=True)  
-		params = model.init(rng, r)['params']
-		return TrainState.create(apply_fn=model.apply, params=params, tx=c.opt.tx)
+# 	@partial(jax.pmap, axis_name='dev', in_axes=(0,0))
+# 	def _create_train_state(rng, r):
+# 		model = c.partial(FermiNet, with_sign=True)  
+# 		params = model.init(rng, r)['params']
+# 		return TrainState.create(apply_fn=model.apply, params=params, tx=c.opt.tx)
 	
-	state = _create_train_state(rng, r)
+# 	state = _create_train_state(rng, r)
 
-	@partial(jax.pmap, in_axes=(0, 0))
-	def _check_antisym(state, r):
-		log_psi_0, sgn_0 = state.apply_fn(state.params, r)
-		r_swap_u = swap_rows(r, 0, 1)
-		log_psi_u, sgn_u = state.apply_fn(state.params, r_swap_u)
-		log_psi_d = torch.zeros_like(log_psi_0)
-		sgn_d = torch.zeros_like(sgn_0)
-		if not n_d == 0:
-			r_swap_d = swap_rows(r, n_u, n_u+1)
-			log_psi_d, sgn_d = state.apply_fn(state.params, r_swap_d)
-		return (log_psi_0, log_psi_u, log_psi_d), (sgn_0, sgn_u, sgn_d), (r, r_swap_u, r_swap_d)
+# 	@partial(jax.pmap, in_axes=(0, 0))
+# 	def _check_antisym(state, r):
+# 		log_psi_0, sgn_0 = state.apply_fn(state.params, r)
+# 		r_swap_u = swap_rows(r, 0, 1)
+# 		log_psi_u, sgn_u = state.apply_fn(state.params, r_swap_u)
+# 		log_psi_d = torch.zeros_like(log_psi_0)
+# 		sgn_d = torch.zeros_like(sgn_0)
+# 		if not n_d == 0:
+# 			r_swap_d = swap_rows(r, n_u, n_u+1)
+# 			log_psi_d, sgn_d = state.apply_fn(state.params, r_swap_d)
+# 		return (log_psi_0, log_psi_u, log_psi_d), (sgn_0, sgn_u, sgn_d), (r, r_swap_u, r_swap_d)
 
-	res = _check_antisym(state, r)
+# 	res = _check_antisym(state, r)
 
-	(log_psi, log_psi_u, log_psi_d), (sgn, sgn_u, sgn_d), (r, r_swap_u, r_swap_d) = res
-	for ei, ej, ek in zip(r[0,0], r_swap_u[0,0], r_swap_d[0,0]):
-		print(ei, ej, ek)  # Swap Correct
-	for lpi, lpj, lpk in zip(log_psi[0], log_psi_u[0], log_psi_d[0]):
-		print(lpi, lpj, lpk)  # Swap Correct
-	for lpi, lpj, lpk in zip(sgn[0], sgn_u[0], sgn_d[0]):
-		print(lpi, lpj, lpk)  # Swap Correct
+# 	(log_psi, log_psi_u, log_psi_d), (sgn, sgn_u, sgn_d), (r, r_swap_u, r_swap_d) = res
+# 	for ei, ej, ek in zip(r[0,0], r_swap_u[0,0], r_swap_d[0,0]):
+# 		print(ei, ej, ek)  # Swap Correct
+# 	for lpi, lpj, lpk in zip(log_psi[0], log_psi_u[0], log_psi_d[0]):
+# 		print(lpi, lpj, lpk)  # Swap Correct
+# 	for lpi, lpj, lpk in zip(sgn[0], sgn_u[0], sgn_d[0]):
+# 		print(lpi, lpj, lpk)  # Swap Correct
 
