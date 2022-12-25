@@ -1,6 +1,6 @@
 from utils import flat_any
 import inspect
-from typing import Callable
+from typing import Callable, Union
 from functools import reduce, partial
 from simple_slurm import Slurm
 import wandb
@@ -18,7 +18,6 @@ from utils import flat_dict, mkdir, cmd_to_dict, dict_to_wandb, iterate_n_dir
 from utils import type_me, debug_pr, debug_mode
 from utils import Sub
 
-from _user import user
 
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 
@@ -105,7 +104,7 @@ class Pyfig:
         
     n_device:           int     = property(lambda _: count_gpu())
     run_sweep:          bool    = False
-    user:               str     = user             # SERVER
+    user:               str     = 'amawi'             # SERVER
     server:             str     = 'svol.fysik.dtu.dk'   # SERVER
     git_remote:         str     = 'origin'      
     git_branch:         str     = 'main'        
@@ -283,7 +282,7 @@ class Pyfig:
 
 def get_cls_dict(
         cls,
-        ref:list|dict=None,
+        ref:Union[list,dict]=None,
         sub_cls=False, 
         fn=False, 
         prop=False, 
@@ -400,7 +399,7 @@ def _debug_print(ii, on=False, cls=True):
 
 def cls_filter(
     cls, k: str, v, 
-    ref:list|dict=None,
+    ref:Union[list,dict]=None,
     is_fn=False, 
     is_sub=False, 
     is_prop=False, 

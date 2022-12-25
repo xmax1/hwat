@@ -7,7 +7,7 @@ from time import sleep
 from itertools import product
 from functools import partial
 import random
-from typing import Any, Iterable
+from typing import Any, Iterable, Union
 import re
 from ast import literal_eval
 import numpy as np
@@ -122,7 +122,7 @@ def mkdir(path: Path) -> Path:
         path.mkdir(parents=True)
     return path
 
-def add_to_Path(path: Path, string: str | Path):
+def add_to_Path(path: Path, string: Union[str, Path]):
     return Path(str(path) + str(string))
 
 ### convert things
@@ -192,7 +192,7 @@ def type_me(v, v_ref=None, is_cmd_item=False):
         return str(v).strip('\'\"')
     
     
-def cmd_to_dict(cmd:str|list, ref:dict, delim:str=' --', d=None):
+def cmd_to_dict(cmd:Union[str,list], ref:dict, delim:str=' --', d=None):
     """
     fmt: [--flag, arg, --true_flag, --flag, arg1]
     # all flags double dash because of negative numbers duh """
@@ -215,7 +215,7 @@ def cmd_to_dict(cmd:str|list, ref:dict, delim:str=' --', d=None):
 
 
 
-def run_cmds(cmd:str|list, cwd:str|Path='.', input_req:str=None, _res=[]):
+def run_cmds(cmd:Union[str,Path], cwd:Union[str,Path]='.', input_req:str=None, _res=[]):
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
         cmd_1 = [c.strip() for c in cmd_1.split(' ')]
         print(f'Run: {cmd_1} at {cwd}')
@@ -223,7 +223,7 @@ def run_cmds(cmd:str|list, cwd:str|Path='.', input_req:str=None, _res=[]):
         print('stdout:', _res.stdout.replace("\n", " "), 'stderr:', _res.stderr.replace("\n", ";"))
     return _res.stdout.replace('\n', ' ')
 
-def run_cmds_server(server:str, user:str, cmd:str|list, cwd=str|Path, _res=[]):
+def run_cmds_server(server:str, user:str, cmd:Union[str,Path], cwd=Union[str,Path], _res=[]):
     client = paramiko.SSHClient()    
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # if not known host
     client.connect(server, username=user)
@@ -255,7 +255,7 @@ def flat_dict(d:dict):
             items.append((k, v))
     return dict(items)
 
-def flat_any(v: list|dict|jnp.ndarray|np.ndarray):
+def flat_any(v: Union[list,dict,jnp.ndarray,np.ndarray]):
     if isinstance(v, list):
         return flat_list(v)
     if isinstance(v, dict):

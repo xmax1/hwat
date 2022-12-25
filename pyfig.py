@@ -11,6 +11,7 @@ from copy import copy
 import numpy as np
 import re
 from time import sleep
+from dump.user import user
 
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum
 from utils import flat_dict, mkdir, cmd_to_dict, dict_to_wandb, iterate_n_dir
@@ -113,7 +114,7 @@ class Pyfig:
     cap:                int      = 40
     
     exp_path:           Path     = Path('')
-    exp_name:           str      = ''
+    exp_name:           str      = 'junk'
     
     commit_id           = property(lambda _: run_cmds('git log --pretty=format:%h -n 1', cwd=_.project_dir))
     hostname: str       = property(lambda _: run_cmds('hostname'))
@@ -135,6 +136,8 @@ class Pyfig:
     _useful = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
     
     def __init__(ii, arg={}, wb_mode='online', submit=False, run_sweep=False, notebook=False, debug=False, cap=3):
+        # wb_mode: online, disabled, offline 
+        
         init_arg = dict(run_sweep=run_sweep, submit=submit, debug=debug, wb_mode=wb_mode, cap=cap)
         
         print('init sub classes')

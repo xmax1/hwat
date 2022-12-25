@@ -154,18 +154,18 @@ def compute_pe_b(r, a=None, a_z=None):
 
 
 def compute_ke_b(state, r):
-	
- 	grad_fn = jax.grad(lambda r: state.apply_fn(state.params, r).sum())
-	
+
+	grad_fn = jax.grad(lambda r: state.apply_fn(state.params, r).sum())
+
 	n_b, n_e, n_dim = r.shape
 	n_jvp = n_e * n_dim
 	r = r.reshape(n_b, n_jvp)
 	eye = jnp.eye(n_jvp, dtype=r.dtype)[None, ...].repeat(n_b, axis=0)
-	
+
 	def _body_fun(i, val):
 		primal, tangent = jax.jvp(grad_fn, (r,), (eye[..., i],))  
 		return val + (primal[:, i]**2).squeeze() + (tangent[:, i]).squeeze()
-	
+
 	return (- 0.5 * jax.lax.fori_loop(0, n_jvp, _body_fun, jnp.zeros(n_b,))).squeeze()
 
 ### sampling ###
