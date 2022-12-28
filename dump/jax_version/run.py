@@ -17,17 +17,17 @@ arg = dict(
 	spin  = 0,
 	a = np.array([[0.0, 0.0, 0.0],]),
 	a_z  = np.array([4.,]),
-	n_b = 512, 
+	n_b = 256, 
 	n_sv = 32, 
-	n_pv = 32, 
-	n_corr = 20, 
+	n_pv = 16, 
+	n_corr = 40, 
 	n_step = 10000, 
-	log_metric_step = 50, 
+	log_metric_step = 5, 
 	exp_name = 'demo',
 	# sweep = {},
 )
 
-c = Pyfig(wb_mode='online', arg=arg, submit=True, run_sweep=True)
+c = Pyfig(wb_mode='online', arg=arg, submit=False, run_sweep=False)
 
 # 	out = main(c)
 
@@ -41,7 +41,7 @@ from functools import partial
 import jax
 import optax
 from flax.training.train_state import TrainState
-from hwat_b import FermiNet
+from hwat import FermiNet
 
 @partial(jax.pmap, axis_name='dev', in_axes=(0,0))
 def create_train_state(rng, r):
@@ -52,7 +52,7 @@ def create_train_state(rng, r):
 
 ### train step ###
 from jax import numpy as jnp
-from hwat_b import compute_ke_b, compute_pe_b
+from hwat import compute_ke_b, compute_pe_b
 from typing import NamedTuple
 
 @partial(jax.pmap, in_axes=(0, 0))
@@ -82,7 +82,7 @@ def train_step(state, r_step):
 
 ### init variables ###
 from utils import gen_rng
-from hwat_b import init_r, get_center_points
+from hwat import init_r, get_center_points
 from jax import random as rnd
 
 rng, rng_p = gen_rng(rnd.PRNGKey(c.seed), c.n_device)
@@ -100,21 +100,27 @@ print(f"""exp/actual |
 
 
 ### init functions ### 
-from hwat_b import sample_b
+from hwat import sample_b
 
 state = create_train_state(rng_p, r)
 metro_hast = jax.pmap(partial(sample_b, n_corr=c.data.n_corr), in_axes=(0,0,0,0))
 
-
 ### train ###
 import wandb
-from hwat_b import keep_around_points
+from hwat import keep_around_points
 from utils import compute_metrix
 
 wandb.define_metric("*", step_metric="tr/step")
 for step in range(1, c.n_step+1):
 	rng, rng_p = gen_rng(rng, c.n_device)
 
+	if step == 1:
+		state, v_keep = train_step(state, r) 
+		v = jax.tree_map(lambda x: np.asarray(x), v_keep)
+		import pickle as pk
+		with open('v_tr.pk', 'wb') as f:
+			pk.dump(v, f)
+	
 	r, acc, deltar = metro_hast(rng_p, state, r, deltar)
 	r = keep_around_points(r, center_points, l=2.) if step < 1000 else r
 	
@@ -123,7 +129,6 @@ for step in range(1, c.n_step+1):
 	if not (step % c.log_metric_step):
 		metrix = compute_metrix(v_tr)
 		wandb.log({'tr/step':step, **metrix})
-
 
 
 """ live plotting in another notebook """

@@ -59,7 +59,7 @@ class Pyfig:
         n_sv:           int     = 32
         n_pv:           int     = 16
         n_fbv:          int     = property(lambda _: _.n_sv*3+_.n_pv*2)
-        n_fb:           int     = 3
+        n_fb:           int     = 2
         n_det:          int     = 1
         terms_s_emb:    list    = ['ra', 'ra_len']
         terms_p_emb:    list    = ['rr', 'rr_len']
@@ -209,7 +209,7 @@ class Pyfig:
         import torch
         d = get_cls_dict(ii, sub_cls=True, flat=True)
         d = {k:v for k,v in d.items() if isinstance(v, (np.ndarray, np.generic, list))}
-        d = {k:torch.tensor(v, dtype=dtype, device=device) for k,v in d.items() if not isinstance(v[0], str)}
+        d = {k:torch.tensor(v, dtype=dtype, device=device, requires_grad=False) for k,v in d.items() if not isinstance(v[0], str)}
         ii.merge(d)
 
     def _outline(ii):

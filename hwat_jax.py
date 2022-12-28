@@ -41,32 +41,34 @@ class FermiNet(nn.Module):
 		ra = r[:, None, :] - _i.a[None, :, :] # (r_i, a_j, 3)
 		ra_len = jnp.linalg.norm(ra, axis=-1, keepdims=True) # (r_i, a_j, 1)
 		
-		rr = r[None, :, :] - r[:, None, :]
-		rr_len = jnp.linalg.norm(rr + eye, axis=-1, keepdims=True) # * (jnp.ones((_i.n_e,_i.n_e,1))-eye)
+		rr = (r[None, :, :] - r[:, None, :])
+		rr_len = jnp.linalg.norm(rr+eye,axis=-1,keepdims=True) * (jnp.ones((_i.n_e,_i.n_e,1))-eye)
 
 		s_v = jnp.concatenate([ra, ra_len], axis=-1).reshape(_i.n_e, -1)
 		p_v = jnp.concatenate([rr, rr_len], axis=-1)
-
-		sfb_v = [jnp.tile(_v.mean(axis=0)[None, :], (_i.n_e, 1)) for _v in s_v.split([_i.n_u,], axis=0)]
-		pfb_v = [_v.mean(axis=0) for _v in p_v.split([_i.n_u,], axis=0)]
-		s_v = jnp.concatenate(sfb_v+pfb_v+[s_v,], axis=-1)   
 		
-		for l in range(_i.n_fb):
-			
-			s_v = nn.tanh(nn.Dense(_i.n_sv, bias_init=jax.nn.initializers.uniform(0.01))(s_v)) + (s_v if (s_v.shape[-1]==_i.n_sv) else 0.)
-			p_v = nn.tanh(nn.Dense(_i.n_pv, bias_init=jax.nn.initializers.uniform(0.01))(p_v)) + (p_v if (p_v.shape[-1]==_i.n_pv) else 0.)
+		# print(s_v.mean(), p_v.mean())
 
+		for l in range(_i.n_fb):
 			sfb_v = [jnp.tile(_v.mean(axis=0)[None, :], (_i.n_e, 1)) for _v in s_v.split([_i.n_u,], axis=0)]
 			pfb_v = [_v.mean(axis=0) for _v in p_v.split([_i.n_u,], axis=0)]
-			s_v = jnp.concatenate(sfb_v+pfb_v+[s_v,], axis=-1)
+			
+			s_v = jnp.concatenate(sfb_v+pfb_v+[s_v,], axis=-1) 
+   
+			# print(l, s_v.mean())
+			s_v = nn.tanh(nn.Dense(_i.n_sv, bias_init=jax.nn.initializers.uniform(0.01))(s_v)) + (s_v if (s_v.shape[-1]==_i.n_sv) else 0.)
+
+			if not (l == (_i.n_fb-1)):
+				p_v = nn.tanh(nn.Dense(_i.n_pv, bias_init=jax.nn.initializers.uniform(0.01))(p_v)) + (p_v if (p_v.shape[-1]==_i.n_pv) else 0.)
 	
 		s_u, s_d = s_v.split([_i.n_u,], axis=0)
 
-		s_u = nn.tanh(nn.Dense(s_u.shape[-1]//2, bias_init=jax.nn.initializers.uniform(0.01))(s_u))
-		s_d = nn.tanh(nn.Dense(s_d.shape[-1]//2, bias_init=jax.nn.initializers.uniform(0.01))(s_d))
+		s_u = nn.Dense(_i.n_sv//2, bias_init=jax.nn.initializers.uniform(0.01))(s_u)
+		s_d = nn.Dense(_i.n_sv//2, bias_init=jax.nn.initializers.uniform(0.01))(s_d)
 		
 		s_wu = nn.Dense(_i.n_u, bias_init=jax.nn.initializers.uniform(0.01))(s_u)
 		s_wd = nn.Dense(_i.n_d, bias_init=jax.nn.initializers.uniform(0.01))(s_d)
+		
 		
 		assert s_wd.shape == (_i.n_d, _i.n_d)
 
@@ -80,13 +82,15 @@ class FermiNet(nn.Module):
 
 		exp_u = jnp.linalg.norm(ra_u, axis=-1)[..., None]
 		exp_d = jnp.linalg.norm(ra_d, axis=-1)[..., None]
-
+		# print('exp', exp_u.mean(), exp_d.mean())
 		assert exp_d.shape == (_i.n_d, _i.a.shape[0], 1)
 
 		# print(exp_d.shape)
 		orb_u = (s_wu * (jnp.exp(-exp_u).sum(axis=1)))[None, ...]
 		orb_d = (s_wd * (jnp.exp(-exp_d).sum(axis=1)))[None, ...]
 
+		
+		# print('exp', orb_u.mean(), orb_d.mean())
 		assert orb_u.shape == (1, _i.n_u, _i.n_u)
 
 		log_psi, sgn = logabssumdet([orb_u, orb_d])

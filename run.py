@@ -27,84 +27,91 @@ def average_gradients(model):
 """ Distributed Synchronous SGD Example """
 def run(c: Pyfig):
     torch.manual_seed(1234)
-    
     torch.set_default_tensor_type(torch.DoubleTensor)   # ❗ Ensure works when default not set AND can go float32 or 64
     
     n_device = c.n_device
     print(f'🤖 {n_device} GPUs available')
 
     ### model (aka Trainmodel) ### 
-    from functools import partial
-    from hwat_b import Ansatz_fb
+    from hwat_func import Ansatz_fb
     from torch import nn
-    model = c.partial(Ansatz_fb)
-    
+
+    _dummy = torch.randn((1,))
+    dtype = _dummy.dtype
+    device='cuda'
+    c._convert(device=device, dtype=dtype)
+    model = c.partial(Ansatz_fb).to(device).to(dtype)
+
     model: nn.Module
     
     ### train step ###
-    from hwat_b import compute_ke_b, compute_pe_b
-    
-    def train_step(model, r):
-
-        with torch.no_grad():
-            ke = compute_ke_b(model, r)
-            pe = compute_pe_b(r, c.data.a, c.data.a_z)
-            e = pe + ke
-            e_mean_dist = torch.mean(torch.abs(torch.median(e) - e))
-            e_clip = torch.clip(e, a_min=e-5*e_mean_dist, a_max=e+5*e_mean_dist)
-
-        loss = ((e_clip - e_clip.mean())*model(r)).mean()
-        loss.backward()
-        
-        grads = [p.grad for p in model.parameters()]
-        params = [p.item for p in model.parameters()]  # ❗
-        
-        v_tr = dict(
-            params=params, grads=grads,
-            e=e, pe=pe, ke=ke,
-            r=r
-        )
-        return v_tr
-
+    from hwat_func import compute_ke_b, compute_pe_b
 
     ### init variables ###
-    from hwat_b import init_r, get_center_points
+    from hwat_func import init_r, get_center_points
 
     center_points = get_center_points(c.data.n_e, c.data.a)
-    r = init_r(n_device, c.data.n_b, c.data.n_e, center_points, std=0.1)
-    deltar = torch.tensor([0.02])[None, :]
+    r = init_r(n_device, c.data.n_b, c.data.n_e, center_points, std=0.1)[0]
+    deltar = torch.tensor([0.02]).to(device).to(dtype)
 
     print(f"""exp/actual | 
-        cps    : {(c.data.n_e,3)}/{center_points.shape}
+        cps    : {(c.data.n_e, 3)}/{center_points.shape}
         r      : {(c.n_device, c.data.n_b, c.data.n_e, 3)}/{r.shape}
         deltar : {(c.n_device, 1)}/{deltar.shape}
     """)
 
 
-    ### init functions ### 
-    from hwat_b import sample_b
-
     ### train ###
     import wandb
-    from hwat_b import keep_around_points
+    from hwat_func import keep_around_points, sample_b
     from utils import compute_metrix
     
     ### add in optimiser
-    opt = torch.optim.Adam(model.parameters(), lr=0.0001)
+    opt = torch.optim.RAdam(model.parameters(), lr=0.0001)
     
     ### fix sampler
     ### fix train step 
     ### metrix conversion
-
+    from functorch import vmap, make_functional, grad
+    
+    model_fn, params = make_functional(model)
+    # model_v = torch.compile(model_fn)
+    model_v = torch.jit.script(model_fn(2, 3))
+    model_v = vmap(model_fn, in_dims=(None, 0))
+    
+    model_v(params, r)
+    
     wandb.define_metric("*", step_metric="tr/step")
     for step in range(1, c.n_step+1):
-
-        r, acc, deltar = sample_b(model, r, deltar, n_corr=c.data.n_corr)  # ❗needs testing 
+        
+        r, acc, deltar = sample_b(model_v, params, r, deltar, n_corr=c.data.n_corr)  # ❗needs testing 
         r = keep_around_points(r, center_points, l=2.) if step < 1000 else r
         
-        opt.zero_grad()
-        v_tr = train_step(model, r)
+        model_ke = lambda _r: model_v(params, _r).sum()
+
+        with torch.no_grad():
+            ke = compute_ke_b(model_ke, r)
+            pe = compute_pe_b(r, c.data.a, c.data.a_z)
+            e = pe + ke
+            e_mean_dist = torch.mean(torch.abs(torch.median(e) - e))
+            e_clip = torch.clip(e, min=e-5*e_mean_dist, max=e+5*e_mean_dist)
+
+        # opt.zero_grad()
+        loss_fn = lambda _params: ((e_clip - e_clip.mean())*model_v(_params, r)).mean()
+        
+        grads = grad(loss_fn)(params)
+        for p, g in zip(model.parameters(), grads):
+            p.grad = torch.nn.utils.clip_grad_norm_(g.clone(), max_norm=1.)
+
         opt.step()
+        
+        params = [p.detach() for p in model.parameters()]
+        grads = [p.grad.detach() for p in model.parameters()]
+        
+        v_tr = dict(
+            params=params, grads=grads,
+            e=e, pe=pe, ke=ke, r=r,
+        )
         
         if not (step % c.log_metric_step):
             metrix = compute_metrix(v_tr)  # ❗ needs converting to torch, ie tree maps
@@ -136,18 +143,19 @@ if __name__ == "__main__":
         spin  = 0,
         a = np.array([[0.0, 0.0, 0.0],]),
         a_z  = np.array([4.,]),
-        n_b = 512, 
+        n_b = 256, 
         n_sv = 32, 
-        n_pv = 32, 
-        n_corr = 20, 
+        n_pv = 16, 
+        n_corr = 40, 
         n_step = 10000, 
-        log_metric_step = 50, 
+        log_metric_step = 5, 
         exp_name = 'demo',
         # sweep = {},
     )
     
     c = Pyfig(wb_mode='online', arg=arg, submit=False, run_sweep=False)
-
+    
+    run(c)
     ### DISTRIBUTED   # ❗# ❗# ❗# ❗ after single gpu demo
     # size = 2
     # processes = []
