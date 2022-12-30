@@ -67,25 +67,43 @@ def run(c: Pyfig):
     from utils import compute_metrix
     
     ### add in optimiser
-    opt = torch.optim.RAdam(model.parameters(), lr=0.0001)
-    
-    ### fix sampler
-    ### fix train step 
+    # opt = torch.optim.RAdam(model.parameters(), lr=0.0001)
+    ### fix sampler ### fix train step 
     ### metrix conversion
     from functorch import vmap, make_functional, grad
+    import functorch as ft
+    import torchopt
+    from torch import functional as F
     
     model_fn, params = make_functional(model)
     # model_v = torch.compile(model_fn)
     # model_v = torch.jit.script(model_fn(2, 3))
     model_v = vmap(model_fn, in_dims=(None, 0))
+    optimizer = torchopt.adam(lr=0.1)
+    opt_state = optimizer.init(params)
     
-    model_v(params, r)
+    c.log_metric_step = 1
+    c.n_step = 1000
+    
+    def gaussian_clip(g, n_std=5.):
+        mean, std = g.mean(), g.std()
+        upper = mean+std*n_std
+        lower = mean-std*n_std
+        diff = (g>upper) * (g-upper) + (g<lower) * (g-lower)
+        return g - torch.rand_like(g)*diff
+    
+    def param_clip(p, g):
+        s = torch.sign(g)
+        return s * torch.clamp(g.abs(), min=-0.5*p.abs(), max=0.5*p.abs())
+ 
+    for _ in range(20):
+        r, acc, deltar = sample_b(model_v, params, r, deltar, n_corr=c.data.n_corr)  # ❗needs testing 
     
     wandb.define_metric("*", step_metric="tr/step")
     for step in range(1, c.n_step+1):
         
         r, acc, deltar = sample_b(model_v, params, r, deltar, n_corr=c.data.n_corr)  # ❗needs testing 
-        r = keep_around_points(r, center_points, l=2.) if step < 1000 else r
+        r = keep_around_points(r, center_points, l=10.) if step < 1000 else r
         
         model_ke = lambda _r: model_v(params, _r).sum()
 
@@ -97,44 +115,29 @@ def run(c: Pyfig):
             e_clip = torch.clip(e, min=e-5*e_mean_dist, max=e+5*e_mean_dist)
 
         # opt.zero_grad()
+        # loss = ((e_clip - e_clip.mean())*model_v(params, r)).mean()
+        # loss.backward()
+        
         loss_fn = lambda _params: ((e_clip - e_clip.mean())*model_v(_params, r)).mean()
-        
-        grads = grad(loss_fn)(params)
-        for p, g in zip(model.parameters(), grads):
-            p.grad = torch.nn.utils.clip_grad_norm_(g.clone(), max_norm=1.)
+        grads = ft.grad(loss_fn)(params)
+        updates, opt_state = optimizer.update(grads, opt_state)  # get updates
+        # params = torchopt.apply_updates(params, updates) 
 
-        opt.step()
-        
-        params = [p.detach() for p in model.parameters()]
-        grads = [p.grad.detach() for p in model.parameters()]
+        with torch.no_grad():
+            for p, u in zip(params, updates):
+                p -= param_clip(p, gaussian_clip(u.detach(), n_std=3.))
         
         v_tr = dict(
-            params=params, grads=grads,
+            params=[p.detach().cpu().numpy() for p in params], 
+            grads=[p.detach().cpu().numpy() for p in grads],
             e=e, pe=pe, ke=ke, r=r,
         )
         
         if not (step % c.log_metric_step):
             metrix = compute_metrix(v_tr)  # ❗ needs converting to torch, ie tree maps
             wandb.log({'tr/step':step, **metrix})
+            print('Step: ', step, 'E: ', f'{e.mean().item():.4f}')
             
-            
-    # for epoch in range(10):
-    #     epoch_loss = 0.0
-    #     for data, target in train_set:
-    #         optimizer.zero_grad()
-    #         output = model(data)
-    #         loss = F.nll_loss(output, target)
-    #         epoch_loss += loss.item()
-    #         loss.backward()
-    #         average_gradients(model)
-    #         optimizer.step()
-    #     print('Rank ', dist.get_rank(), ', epoch ',
-    #           epoch, ': ', epoch_loss / num_batches)
-
-
-
-
-
 if __name__ == "__main__":
     
     ### pyfig ###

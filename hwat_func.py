@@ -149,7 +149,6 @@ def logabssumdet(orb_u, orb_d):
 		sign_in = signs[0] * signs[1]
 		logdet = logdets[0] + logdets[1]
 		# sign_in, logdet = reduce(_red_slogdet, slogdets)  						# take product of n_u or n_d!=1 cases
-		print(logdet.shape)
 		if n_det > 1:
 			_logdet = logdet[None, :].repeat((n_det, 1))
 			maxlogdet, idx = torch.max(_logdet, dim=-1)
@@ -283,7 +282,7 @@ def init_r(n_device, n_b, n_e, center_points: torch.Tensor, std=0.1):
 	""" init r on different gpus with different rngs """
 	""" loop concatenate pattern """
 	sub_r = [center_points + torch.randn((n_b,n_e,3), device=device, dtype=dtype)*std for i in range(n_device)]
-	return torch.stack(sub_r) if len(sub_r)>1 else sub_r[0][None, ...]
+	return torch.stack(sub_r, dim=0) if len(sub_r)>1 else sub_r[0][None, ...]
 
 def sample_b(model, params, r_0: torch.Tensor, deltar_0, n_corr=10):
 	""" metropolis hastings sampling with automated step size adjustment """
