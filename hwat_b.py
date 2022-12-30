@@ -1,127 +1,150 @@
 from functools import reduce
+from typing import List
+
 import torch 
 import torch.nn as nn
+from torch.jit import Final
 
-def logabssumdet(xs):
 
-    dets = [x.reshape(x.shape[0], -1) for x in xs if x.shape[-1] == 1]				# in case n_u or n_d=1, no need to compute determinant
-    dets = reduce(lambda a,b: a*b, dets) if len(dets)>0 else 1.					# take product of these cases (equiv to dets = torch.prod(torch.cat(dets, dim=1), dim=1) if len(dets)>0 else 1.)
-    maxlogdet = 0.																# initialised for sumlogexp trick (for stability)
-    det = dets																	# if both cases satisfy n_u or n_d=1, this is the determinant
-    
-    slogdets = [torch.linalg.slogdet(x) for x in xs if x.shape[-1]>1] 			# otherwise take slogdet
-    if len(slogdets)>0: 
-        sign_in, logdet = reduce(lambda a,b: (a[0]*b[0], a[1]+b[1]), slogdets)  # take product of n_u or n_d!=1 cases
-        maxlogdet = torch.max(logdet)											# adjusted for new inputs
-        det = sign_in * dets * torch.exp(logdet-maxlogdet)						# product of all these things is determinant
-    
-    psi_ish = torch.sum(det[:, None], dim=1)									# sum over determinants (n_batch
-    sgn_psi = torch.sign(psi_ish)
-    log_psi = torch.log(torch.abs(psi_ish)) + maxlogdet
-    return log_psi, sgn_psi
+def fb_block(s_v: torch.Tensor, p_v: torch.Tensor, n_u: int, n_d: int):
+    n_e = n_u + n_d
+    sfb_v = [torch.tile(_v.mean(dim=1)[:, None, :], (n_e, 1)) for _v in torch.split(s_v, (n_u, n_d), dim=1)] # two element list of (n_batch, n_e, n_sv) tensor
+    pfb_v = [_v.mean(dim=1) for _v in torch.split(p_v, (n_u, n_d), dim=1)] # two element list of (n_batch, n_e, n_pv) tensor
+    s_v = torch.cat( sfb_v + pfb_v + [s_v,], dim=-1) # (n_batch, n_e, 3n_sv+2n_pv)
+    return s_v
 
 
 class Ansatz_fb(nn.Module):
-	def __init__(self, n_e, n_u, n_d, n_det, n_fb, n_pv, n_sv, a: torch.Tensor, with_sign=False):
-		super(Ansatz_fb, self).__init__()
-		self.n_e = n_e                 	# number of electrons
-		self.n_u = n_u                 	# number of up electrons
-		self.n_d = n_d                 	# number of down electrons
-		self.n_det = n_det             	# number of determinants
-		self.n_fb = n_fb               	# number of feedforward blocks
-		self.n_pv = n_pv               	# latent dimension for 2-electron
-		self.n_sv = n_sv               	# latent dimension for 1-electron
-		self.a = a                     	# nuclei positions
-		self.with_sign = with_sign     	# return sign of wavefunction
 
-		self.n1 = [4*self.a.shape[0]] + [self.n_sv]*self.n_fb
-		self.n2 = [4] + [self.n_pv]*(self.n_fb - 1)
-		assert (len(self.n1) == self.n_fb+1) and (len(self.n2) == self.n_fb)
-		self.Vs = nn.ModuleList([nn.Linear(3*self.n1[i]+2*self.n2[i], self.n1[i+1]) for i in range(self.n_fb)])
-		self.Ws = nn.ModuleList([nn.Linear(self.n2[i], self.n2[i+1]) for i in range(self.n_fb)])
+    n_e: Final[int]                 # number of electrons
+    n_u: Final[int]                 # number of up electrons
+    n_d: Final[int]                 # number of down electrons
+    n_det: Final[int]               # number of determinants
+    n_fb: Final[int]                # number of feedforward blocks
+    n_pv: Final[int]                # latent dimension for 2-electron
+    n_sv: Final[int]                # latent dimension for 1-electron
+    a: torch.Tensor      
+    n_a: Final[int]                 # nuclei positions
+    with_sign: Final[bool]          # return sign of wavefunction
 
-		self.V_half_u = nn.Linear(self.n_sv, self.n_sv // 2)
-		self.V_half_d = nn.Linear(self.n_sv, self.n_sv // 2)
+    def __init__(ii, n_e, n_u, n_d, n_det, n_fb, n_pv, n_sv, a: torch.Tensor, with_sign=False):
+        super(Ansatz_fb, ii).__init__()
+        ii.n_e = n_e                  # number of electrons
+        ii.n_u = n_u                  # number of up electrons
+        ii.n_d = n_d                  # number of down electrons
+        ii.n_det = n_det              # number of determinants
+        ii.n_fb = n_fb                # number of feedforward blocks
+        ii.n_pv = n_pv                # latent dimension for 2-electron
+        ii.n_sv = n_sv                # latent dimension for 1-electron
+        ii.a = a       
+        ii.n_a = len(a)               # nuclei positions
+        ii.with_sign = with_sign      # return sign of wavefunction
 
-		self.wu = nn.Linear(self.n_sv // 2, self.n_u)
-		self.wd = nn.Linear(self.n_sv // 2, self.n_d)
-
-	def forward(self, r: torch.Tensor):
-		"""
-			Takes in a tensor of shape (n_batch, n_e, 3) and returns the log of the wavefunction and the sign of the wavefunction.
-		"""
-		if len(r.shape)==2:
-			r = r[None, ...]
-		n_batch = r.shape[0]
-		device, dtype = r.device, r.dtype
+        ii.n1 = [4*ii.n_a,] + [ii.n_sv,]*(ii.n_fb+1)
+        ii.n2 = [4,] + [ii.n_pv,]*(ii.n_fb+1)
   
-		eye = torch.eye(self.n_e, device=device, dtype=dtype).unsqueeze(-1)
+        ii.Vs = nn.ModuleList([
+            nn.Linear(3*ii.n1[i]+2*ii.n2[i], ii.n1[i+1]) for i in range(ii.n_fb)
+        ])
+        ii.Ws = nn.ModuleList([
+            nn.Linear(ii.n2[i], ii.n2[i+1]) for i in range(ii.n_fb)
+        ])
+  
+        ii.V_u_after = nn.Linear(3*ii.n1[-1]+2*ii.n2[-1], ii.n1[-1])
+        ii.V_d_after = nn.Linear(3*ii.n1[-1]+2*ii.n2[-1], ii.n1[-1])
 
-		ra = r[:, :, None, :] - self.a[:, :] # (n_batch, n_e, n_a, 3)
-		ra_len = torch.norm(ra, dim=-1, keepdim=True) # (n_batch, n_e, n_a, 1)
+        ii.wu = nn.Linear(ii.n_sv, ii.n_u * ii.n_det)
+        ii.wd = nn.Linear(ii.n_sv, ii.n_d * ii.n_det)
+        # TODO: implement layers for sigma and pi
 
-		rr = r[:, None, :, :] - r[:, :, None, :] # (n_batch, n_e, n_e, 1)
-		rr_len = torch.norm(rr+eye, dim=-1, keepdim=True) * (torch.ones((self.n_e, self.n_e, 1), device=device, dtype=dtype)-eye) # (n_batch, n_e, n_e, 1) 
+    def forward(ii, r: torch.Tensor):
+        dtype, device = r.dtype, r.device
 
-		s_v = torch.cat([ra, ra_len], dim=-1).reshape(n_batch, self.n_e, -1) # (n_batch, n_e, n_a*4)
-		p_v = torch.cat([rr, rr_len], dim=-1) # (n_batch, n_e, n_e, 4)
+        if len(r.shape)==2:
+            r = r.reshape(-1, ii.n_e, 3) # (n_batch, n_e, 3)
+        n_batch = r.shape[0]
+  
+        eye = torch.eye(ii.n_e, device=device, dtype=dtype).unsqueeze(-1)
 
-		for l, (V, W) in enumerate(zip(self.Vs, self.Ws)):
-			sfb_v = [torch.tile(_v.mean(dim=1)[:, None, :], (self.n_e, 1)) for _v in torch.split(s_v, self.n_u, dim=1)] # two element list of (n_batch, n_e, n_sv) tensor
-			pfb_v = [_v.mean(dim=1) for _v in torch.split(p_v, self.n_u, dim=1)] # two element list of (n_batch, n_e, n_pv) tensor
+        ra = r[:, :, None, :] - ii.a[:, :] # (n_batch, n_e, n_a, 3)
+        ra_len = torch.linalg.norm(ra, dim=-1, keepdim=True) # (n_batch, n_e, n_a, 1)
 
-			s_v = torch.cat(sfb_v+pfb_v+[s_v,], dim=-1) # (n_batch, n_e, 3n_sv+2n_pv)
-			s_v = torch.tanh(V(s_v)) + (s_v if (s_v.shape[-1]==self.n_sv) else 0.) # (n_batch, n_e, n_sv)
+        rr = r[:, None, :, :] - r[:, :, None, :] # (n_batch, n_e, n_e, 1)
+        rr_len = torch.linalg.norm(rr + eye, dim=-1, keepdim=True) #* (torch.ones((ii.n_e, ii.n_e, 1), device=device, dtype=dtype)-eye) # (n_batch, n_e, n_e, 1)
 
-			if not (l == (self.n_fb-1)):
-				p_v = torch.tanh(W(p_v)) + (p_v if (p_v.shape[-1]==self.n_pv) else 0.) # (n_batch, n_e, n_e, n_pv)
+        s_v = torch.cat([ra, ra_len], dim=-1).reshape(n_batch, ii.n_e, -1) # (n_batch, n_e, n_a*4)
+        p_v = torch.cat([rr, rr_len], dim=-1) # (n_batch, n_e, n_e, 4)
+        
+        s_v_block = fb_block(s_v, p_v, ii.n_u, ii.n_d)
+        
+        for l, (V, W) in enumerate(zip(ii.Vs, ii.Ws)):
+            s_v = torch.tanh(V(s_v_block)) + (s_v if (s_v.shape[-1]==ii.n_sv) else torch.zeros((n_batch, ii.n_e, ii.n_sv), device=device, dtype=dtype)) # (n_batch, n_e, n_sv)
+            p_v = torch.tanh(W(p_v)) + (p_v if (p_v.shape[-1]==ii.n_pv) else torch.zeros((n_batch, ii.n_e, ii.n_e, ii.n_pv), device=device, dtype=dtype)) # (n_batch, n_e, n_e, n_pv)
+            s_v_block = fb_block(s_v, p_v, ii.n_u, ii.n_d) # (n_batch, n_e, 3n_sv+2n_pv)
 
-		s_u, s_d = torch.split(s_v, self.n_u, dim=1) # (n_batch, n_u, n_sv), (n_batch, n_d, n_sv)
+        s_u, s_d = torch.split(s_v_block, [ii.n_u, ii.n_d], dim=1) # (n_batch, n_u, 3n_sv+2n_pv), (n_batch, n_d, 3n_sv+2n_pv)
 
-		s_u = torch.tanh(self.V_half_u(s_u)) # (n_batch, n_u, n_sv//2)
-		s_d = torch.tanh(self.V_half_d(s_d)) # (n_batch, n_d, n_sv//2)
+        s_u = torch.tanh(ii.V_u_after(s_u)) # (n_batch, n_u, n_sv)    # n_sv//2)
+        s_d = torch.tanh(ii.V_d_after(s_d)) # (n_batch, n_d, n_sv)    # n_sv//2)
 
-		s_wu = self.wu(s_u) # (n_batch, n_u, n_u)
-		s_wd = self.wd(s_d) # (n_batch, n_d, n_d)
+        # Map to orbitals for multiple determinants
+        s_wu = torch.cat(ii.wu(s_u).unsqueeze(1).chunk(ii.n_det, dim=-1), dim=1) # (n_batch, n_det, n_u, n_u)
+        s_wd = torch.cat(ii.wd(s_d).unsqueeze(1).chunk(ii.n_det, dim=-1), dim=1) # (n_batch, n_det, n_d, n_d)
+        assert s_wd.shape == (n_batch, ii.n_det, ii.n_d, ii.n_d)
 
-		assert s_wd.shape == (n_batch, self.n_d, self.n_d)
+        ra_u, ra_d = torch.split(ra, [ii.n_u, ii.n_d], dim=1) # (n_batch, n_u, n_a, 3), (n_batch, n_d, n_a, 3)
 
-		ra_u, ra_d = torch.split(ra, self.n_u, dim=1) # (n_batch, n_u, n_a, 3), (n_batch, n_d, n_a, 3)
+        exp_u = torch.linalg.norm(ra_u, dim=-1, keepdim=True) # (n_batch, n_u, n_a, 1)
+        exp_d = torch.linalg.norm(ra_d, dim=-1, keepdim=True) # (n_batch, n_d, n_a, 1)
 
-		exp_u = torch.norm(ra_u, dim=-1, keepdim=True) # (n_batch, n_u, n_a, 1)
-		exp_d = torch.norm(ra_d, dim=-1, keepdim=True) # (n_batch, n_d, n_a, 1)
+        assert exp_d.shape == (n_batch, ii.n_d, ii.a.shape[0], 1)
 
-		assert exp_d.shape == (n_batch, self.n_d, self.a.shape[0], 1)
+        # print(torch.exp(-exp_u).sum(axis=2).unsqueeze(1).shape) # (n_batch, 1, n_u, 1)
+        orb_u = (s_wu * (torch.exp(-exp_u).sum(axis=2).unsqueeze(1))) # (n_batch, n_det, n_u, n_u)
+        orb_d = (s_wd * (torch.exp(-exp_d).sum(axis=2).unsqueeze(1))) # (n_batch, n_det, n_d, n_d)
 
-		orb_u = (s_wu * (torch.exp(-exp_u).sum(axis=2))) # (n_batch, 1, n_u, n_u)
-		orb_d = (s_wd * (torch.exp(-exp_d).sum(axis=2))) # (n_batch, 1, n_d, n_d)
+        assert orb_u.shape == (n_batch, ii.n_det, ii.n_u, ii.n_u)
 
-		assert orb_u.shape == (n_batch, self.n_u, self.n_u) # extend with n_det axis in dim=1
+        log_psi, sgn = logabssumdet(orb_u, orb_d)
 
-		log_psi, sgn = logabssumdet([orb_u, orb_d])
+        if ii.with_sign:
+            return log_psi, sgn
+        else:
+            return log_psi.squeeze()
 
-		if self.with_sign:
-			return log_psi, sgn
-		else:
-			return log_psi.squeeze()
-		
-def logabssumdet(xs):
-		
-	dets = [x.reshape(-1) for x in xs if x.shape[-1] == 1]						# in case n_u or n_d=1, no need to compute determinant
-	dets = reduce(lambda a,b: a*b, dets) if len(dets)>0 else 1.					# take product of these cases
-	maxlogdet = 0.																# initialised for sumlogexp trick (for stability)
-	det = dets																	# if both cases satisfy n_u or n_d=1, this is the determinant
-	
-	slogdets = [torch.linalg.slogdet(x) for x in xs if x.shape[-1]>1] 			# otherwise take slogdet
-	if len(slogdets)>0: 
-		sign_in, logdet = reduce(lambda a,b: (a[0]*b[0], a[1]+b[1]), slogdets)  # take product of n_u or n_d!=1 cases
-		maxlogdet = torch.max(logdet)											# adjusted for new inputs
-		det = sign_in * dets * torch.exp(logdet-maxlogdet)						# product of all these things is determinant
-	
-	psi_ish = torch.sum(det)
-	sgn_psi = torch.sign(psi_ish)
-	log_psi = torch.log(torch.abs(psi_ish)) + maxlogdet
-	return log_psi, sgn_psi
+
+def logabssumdet(orb_u, orb_d):
+    xs = [orb_u, orb_d]
+    n_batch = xs[0].shape[0]
+    n_det = xs[0].shape[1]
+    dtype, device = xs[0].dtype, xs[0].device
+    ones = torch.ones((n_batch, n_det,)).to(dtype).to(device)
+    zeros = torch.zeros((n_batch, n_det,)).to(dtype).to(device)
+    print(ones.requires_grad)
+    dets = [x.reshape(n_batch, -1) if x.shape[-1] == 1 else ones for x in xs]   # (n_batch, n_det), (n_batch, n_det)
+    dets = dets[0] * dets[1] # (n_batch, n_det)
+
+    maxlogdet = 0.				                                                # initialised for sumlogexp trick (for stability)
+    det = dets																	# if both cases satisfy n_u or n_d=1, this is the determinant
+    
+    slogdets = [torch.linalg.slogdet(x) if x.shape[-1]>1 else (ones, zeros) for x in xs] # two-element list of list of (n_batch, n_det) tensors
+    signs = [_v[0] for _v in slogdets] # two-element list of (n_batch, n_det) tensors
+    logdets = [_v[1] for _v in slogdets] # two-element list of (n_batch, n_det) tensors
+
+    sign_in = signs[0] * signs[1] # (n_batch, n_det)
+    logdet = logdets[0] + logdets[1] # (n_batch, n_det)
+    if n_det > 1:
+        maxlogdet, idx = torch.max(logdet, dim=-1) # (n_batch), (n_batch)
+        # Here we did max operation over determinants (one for each batch element). Should we just have one global max?
+
+    det = sign_in * dets * torch.exp(logdet-(maxlogdet[:, None] if n_det>1 else maxlogdet))	# (n_batch, n_det)
+
+    psi_ish = det.sum(dim=1) # (n_batch)
+    sgn_psi = torch.sign(psi_ish) # (n_batch)
+    log_psi = torch.log(torch.abs(psi_ish)) + maxlogdet # (n_batch)
+    
+    return log_psi, sgn_psi
+
 
 compute_vv = lambda v_i, v_j: torch.unsqueeze(v_i, axis=-2)-torch.unsqueeze(v_j, axis=-3)
 
