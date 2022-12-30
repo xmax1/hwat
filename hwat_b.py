@@ -76,7 +76,6 @@ class Ansatz_fb(nn.Module):
 			if not (l == (self.n_fb-1)):
 				p_v = torch.tanh(W(p_v)) + (p_v if (p_v.shape[-1]==self.n_pv) else 0.) # (n_batch, n_e, n_e, n_pv)
 
-
 		s_u, s_d = torch.split(s_v, self.n_u, dim=1) # (n_batch, n_u, n_sv), (n_batch, n_d, n_sv)
 
 		s_u = torch.tanh(self.V_half_u(s_u)) # (n_batch, n_u, n_sv//2)
@@ -171,6 +170,7 @@ def compute_pe_b(r, a=None, a_z=None):
 			pe_aa += torch.tril(1./aa_len, diagonal=-1).sum((-1,-2))
 
 	return (pe_rr - pe_ra + pe_aa).squeeze()  
+
 
 def compute_ke_b(model_fnv: nn.Module, r: torch.Tensor):
 	dtype, device = r.dtype, r.device

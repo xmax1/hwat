@@ -76,7 +76,7 @@ def run(c: Pyfig):
     
     model_fn, params = make_functional(model)
     # model_v = torch.compile(model_fn)
-    model_v = torch.jit.script(model_fn(2, 3))
+    # model_v = torch.jit.script(model_fn(2, 3))
     model_v = vmap(model_fn, in_dims=(None, 0))
     
     model_v(params, r)

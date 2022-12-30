@@ -80,8 +80,6 @@ class Ansatz_fb(nn.Module):
 		s_v = torch.cat([ra, ra_len], dim=-1).reshape(ii.n_e, -1) # (n_e, n_a*4)
 		p_v = torch.cat([rr, rr_len], dim=-1) # (n_e, n_e, 4)
 
-		# print(s_v.mean(), p_v.mean())
-		
 		s_v = fb_block(s_v, p_v, ii.n_u, ii.n_d)
 		
 		for l, (V, W) in enumerate(zip(ii.Vs, ii.Ws)):
@@ -132,15 +130,15 @@ from torch.jit import Final
 
 def logabssumdet(orb_u, orb_d):
 	xs = [orb_u, orb_d]
+ 
 	n_det = xs[0].shape[0]
 	dtype, device = xs[0].dtype, xs[0].device
+
 	ones = torch.ones((n_det,)).to(dtype).to(device)
 	zeros = torch.zeros((n_det,)).to(dtype).to(device)
-	print(ones.requires_grad)
+ 
 	dets = [x.reshape(-1) if x.shape[-1] == 1 else ones for x in xs]						# in case n_u or n_d=1, no need to compute determinant
 	dets = dets[0] * dets[1]
-	# dets = reduce(_red_det, dets) if len(dets)>0 else 1.					    # take product of these cases
-
 	maxlogdet = 0.																# initialised for sumlogexp trick (for stability)
 	det = dets																	# if both cases satisfy n_u or n_d=1, this is the determinant
 	
