@@ -11,13 +11,13 @@ from copy import copy
 import numpy as np
 import re
 from time import sleep
-from dump.user import user
 
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum
-from utils import flat_dict, mkdir, cmd_to_dict, dict_to_wandb, iterate_n_dir
-from utils import type_me, debug_pr, debug_mode
+from utils import mkdir, cmd_to_dict, dict_to_wandb, iterate_n_dir
+from utils import type_me
 from utils import Sub
 
+from dump.user import user
 
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 
@@ -165,7 +165,7 @@ class Pyfig:
                     dir         = mkdir(ii.exp_path),
                     config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
                     mode        = wb_mode,
-                    settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+                    # settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
             )
                 
         else:

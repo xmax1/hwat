@@ -271,12 +271,13 @@ def get_center_points(n_e, center: torch.Tensor, _r_cen=None):
 		_r_cen = r_i if _r_cen is None else torch.concatenate([_r_cen, r_i])
 	return _r_cen
 
-def init_r(n_device, n_b, n_e, center_points: torch.Tensor, std=0.1):
-	dtype, device = center_points.dtype, center_points.device
+def init_r(n_b, n_e, center_points: torch.Tensor, std=0.1):
 	""" init r on different gpus with different rngs """
-	""" loop concatenate pattern """
-	sub_r = [center_points + torch.randn((n_b,n_e,3), device=device, dtype=dtype)*std for i in range(n_device)]
-	return torch.stack(sub_r, dim=0) if len(sub_r)>1 else sub_r[0][None, ...]
+	dtype, device = center_points.dtype, center_points.device
+	return center_points + torch.randn((n_b,n_e,3), device=device, dtype=dtype)*std
+	# """ loop concatenate pattern """
+	# sub_r = [center_points + torch.randn((n_b,n_e,3), device=device, dtype=dtype)*std for i in range(n_device)]
+	# return torch.stack(sub_r, dim=0) if len(sub_r)>1 else sub_r[0][None, ...]
 
 def sample_b(model, params, r_0: torch.Tensor, deltar_0, n_corr=10):
 	""" metropolis hastings sampling with automated step size adjustment """

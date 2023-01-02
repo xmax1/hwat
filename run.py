@@ -38,7 +38,7 @@ def run(c: Pyfig):
 
 	_dummy = torch.randn((1,))
 	dtype = _dummy.dtype
-	device='cuda'
+	device = 'cuda' if torch.cuda.is_available() else 'cpu'
 	c._convert(device=device, dtype=dtype)
 	model = c.partial(Ansatz_fb).to(device).to(dtype)
 
@@ -48,7 +48,7 @@ def run(c: Pyfig):
 	from hwat_func import init_r, get_center_points
 
 	center_points = get_center_points(c.data.n_e, c.data.a)
-	r = init_r(n_device, c.data.n_b, c.data.n_e, center_points, std=0.1)[0]
+	r = init_r(c.data.n_b, c.data.n_e, center_points, std=0.1)
 	deltar = torch.tensor([0.02]).to(device).to(dtype)
 
 	print(f"""exp/actual | 
@@ -89,11 +89,13 @@ def run(c: Pyfig):
 
 	def train_step(model, r=None, deltar=None, **kw):
 
+   
+			params = [p.detach() for p in model.parameters()]
 			with torch.no_grad():
-				r, acc, deltar = sample_b(model_v, model.parameters(), r, deltar, n_corr=c.data.n_corr)  # ❗needs testing 
+				r, acc, deltar = sample_b(model_v, params, r, deltar, n_corr=c.data.n_corr)  # ❗needs testing 
 				r = keep_around_points(r, center_points, l=5.) if step < 50 else r
 				
-				model_ke = lambda _r: model_v(model.parameters(), _r).sum()
+				model_ke = lambda _r: model_v(params, _r).sum()
 
 				ke = compute_ke_b(model_ke, r)
 				pe = compute_pe_b(r, c.data.a, c.data.a_z)
@@ -126,7 +128,6 @@ def run(c: Pyfig):
 
 	v_tr = dict(params=params, r=r, deltar=deltar)
 
-	print(list(model.parameters()))
 	wandb.define_metric("*", step_metric="tr/step")
 	for step in range(1, c.n_step+1):
 		
@@ -167,7 +168,7 @@ if __name__ == "__main__":
 		spin  = 0,
 		a = np.array([[0.0, 0.0, 0.0],]),
 		a_z  = np.array([4.,]),
-		n_b = 256, 
+		n_b = 2, 
 		n_sv = 32, 
 		n_pv = 16, 
 		n_corr = 40, 
