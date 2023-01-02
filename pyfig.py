@@ -63,6 +63,7 @@ class Pyfig:
         n_det:          int     = 1
         terms_s_emb:    list    = ['ra', 'ra_len']
         terms_p_emb:    list    = ['rr', 'rr_len']
+        ke_method:      str     = 'ke_method'
 
     class sweep(Sub):        
         # program         = property(lambda _: _._p.run_name)

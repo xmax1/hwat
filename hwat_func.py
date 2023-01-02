@@ -1,6 +1,9 @@
 from functools import reduce
 import torch 
 import torch.nn as nn
+		
+from typing import List
+from torch.jit import Final
 
 from functorch import vmap, grad, vjp 
 from torch.jit import Final
@@ -49,8 +52,6 @@ class Ansatz_fb(nn.Module):
 			nn.Linear(ii.n2[i], ii.n2[i+1]) for i in range(ii.n_fb)
 		])
 
-		ii.after = nn.Linear(3*ii.n1[-1]+2*ii.n2[-1], ii.n1[-1])
-  
 		ii.V_half_u = nn.Linear(3*ii.n1[-1]+2*ii.n2[-1], ii.n1[-1])
 		ii.V_half_d = nn.Linear(3*ii.n1[-1]+2*ii.n2[-1], ii.n1[-1])
 
@@ -122,13 +123,6 @@ class Ansatz_fb(nn.Module):
 			return log_psi, sgn
 		else:
 			return log_psi.squeeze()
-		
-  
-_red_det = lambda a,b: a*b
-_red_slogdet = lambda a,b: (a[0]*b[0], a[1]+b[1])
-
-from typing import List
-from torch.jit import Final
 
 def logabssumdet(orb_u, orb_d):
 	xs = [orb_u, orb_d]
@@ -136,7 +130,6 @@ def logabssumdet(orb_u, orb_d):
 	dtype, device = xs[0].dtype, xs[0].device
 	ones = torch.ones((n_det,)).to(dtype).to(device)
 	zeros = torch.zeros((n_det,)).to(dtype).to(device)
-	print(ones.requires_grad)
 	dets = [x.reshape(-1) if x.shape[-1] == 1 else ones for x in xs]						# in case n_u or n_d=1, no need to compute determinant
 	dets = dets[0] * dets[1]
 	# dets = reduce(_red_det, dets) if len(dets)>0 else 1.					    # take product of these cases
@@ -151,13 +144,11 @@ def logabssumdet(orb_u, orb_d):
 		sign_in = signs[0] * signs[1]
 		logdet = logdets[0] + logdets[1]
 		# sign_in, logdet = reduce(_red_slogdet, slogdets)  						# take product of n_u or n_d!=1 cases
-		print(logdet.shape)
 		if n_det > 1:
 			_logdet = logdet[None, :].repeat((n_det, 1))
 			maxlogdet, idx = torch.max(_logdet, dim=-1)
 			# maxlogdet = torch.maximum(logdet)
 			# maxlogdet = torch.nn.functional.max_pool1d(logdet[None, None, :], len(logdet))
-			print(maxlogdet, idx)
 		# print(maxlogdet.shape)# adjusted for new inputs
   
 		det = sign_in * dets * torch.exp(logdet-maxlogdet)							# product of all these things is determinant
@@ -220,24 +211,26 @@ def compute_pe_b(r, a=None, a_z=None):
 from functorch import jvp 
 from torch import jit
 
-def compute_ke_b(model_rv, r: torch.Tensor):
+def compute_ke_b(model_rv, r: torch.Tensor, ke_method='jvp'):
 	dtype, device = r.dtype, r.device
-	# MODEL IS FUNCTIONAL THAT IS VMAPPED
 	n_b, n_e, n_dim = r.shape
 	n_jvp = n_e * n_dim
+
 	r_flat = r.reshape(n_b, n_jvp)
 	eyes = torch.eye(n_jvp, dtype=dtype, device=device)[None].repeat((n_b, 1, 1))
 
 	# vjp method
-	# grad_fn = grad(lambda _r: model_rv(_r).sum())
-	# g, fn = vjp(grad_fn, r_flat)
-	# gg2 = torch.stack([fn(eye_b[..., i])[0][:, i] for i in range(n_jvp)], dim=0).sum(0)
-	# lap = gg2 + (g**2).sum(-1)
+	if ke_method == 'vjp':
+		grad_fn = grad(lambda _r: model_rv(_r).sum())
+		g, fn = vjp(grad_fn, r_flat)
+		gg2 = torch.stack([fn(eyes[..., i])[0][:, i] for i in range(n_jvp)], dim=0).sum(0)
+		e_jvp = gg2 + (g**2).sum(-1)
  
 	# jvp 
-	grad_fn = grad(model_rv)
-	jvp_all = [jvp(grad_fn, (r_flat,), (eyes[:, i],)) for i in range(n_jvp)]  # grad out, jvp
-	e_jvp = torch.stack([a[:, i]**2 + b[:, i] for i, (a,b) in enumerate(jvp_all)]).sum(0)
+	if ke_method == 'jvp':
+		grad_fn = grad(model_rv)
+		jvp_all = [jvp(grad_fn, (r_flat,), (eyes[:, i],)) for i in range(n_jvp)]  # grad out, jvp
+		e_jvp = torch.stack([a[:, i]**2 + b[:, i] for i, (a,b) in enumerate(jvp_all)]).sum(0)
  
 	#  (primal[:, i]**2).squeeze() + (tangent[:, i]).squeeze()
 	# primal, tangent = jax.jvp(grad_fn, (r,), (eye[..., i],))  
