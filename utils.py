@@ -226,6 +226,7 @@ def cmd_to_dict(cmd:Union[str, list], ref:dict, delim:str=' --', d=None):
 
 
 def run_cmds(cmd:Union[str, list], cwd:Union[str, Path]='.', _res=[]):
+    return None
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
         cmd_1 = [c.strip() for c in cmd_1.split(' ')]
         print(f'Run: {cmd_1} at {cwd}')

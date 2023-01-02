@@ -168,19 +168,17 @@ class Pyfig:
             )
                 
         else:
-        
+            print('Server -> hostname', ii.server, ii.hostname)
             if not re.match(ii.server, ii.hostname): # if on local, ssh to server and rerun
-                sys.exit('submit')
+                # sys.exit('submit')
                 print('Submitting to server \n')
                 run_cmds([ii._git_commit_cmd, 'git push origin main --force'], cwd=ii.project_dir)
                 run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)  
                 run_cmds_server(ii.server, ii.user, ii._run_single_cmd, ii.run_dir)                
                 sys.exit(f'Submitted to server \n')
                 ##############################################################################
-    
-            print(ii.hostname)
-            
-            run_cmds([ii._git_commit_cmd, 'git push origin main'], cwd=ii.project_dir)
+
+            # run_cmds([ii._git_commit_cmd, 'git push origin main'], cwd=ii.project_dir)
             
             if ii.run_sweep:
                 ii.sweep.parameters |= dict((k, dict(value=v)) for k,v in ii._not_in_sweep.items())
