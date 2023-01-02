@@ -50,6 +50,7 @@ def run(c: Pyfig):
 	center_points = get_center_points(c.data.n_e, c.data.a)
 	r = init_r(c.data.n_b, c.data.n_e, center_points, std=0.1)
 	deltar = torch.tensor([0.02]).to(device).to(dtype)
+ 
 
 	print(f"""exp/actual | 
 		cps    : {(c.data.n_e, 3)}/{center_points.shape}
@@ -87,13 +88,11 @@ def run(c: Pyfig):
 
 
 
-	def train_step(model, r=None, deltar=None, **kw):
+	def train_step(model, r):
 
-   
 			params = [p.detach() for p in model.parameters()]
+   
 			with torch.no_grad():
-				r, acc, deltar = sample_b(model_v, params, r, deltar, n_corr=c.data.n_corr)  # ❗needs testing 
-				r = keep_around_points(r, center_points, l=5.) if step < 50 else r
 				
 				model_ke = lambda _r: model_v(params, _r).sum()
 
@@ -105,10 +104,10 @@ def run(c: Pyfig):
 
 			opt.zero_grad()
 			loss = ((e_clip - e_clip.mean())*model_v(model.parameters(), r)).mean()
-			torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.)
+			# torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.)
 			loss.backward()
    
-
+			grads = [p.grad.detach() for p in model.parameters()]
 			# params = params.grad.data.add_(cfg.learning_rate * params.grad.data)
 			
 			# loss_fn = lambda _params: ((e_clip - e_clip.mean())*model_v(_params, r)).mean()
@@ -120,9 +119,7 @@ def run(c: Pyfig):
 			opt.step()
    
 			v_tr = dict(
-				ke=ke, pe=pe, e=e,
-				loss=loss,
-				r=r, deltar=deltar
+				ke=ke, pe=pe, e=e, loss=loss, params=params, grads=grads
 			)
 			return v_tr
 
@@ -130,13 +127,14 @@ def run(c: Pyfig):
 
 	wandb.define_metric("*", step_metric="tr/step")
 	for step in range(1, c.n_step+1):
-		
-		v_tr = train_step(model, **v_tr)
-		
-		# params = [p.detach() for p in model.parameters()]
-		# grads = [p.grad.detach() for p in model.parameters()]
+     
+		r, acc, deltar = sample_b(model_v, v_tr['params'], r, deltar, n_corr=c.data.n_corr)  # ❗needs testing 
+		r = keep_around_points(r, center_points, l=5.) if step < 50 else r
+
+		v_tr = train_step(model, r)
 		
 		if not (step % c.log_metric_step):
+			v_tr |= dict(acc=acc, r=r, deltar=deltar)
 			metrix = compute_metrix(v_tr.copy())  # ❗ needs converting to torch, ie tree maps
 			wandb.log({'tr/step':step, **metrix})
 		

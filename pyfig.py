@@ -158,14 +158,13 @@ class Pyfig:
                 print('setting exp_path')
                 ii.exp_path = iterate_n_dir(ii.dump/'exp'/ii.exp_name, True)
             ii.exp_path /= ii._exp_id
-            
             ii._run = wandb.init(
                     entity      = ii.wandb_c.entity,  # team name is hwat
                     project     = ii.project,         # sub project in team
                     dir         = mkdir(ii.exp_path),
                     config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
                     mode        = wb_mode,
-                    # settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+                    settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
             )
                 
         else:
