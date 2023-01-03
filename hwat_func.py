@@ -8,6 +8,7 @@ from torch.jit import Final
 from functorch import vmap, grad, vjp 
 from torch.jit import Final
 
+
 def fb_block(s_v: torch.Tensor, p_v: torch.Tensor, n_u: int, n_d: int):
 	n_e = n_u + n_d
 	sfb_v = [torch.tile(_v.mean(dim=0)[None, :], (n_e, 1)) for _v in torch.split(s_v, (n_u, n_d), dim=0)]
@@ -64,8 +65,8 @@ class Ansatz_fb(nn.Module):
 
 	def forward(ii, r: torch.Tensor):
 		dtype, device = r.dtype, r.device
-  
-		if len(r.shape) == 1:
+
+		if r.ndim == 1:
 			r = r.reshape(ii.n_e, 3) # (n_e, 3)
 
 		# print(r.shape, ii.a.shape)
@@ -81,16 +82,16 @@ class Ansatz_fb(nn.Module):
 		s_v = torch.cat([ra, ra_len], dim=-1).reshape(ii.n_e, -1) # (n_e, n_a*4)
 		p_v = torch.cat([rr, rr_len], dim=-1) # (n_e, n_e, 4)
 
-		s_v = fb_block(s_v, p_v, ii.n_u, ii.n_d)
+		s_v_block = fb_block(s_v, p_v, ii.n_u, ii.n_d)
 		
 		for l, (V, W) in enumerate(zip(ii.Vs, ii.Ws)):
 			# print(l, s_v.mean())
 			# print(s_v.dtype, p_v.dtype, s_v.shape, p_v.shape)
-			s_v = torch.tanh(V(s_v)) + (s_v if (s_v.shape[-1]==ii.n_sv) else torch.zeros((1, ii.n_sv), device=device, dtype=dtype))
-			p_v = torch.tanh(W(p_v)) + (p_v if (p_v.shape[-1]==ii.n_pv) else torch.zeros((1, ii.n_pv), device=device, dtype=dtype))
-			s_v = fb_block(s_v, p_v, ii.n_u, ii.n_d)
+			s_v = torch.tanh(V(s_v_block)) + (s_v if (s_v.shape[-1]==ii.n_sv) else torch.zeros((1, ii.n_sv), device=device, dtype=dtype))
+			p_v = torch.tanh(W(p_v)) + (p_v if (p_v.shape[-1]==ii.n_pv) else torch.zeros((1, 1, ii.n_pv), device=device, dtype=dtype))
+			s_v_block = fb_block(s_v, p_v, ii.n_u, ii.n_d)
    
-		s_u, s_d = torch.split(s_v, [ii.n_u, ii.n_d], dim=0)
+		s_u, s_d = torch.split(s_v_block, (ii.n_u, ii.n_d), dim=0)
 
 		s_u = torch.tanh(ii.V_half_u(s_u)) # spin dependent size reduction
 		s_d = torch.tanh(ii.V_half_d(s_d))
@@ -117,7 +118,9 @@ class Ansatz_fb(nn.Module):
 
 		log_psi, sgn = logabssumdet(orb_u, orb_d)
 
+
 		if ii.with_sign:
+			return s_v_block[..., 0], p_v[..., 0]
 			return log_psi, sgn
 		else:
 			return log_psi.squeeze()
@@ -209,33 +212,38 @@ def compute_pe_b(r, a=None, a_z=None):
 from functorch import jvp 
 from torch import jit
 
-def compute_ke_b(model_rv, r: torch.Tensor, ke_method='jvp'):
+def compute_ke_b(model_rv, r: torch.Tensor, ke_method='vjp', elements=False):
 	dtype, device = r.dtype, r.device
+	
 	n_b, n_e, n_dim = r.shape
 	n_jvp = n_e * n_dim
 
 	r_flat = r.reshape(n_b, n_jvp)
 	eyes = torch.eye(n_jvp, dtype=dtype, device=device)[None].repeat((n_b, 1, 1))
 
-	# vjp method
 	if ke_method == 'vjp':
-		grad_fn = grad(lambda _r: model_rv(_r).sum())
+		grad_fn = grad(model_rv)
 		g, fn = vjp(grad_fn, r_flat)
-		gg2 = torch.stack([fn(eyes[..., i])[0][:, i] for i in range(n_jvp)], dim=0).sum(0)
-		e_jvp = gg2 + (g**2).sum(-1)
- 
-	# jvp 
+		gg = torch.stack([fn(eyes[..., i])[0][:, i] for i in range(n_jvp)], dim=-1)
+		
 	if ke_method == 'jvp':
 		grad_fn = grad(model_rv)
 		jvp_all = [jvp(grad_fn, (r_flat,), (eyes[:, i],)) for i in range(n_jvp)]  # grad out, jvp
+		g = torch.stack([x[:, i] for i, (x, _) in enumerate(jvp_all)], dim=-1)
+		gg = torch.stack([x[:, i] for i, (_, x) in enumerate(jvp_all)], dim=-1)
 		e_jvp = torch.stack([a[:, i]**2 + b[:, i] for i, (a,b) in enumerate(jvp_all)]).sum(0)
+		# e_jvp = torch.stack([a[:, i]**2 + b[:, i] for i, (a,b) in enumerate(jvp_all)]).sum(0)
  
 	#  (primal[:, i]**2).squeeze() + (tangent[:, i]).squeeze()
 	# primal, tangent = jax.jvp(grad_fn, (r,), (eye[..., i],))  
 	# 	return val + (primal[:, i]**2).squeeze() + (tangent[:, i]).squeeze()
 	# return (- 0.5 * jax.lax.fori_loop(0, n_jvp, _body_fun, jnp.zeros(n_b,))).squeeze()
 
-	return -0.5*e_jvp
+	if elements:
+		return g, gg
+
+	e_jvp = gg + g**2
+	return -0.5 * e_jvp.sum(-1)
 
 # def compute_ke_b(model, r):
 	

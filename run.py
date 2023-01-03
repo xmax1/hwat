@@ -9,6 +9,7 @@ import torch.multiprocessing as mp
 
 from pyfig import Pyfig
 import numpy as np
+import pprint
 
 def init_process(rank, size, fn, backend='gloo'):
 	""" Initialize the distributed environment. """
@@ -42,7 +43,6 @@ def run(c: Pyfig):
 	c._convert(device=device, dtype=dtype)
 	model = c.partial(Ansatz_fb).to(device).to(dtype)
 
-	
 	### train step ###
 	from hwat_func import compute_ke_b, compute_pe_b
 	from hwat_func import init_r, get_center_points
@@ -51,13 +51,11 @@ def run(c: Pyfig):
 	r = init_r(c.data.n_b, c.data.n_e, center_points, std=0.1)
 	deltar = torch.tensor([0.02]).to(device).to(dtype)
  
-
 	print(f"""exp/actual | 
 		cps    : {(c.data.n_e, 3)}/{center_points.shape}
 		r      : {(c.n_device, c.data.n_b, c.data.n_e, 3)}/{r.shape}
 		deltar : {(c.n_device, 1)}/{deltar.shape}
 	""")
-
 
 	### train ###
 	import wandb
@@ -72,22 +70,84 @@ def run(c: Pyfig):
 	### fix train step 
 	### metrix conversion
 	from functorch import vmap, make_functional, grad
+	from functorch.compile import aot_function
+ 
+#  >>> fn = lambda x : x.sin().cos()
+# >>> def print_compile_fn(fx_module, args):
+# >>>     print(fx_module)
+# >>>     return fx_module
+
+# >>> aot_fn = aot_function(fn, print_compile_fn)
+# >>> x = torch.randn(4, 5, requires_grad=True)
+# >>> aot_fn(x)
 	
 	model_fn, params = make_functional(model)
 	# model_v = torch.compile(model_fn)
+
+	def fw_compile(fx_module, args):
+		print(fx_module)
+		return fx_module
+
+	model_fn = aot_function(model_fn, fw_compile, )
+	print(model_fn(params, r.requires_grad_()))
+	# mdoe
 	model_v = vmap(model_fn, in_dims=(None, 0))
-	
+	model = torch.compile(model)
 
-	def time_step(fn):
-		# https://pytorch.org/tutorials/recipes/recipes/profiler_recipe.html
-		from torch.profiler import profile, record_function, ProfilerActivity
-		with profile(activities=[ProfilerActivity.CUDA], record_shapes=True) as prof:
-			with record_function("model_inference"):
-				fn()
-		print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
+	def try_fn(fn):
+		try:
+			fn()
+		except Exception as e:
+			print(e)
+			
 
+	def profile():
+		# def profile_fn(fn, name=None):
+		# 	try:
+		# 		# https://pytorch.org/tutorials/recipes/recipes/profiler_recipe.html
+		# 		from torch.profiler import profile, record_function, ProfilerActivity
+		# 		with profile(activities=[ProfilerActivity.CUDA], record_shapes=True, profile_memory=True) as prof:
+		# 			with record_function("model_inference"):
+		# 				fn()
+		# 		print('Profile: ', name, '\n')
+		# 		print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+		# 		print(vars(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10)).keys())
+		# 		# print(vars(prof))
+		# 	except Exception as e:
+		# 		print(e)
+    
+		def profile_fn(fn, name):
+			try:
+				with torch.profiler.profile(
+					schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
+					on_trace_ready=torch.profiler.tensorboard_trace_handler(c.exp_path / name),
+					record_shapes=True,
+					profile_memory=True,
+					with_stack=True
+					) as prof:
+					
+					for step in range(100):
+						if step >= (1 + 1 + 3) * 2:
+							break
+						fn()
+						prof.step()  # Need to call this at the end of each step to notify profiler of steps' boundary.
+			except Exception as e:
+				print(e)
 
+		def ke_fn():
+			with torch.no_grad():
+				model_ke = lambda _r: model_v(params, _r).sum()
+				ke = compute_ke_b(model_ke, r)
+			return ke
+    
+		profile_fn(lambda: ke_fn(), 'kinetic')
+		profile_fn(lambda: model(r[0]), 'model')
+		profile_fn(lambda: model_compile(r[0]), 'model_compile')
+		profile_fn(lambda: model_fn(params, r[0]), 'model_functorch')
+		profile_fn(lambda: model_fn_compile(params, r[0]), 'model_functorch_compile')
 
+	profile()
+    
 	def train_step(model, r):
 
 			params = [p.detach() for p in model.parameters()]
@@ -96,7 +156,7 @@ def run(c: Pyfig):
 				
 				model_ke = lambda _r: model_v(params, _r).sum()
 
-				ke = compute_ke_b(model_ke, r)
+				ke = compute_ke_b(model_ke, r, ke_method=c.model.ke_method)
 				pe = compute_pe_b(r, c.data.a, c.data.a_z)
 				e = pe + ke
 				e_mean_dist = torch.mean(torch.abs(torch.median(e) - e))
@@ -104,10 +164,9 @@ def run(c: Pyfig):
 
 			opt.zero_grad()
 			loss = ((e_clip - e_clip.mean())*model_v(model.parameters(), r)).mean()
-			# torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.)
+			torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.)
 			loss.backward()
    
-			grads = [p.grad.detach() for p in model.parameters()]
 			# params = params.grad.data.add_(cfg.learning_rate * params.grad.data)
 			
 			# loss_fn = lambda _params: ((e_clip - e_clip.mean())*model_v(_params, r)).mean()
@@ -118,16 +177,18 @@ def run(c: Pyfig):
 
 			opt.step()
    
-			v_tr = dict(
-				ke=ke, pe=pe, e=e, loss=loss, params=params, grads=grads
-			)
+			grads = [p.grad.detach() for p in model.parameters()]
+
+			params = [p.detach() for p in model.parameters()]
+
+			v_tr = dict(ke=ke, pe=pe, e=e, loss=loss, params=params, grads=grads)
 			return v_tr
 
 	v_tr = dict(params=params, r=r, deltar=deltar)
 
 	wandb.define_metric("*", step_metric="tr/step")
 	for step in range(1, c.n_step+1):
-     
+	 
 		r, acc, deltar = sample_b(model_v, v_tr['params'], r, deltar, n_corr=c.data.n_corr)  # ❗needs testing 
 		r = keep_around_points(r, center_points, l=5.) if step < 50 else r
 
@@ -137,10 +198,13 @@ def run(c: Pyfig):
 			v_tr |= dict(acc=acc, r=r, deltar=deltar)
 			metrix = compute_metrix(v_tr.copy())  # ❗ needs converting to torch, ie tree maps
 			wandb.log({'tr/step':step, **metrix})
+			print_keys = ['e']
+			pprint.pprint(dict(step=step) | {k:v.mean() 
+                                    if isinstance(v, torch.Tensor) else v for k,v in v_tr.items() if k in print_keys})
 		
 		if not (step-1):
 			print('End Of 1')
-			
+
 	# for epoch in range(10):
 	#     epoch_loss = 0.0
 	#     for data, target in train_set:
@@ -154,10 +218,6 @@ def run(c: Pyfig):
 	#     print('Rank ', dist.get_rank(), ', epoch ',
 	#           epoch, ': ', epoch_loss / num_batches)
 
-
-
-
-
 if __name__ == "__main__":
 	
 	### pyfig ###
@@ -166,12 +226,12 @@ if __name__ == "__main__":
 		spin  = 0,
 		a = np.array([[0.0, 0.0, 0.0],]),
 		a_z  = np.array([4.,]),
-		n_b = 2, 
+		n_b = 256, 
 		n_sv = 32, 
 		n_pv = 16, 
-		n_corr = 40, 
-		n_step = 10000, 
-		log_metric_step = 5, 
+		n_corr = 50, 
+		n_step = 2000, 
+		log_metric_step = 10, 
 		exp_name = 'demo',
 		# sweep = {},
 	)

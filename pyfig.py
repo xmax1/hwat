@@ -87,8 +87,10 @@ class Pyfig:
         cpus_per_task   = 1     
         time            = '0-12:00:00'     # D-HH:MM:SS
         gres            = 'gpu:RTX3090:1'
-        output          = property(lambda _: _._p.exp_path /'o-%j.out')
-        error           = property(lambda _: _._p.exp_path /'e-%j.err')
+        output          = property(lambda _: _._p.exp_path /'slurm/o-%j.out')
+        error           = property(lambda _: _._p.exp_path /'slurm/e-%j.err')
+        # output = 'dump/tmp/o-%j.out'
+        # error = 'dump/tmp/e-%j.err'
         job_name        = property(lambda _: _._p.exp_name)  # this does not call the instance it is in
     
     dump:               str     = property(lambda _: Path('dump'))
@@ -97,7 +99,7 @@ class Pyfig:
     run_dir:            Path    = property(lambda _: Path(__file__).parent.relative_to(Path().home()))
     project_dir:        Path    = property(lambda _: Path().home() / 'projects' / _.project)
     server_project_dir: Path    = property(lambda _: _.project_dir.relative_to(Path().home()))
-    _exp_id:             str    = gen_alphanum(n=7)
+    exp_id:             str     = gen_alphanum(n=7)
         
     sweep_path_id:      str     = property(lambda _: (f'{_.wandb_c.entity}/{_.project}/{_.sweep_id}')*bool(_.sweep_id))
         
@@ -136,10 +138,10 @@ class Pyfig:
     
     _useful = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
     
-    def __init__(ii, arg={}, wb_mode='online', submit=False, run_sweep=False, notebook=False, debug=False, cap=3):
+    def __init__(ii, arg={}, wb_mode='online', submit=False, run_sweep=False, notebook=False, debug=False, cap=3, **kw):
         # wb_mode: online, disabled, offline 
         
-        init_arg = dict(run_sweep=run_sweep, submit=submit, debug=debug, wb_mode=wb_mode, cap=cap)
+        init_arg = dict(run_sweep=run_sweep, submit=submit, debug=debug, wb_mode=wb_mode, cap=cap) | kw
         
         print('init sub classes')
         for k,v in Pyfig.__dict__.items():
@@ -149,33 +151,42 @@ class Pyfig:
         
         print('updating configuration')
         sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d)) if not notebook else {}
+        pprint.pprint(sys_arg)
         ii.merge(arg | init_arg | sys_arg)
-        ii.log(ii.d, create=True, log_name='dump/post_var_init.log')
+        ii.log(ii.d, create=True, log_name='post_var_init.log')
+        ii.log(ii._run_cmd, create=True, log_name='run_cmd.log')
+        
+        if ii.exp_path == Path(''): 
+            if not ii.run_sweep:
+                ii.exp_path = iterate_n_dir(ii.dump/'exp'/ii.exp_name, True) / ii.exp_id
+            else:
+                ii.exp_path = iterate_n_dir(ii.dump/'exp'/ii.exp_name, True) / ii.sweep_id
+        mkdir(ii.exp_path / 'slurm')
+        print('exp_path:', ii.exp_path)
         
         if not ii.submit:
             print('running script')
-            if ii.exp_path == Path(''): 
-                print('setting exp_path')
-                ii.exp_path = iterate_n_dir(ii.dump/'exp'/ii.exp_name, True)
-            ii.exp_path /= ii._exp_id
             ii._run = wandb.init(
                     entity      = ii.wandb_c.entity,  # team name is hwat
                     project     = ii.project,         # sub project in team
-                    dir         = mkdir(ii.exp_path),
+                    dir         = ii.exp_path,
                     config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
                     mode        = wb_mode,
+                    id          = ii.exp_id,
                     settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
             )
                 
         else:
+            ii.submit = False
+            
             print('Server -> hostname', ii.server, ii.hostname)
-            if not re.match(ii.server, ii.hostname): # if on local, ssh to server and rerun
-                # sys.exit('submit')
-                print('Submitting to server \n')
-                run_cmds([ii._git_commit_cmd, 'git push origin main --force'], cwd=ii.project_dir)
-                run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)  
-                run_cmds_server(ii.server, ii.user, ii._run_single_cmd, ii.run_dir)                
-                sys.exit(f'Submitted to server \n')
+            # if not re.match(ii.server, ii.hostname): # if on local, ssh to server and rerun
+            #     # sys.exit('submit')
+            #     print('Submitting to server \n')
+            #     run_cmds([ii._git_commit_cmd, 'git push origin main --force'], cwd=ii.project_dir)
+            #     run_cmds_server(ii.server, ii.user, ii._git_pull_cmd, ii.server_project_dir)  
+            #     run_cmds_server(ii.server, ii.user, ii._run_single_cmd, ii.run_dir)                
+            #     sys.exit(f'Submitted to server \n')
                 ##############################################################################
 
             # run_cmds([ii._git_commit_cmd, 'git push origin main'], cwd=ii.project_dir)
@@ -191,16 +202,19 @@ class Pyfig:
                     project = ii.project,
                 )
                 
-            ii.exp_path = mkdir(iterate_n_dir(ii.dump/ii.exp_name, True) / ii.sweep_id)
-            
             n_sweep = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v] 
-            n_job = reduce(lambda a,b: a*b, n_sweep if ii.run_sweep else [1])
-            if ii._n_job_running < cap:
-                ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd)), \
-                    create=True, log_name='slurm_init.log')
+            n_job = reduce(lambda a,b: a*b, n_sweep if ii.run_sweep else [1,])
+            print(f'Running {n_job} on slurm')
+            # if ii._n_job_running < cap:
+            if 0 < cap:
+                ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd)), create=True, log_name='slurm_init.log')
                 for sub in range(1, n_job+1):
+                    print(ii.sbatch + '\n' + ii._run_cmd)
+                    d = cmd_to_dict(ii._run_cmd.lstrip('python run.py'), flat_any(ii.d))
+                    ii.exp_id = gen_alphanum(n=7)
+                    pprint.pprint(d)
                     Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
-            folder = f'runs/{ii._exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id}'
+            folder = f'runs/{ii.exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id}'
             sys.exit(f'https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{folder}')
 
     def _convert(ii, device, dtype):
@@ -218,9 +232,7 @@ class Pyfig:
         s = f"""\
         module purge
         source ~/.bashrc
-        module load GCC
-        module load CUDA/11.4.1
-        module load cuDNN/8.2.2.26-CUDA-11.4.1
+        module load CUDA/11.7.0
         conda activate {ii.env}"""
         return '\n'.join([' '.join(v.split()) for v in s.split('\n')])
     
@@ -271,7 +283,7 @@ class Pyfig:
         assert path.suffix == 'pk'
         data_save_load(path)
         
-    def log(ii, info: dict, create=False, log_name='dump/log.tmp'):
+    def log(ii, info: Union[dict,str], create=False, log_name='dump/log.tmp'):
         mkdir(ii.exp_path)
         mode = 'w' if create else 'a'
         info = pprint.pformat(info)

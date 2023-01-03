@@ -6,9 +6,17 @@ import torch.nn as nn
 from torch.jit import Final
 
 
+# def fb_block(s_v: torch.Tensor, p_v: torch.Tensor, n_u: int, n_d: int):
+# 	n_e = n_u + n_d
+# 	sfb_v = [torch.tile(_v.mean(dim=0)[None, :], (n_e, 1)) for _v in torch.split(s_v, (n_u, n_d), dim=0)]
+# 	pfb_v = [_v.mean(dim=0) for _v in torch.split(p_v, (n_u, n_d), dim=0)]
+# 	s_v = torch.cat( sfb_v + pfb_v + [s_v,], dim=-1) # s_v = torch.cat((s_v, sfb_v[0], sfb_v[1], pfb_v[0], pfb_v[0]), dim=-1)
+# 	return s_v
+
+
 def fb_block(s_v: torch.Tensor, p_v: torch.Tensor, n_u: int, n_d: int):
     n_e = n_u + n_d
-    sfb_v = [torch.tile(_v.mean(dim=1)[:, None, :], (n_e, 1)) for _v in torch.split(s_v, (n_u, n_d), dim=1)] # two element list of (n_batch, n_e, n_sv) tensor
+    sfb_v = [torch.tile(_v.mean(dim=1)[:, None, :], (1, n_e, 1)) for _v in torch.split(s_v, (n_u, n_d), dim=1)] # two element list of (n_batch, n_e, n_sv) tensor
     pfb_v = [_v.mean(dim=1) for _v in torch.split(p_v, (n_u, n_d), dim=1)] # two element list of (n_batch, n_e, n_pv) tensor
     s_v = torch.cat( sfb_v + pfb_v + [s_v,], dim=-1) # (n_batch, n_e, 3n_sv+2n_pv)
     return s_v
@@ -60,8 +68,9 @@ class Ansatz_fb(nn.Module):
     def forward(ii, r: torch.Tensor):
         dtype, device = r.dtype, r.device
 
-        if len(r.shape)==2:
+        if len(r.shape) == 2:
             r = r.reshape(-1, ii.n_e, 3) # (n_batch, n_e, 3)
+        
         n_batch = r.shape[0]
   
         eye = torch.eye(ii.n_e, device=device, dtype=dtype).unsqueeze(-1)
@@ -108,7 +117,9 @@ class Ansatz_fb(nn.Module):
         log_psi, sgn = logabssumdet(orb_u, orb_d)
 
         if ii.with_sign:
-            return log_psi, sgn
+            return s_v_block[..., 0], p_v[..., 0]
+            return s_u[..., 0], orb_u[..., 0]
+            return log_psi.squeeze(), sgn.squeeze()
         else:
             return log_psi.squeeze()
 
@@ -120,7 +131,6 @@ def logabssumdet(orb_u, orb_d):
     dtype, device = xs[0].dtype, xs[0].device
     ones = torch.ones((n_batch, n_det,)).to(dtype).to(device)
     zeros = torch.zeros((n_batch, n_det,)).to(dtype).to(device)
-    print(ones.requires_grad)
     dets = [x.reshape(n_batch, -1) if x.shape[-1] == 1 else ones for x in xs]   # (n_batch, n_det), (n_batch, n_det)
     dets = dets[0] * dets[1] # (n_batch, n_det)
 
