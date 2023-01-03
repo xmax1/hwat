@@ -88,11 +88,11 @@ def run(c: Pyfig):
 		print(fx_module)
 		return fx_module
 
-	model_fn = aot_function(model_fn, fw_compile, )
-	print(model_fn(params, r.requires_grad_()))
+	# model_fn = aot_function(model_fn, fw_compile, )
+	# print(model_fn(params, r.requires_grad_()))
 	# mdoe
 	model_v = vmap(model_fn, in_dims=(None, 0))
-	model = torch.compile(model)
+	# model = torch.compile(model)
 
 	def try_fn(fn):
 		try:
@@ -178,7 +178,6 @@ def run(c: Pyfig):
 			opt.step()
    
 			grads = [p.grad.detach() for p in model.parameters()]
-
 			params = [p.detach() for p in model.parameters()]
 
 			v_tr = dict(ke=ke, pe=pe, e=e, loss=loss, params=params, grads=grads)

@@ -111,6 +111,30 @@ Potential Crap:
 - # https://j-towns.github.io/2017/06/12/A-new-trick.html 
 """
 
+# def fd2(r_flat, step=0.00001):
+#     model_fd2 = lambda _r: model_fn(params, _r)
+#     model_fd2 = vmap(vmap(vmap(model_fd2)))
+#     r_flat = r_flat.unsqueeze(1)
+#     step_eye = (torch.eye(n_e*3, dtype=r_flat.dtype)*step).unsqueeze(0)
+#     r_flat0 = torch.stack([r_flat-step_eye, torch.tile(r_flat, (1, n_e*3, 1)), r_flat+step_eye], dim=0)
+#     print(r_flat0.shape)
+#     log_psi = model_fd2(r_flat0)
+#     factor = torch.tensor([+1, -2, +1]).unsqueeze(-1).unsqueeze(-1)
+#     print(factor.shape, log_psi.shape)
+#     return (factor * log_psi).sum(0) / step**2
+
+
+def compute_fd_g(fn, x, dx):
+    device = x.device
+    n_b, n_f = x.shape
+    step = torch.eye(n_f, dtype=r_flat.dtype, device=device).unsqueeze(0)*dx
+    # x_line = torch.stack([-(x[..., None] -step), x[..., None, :]+step])
+    # grad = x_line.sum(0) / (2*step)
+    out_neg = fn((x.unsqueeze(-1)-step).swapaxes(-1,-2).reshape(-1, n_f))
+    out_pos = fn((x.unsqueeze(-1)+step).swapaxes(-1,-2).reshape(-1, n_f))
+    grad = (out_pos-out_neg) / (2*dx)
+    return grad.reshape(n_b, n_f)
+    return torch.stack([x-step, x+step])
 
 def check(a, b, name=None):
 	if not torch.allclose(a, b):
@@ -205,13 +229,17 @@ if __name__ == "__main__":
 	# G, GG, difftorch, num
 	import difftorch
 	b = 1
+	fd_step = 0.000001
 	gg_diff = difftorch.laplacian(model_fn_partial, r_flat[b])
+	g_fd = compute_fd_g(model, r_flat, fd_step)
+ 
 	if not torch.allclose(gg_func_vjp[b].sum(), gg_diff):
 		print('diff / func: \n', gg_func_vjp[b].sum(), '\n', gg_diff)
 	if not torch.allclose(gg_func_jvp[b].sum(), gg_diff):
 		print('diff / func: \n', gg_func_jvp[b].sum(), '\n', gg_diff)
 
 	check(g, g_func_vjp, 'g')
+	check(g_fd, g_func_vjp, 'g')
 	check(gg, gg_func_vjp)
 	# print(g - g_func, gg - gg_func)
 	# print(ke - ke_func)
