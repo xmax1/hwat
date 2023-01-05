@@ -111,8 +111,6 @@ class Ansatz_fb(nn.Module):
         log_psi, sgn = logabssumdet(orb_u, orb_d)
 
         if ii.with_sign:
-            return s_v_block[..., 0], p_v[..., 0]
-            return s_u[..., 0], orb_u[..., 0]
             return log_psi.squeeze(), sgn.squeeze()
         else:
             return log_psi.squeeze()
@@ -262,7 +260,7 @@ def init_r(n_b, n_e, center_points: torch.Tensor, std=0.1):
     # return torch.stack(sub_r, dim=0) if len(sub_r)>1 else sub_r[0][None, ...]
 
 
-def sample_b(model, params, r_0, deltar_0, n_corr=10):
+def sample_b(model, r_0, deltar_0, n_corr=10):
     """ metropolis hastings sampling with automated step size adjustment """
     device, dtype = r_0.device, r_0.dtype
 
@@ -273,12 +271,11 @@ def sample_b(model, params, r_0, deltar_0, n_corr=10):
         
         for _ in torch.arange(n_corr):
 
-            p_0 = torch.exp(model(params, r_0))**2  			# ❗can make more efficient with where modelment at end
-            # print(deltar.shape, r_0.shape)
-
+            p_0 = torch.exp(model(r_0))**2  			# ❗can make more efficient with where modelment at end
+            print(deltar.shape, r_0.shape)
             r_1 = r_0 + torch.randn_like(r_0, device=device, dtype=dtype)*deltar
 
-            p_1 = torch.exp(model(params, r_1))**2
+            p_1 = torch.exp(model(r_1))**2
             # p_1 = torch.where(torch.isnan(p_1), 0., p_1)    # :❗ needed when there was a bug in pe, needed now?!
             p_mask = (p_1/p_0) > torch.rand_like(p_1, device=device, dtype=dtype)		# metropolis hastings
 

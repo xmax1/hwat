@@ -245,6 +245,10 @@ class Pyfig:
     def d(ii):
         return get_cls_dict(ii, sub_cls=True, prop=True, ignore=ii._ignore)
     
+    @property
+    def _deepspeed_c(ii):
+        return get_cls_dict(ii, sub_cls=True, prop=True, ignore=ii._ignore)
+    
     def partial(ii, f:Callable, d=None, get_d=False, print_d=False, **kw):
         d = flat_any(d if d else ii.d)
         d_k = inspect.signature(f.__init__).parameters.keys()
