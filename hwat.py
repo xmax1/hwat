@@ -219,12 +219,6 @@ def compute_ke_b(model_rv, r: torch.Tensor, ke_method='vjp', elements=False):
         g = torch.stack([x[:, i] for i, (x, _) in enumerate(jvp_all)], dim=-1)
         gg = torch.stack([x[:, i] for i, (_, x) in enumerate(jvp_all)], dim=-1)
         e_jvp = torch.stack([a[:, i]**2 + b[:, i] for i, (a,b) in enumerate(jvp_all)]).sum(0)
-        # e_jvp = torch.stack([a[:, i]**2 + b[:, i] for i, (a,b) in enumerate(jvp_all)]).sum(0)
- 
-    #  (primal[:, i]**2).squeeze() + (tangent[:, i]).squeeze()
-    # primal, tangent = jax.jvp(grad_fn, (r,), (eye[..., i],))  
-    # 	return val + (primal[:, i]**2).squeeze() + (tangent[:, i]).squeeze()
-    # return (- 0.5 * jax.lax.fori_loop(0, n_jvp, _body_fun, jnp.zeros(n_b,))).squeeze()
 
     if elements:
         return g, gg
