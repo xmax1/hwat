@@ -197,8 +197,26 @@ def compute_pe_b(r, a=None, a_z=None):
 	return (pe_rr - pe_ra + pe_aa).squeeze()  
 
 
-def compute_ke_b(wf: nn.Module, r: torch.Tensor, ke_method='jvp', elements=False):
+def compute_ke_b(model_rv, r: torch.Tensor, ke_method='vjp', elements=False):
 	dtype, device = r.dtype, r.device
+	
+	n_b, n_e, n_dim = r.shape
+	n_jvp = n_e * n_dim
+
+	r_flat = r.reshape(n_b, n_jvp)
+	eyes = torch.eye(n_jvp, dtype=dtype, device=device)[None].repeat((n_b, 1, 1))
+
+	if ke_method == 'vjp':
+		grad_fn = grad(model_rv)
+		g, fn = vjp(grad_fn, r_flat)
+		gg = torch.stack([fn(eyes[..., i])[0][:, i] for i in range(n_jvp)], dim=-1)
+		
+	if ke_method == 'jvp':
+		grad_fn = grad(model_rv)
+		jvp_all = [jvp(grad_fn, (r_flat,), (eyes[:, i],)) for i in range(n_jvp)]  # grad out, jvp
+		g = torch.stack([x[:, i] for i, (x, _) in enumerate(jvp_all)], dim=-1)
+		gg = torch.stack([x[:, i] for i, (_, x) in enumerate(jvp_all)], dim=-1)
+		e_jvp = torch.stack([a[:, i]**2 + b[:, i] for i, (a,b) in enumerate(jvp_all)]).sum(0)
 
 	n_b, n_e, n_dim = r.shape
 	n_jvp = n_e * n_dim
