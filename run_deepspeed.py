@@ -13,9 +13,8 @@ import wandb
 from utils import compute_metrix
 from hwat_b import init_r, get_center_points
 
-
-# 
-
+""" dist technque
+"""
 
 class ModelSample(nn.Module):
 	
