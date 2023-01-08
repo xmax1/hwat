@@ -197,26 +197,8 @@ def compute_pe_b(r, a=None, a_z=None):
 	return (pe_rr - pe_ra + pe_aa).squeeze()  
 
 
-def compute_ke_b(model_rv, r: torch.Tensor, ke_method='vjp', elements=False):
+def compute_ke_b(wf: nn.Module, r: torch.Tensor, ke_method='jvp', elements=False):
 	dtype, device = r.dtype, r.device
-	
-	n_b, n_e, n_dim = r.shape
-	n_jvp = n_e * n_dim
-
-	r_flat = r.reshape(n_b, n_jvp)
-	eyes = torch.eye(n_jvp, dtype=dtype, device=device)[None].repeat((n_b, 1, 1))
-
-	if ke_method == 'vjp':
-		grad_fn = grad(model_rv)
-		g, fn = vjp(grad_fn, r_flat)
-		gg = torch.stack([fn(eyes[..., i])[0][:, i] for i in range(n_jvp)], dim=-1)
-		
-	if ke_method == 'jvp':
-		grad_fn = grad(model_rv)
-		jvp_all = [jvp(grad_fn, (r_flat,), (eyes[:, i],)) for i in range(n_jvp)]  # grad out, jvp
-		g = torch.stack([x[:, i] for i, (x, _) in enumerate(jvp_all)], dim=-1)
-		gg = torch.stack([x[:, i] for i, (_, x) in enumerate(jvp_all)], dim=-1)
-		e_jvp = torch.stack([a[:, i]**2 + b[:, i] for i, (a,b) in enumerate(jvp_all)]).sum(0)
 
 	n_b, n_e, n_dim = r.shape
 	n_jvp = n_e * n_dim
@@ -287,7 +269,6 @@ def sample_b(model, r_0: torch.Tensor, deltar_0, n_corr=10):
 		for _ in torch.arange(n_corr):
 
 			p_0 = torch.exp(model(r_0))**2  			# ❗can make more efficient with where modelment at end
-			print(deltar.shape, r_0.shape)
 			r_1 = r_0 + torch.randn_like(r_0, device=device, dtype=dtype)*deltar
 
 			p_1 = torch.exp(model(r_1))**2
@@ -302,43 +283,3 @@ def sample_b(model, r_0: torch.Tensor, deltar_0, n_corr=10):
 	deltar = mask*deltar_0 + ~mask*deltar_1
 	
 	return r_0, (acc[0]+acc[1])/2., deltar
-
-### Test Suite ###
-
-# def check_antisym(c, r):
-# 	n_u, n_d, = c.data.n_u, c.data.n_d
-# 	r = r[:, :4]
-	
-# 	@partial(jax.vmap, in_axes=(0, None, None))
-# 	def swap_rows(r, i_0, i_1):
-# 		return r.at[[i_0,i_1], :].set(r[[i_1,i_0], :])
-
-# 	@partial(jax.pmap, axis_name='dev', in_axes=(0,0))
-# 	def _create_train_model(r):
-# 		model = c.partial(FermiNet, with_sign=True)  
-# 		params = model.init(r)['params']
-# 		return TrainState.create(apply_fn=model.apply, params=params, tx=c.opt.tx)
-	
-# 	model = _create_train_model(r)
-
-# 	@partial(jax.pmap, in_axes=(0, 0))
-# 	def _check_antisym(model, r):
-# 		log_psi_0, sgn_0 = model.apply_fn(model.params, r)
-# 		r_swap_u = swap_rows(r, 0, 1)
-# 		log_psi_u, sgn_u = model.apply_fn(model.params, r_swap_u)
-# 		log_psi_d = torch.zeros_like(log_psi_0)
-# 		sgn_d = torch.zeros_like(sgn_0)
-# 		if not n_d == 0:
-# 			r_swap_d = swap_rows(r, n_u, n_u+1)
-# 			log_psi_d, sgn_d = model.apply_fn(model.params, r_swap_d)
-# 		return (log_psi_0, log_psi_u, log_psi_d), (sgn_0, sgn_u, sgn_d), (r, r_swap_u, r_swap_d)
-
-# 	res = _check_antisym(model, r)
-
-# 	(log_psi, log_psi_u, log_psi_d), (sgn, sgn_u, sgn_d), (r, r_swap_u, r_swap_d) = res
-# 	for ei, ej, ek in zip(r[0,0], r_swap_u[0,0], r_swap_d[0,0]):
-# 		print(ei, ej, ek)  # Swap Correct
-# 	for lpi, lpj, lpk in zip(log_psi[0], log_psi_u[0], log_psi_d[0]):
-# 		print(lpi, lpj, lpk)  # Swap Correct
-# 	for lpi, lpj, lpk in zip(sgn[0], sgn_u[0], sgn_d[0]):
-# 		print(lpi, lpj, lpk)  # Swap Correct

@@ -11,6 +11,7 @@ from copy import copy
 import numpy as np
 import re
 from time import sleep
+import optree
 
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum
 from utils import mkdir, cmd_to_dict, dict_to_wandb, iterate_n_dir
@@ -21,27 +22,12 @@ from dump.user import user
 
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 
-import socket
-from contextlib import closing
-
-# slurm runner for multinode backend
-# bash script for hostfile gen https://bytemeta.vip/repo/microsoft/DeepSpeed/issues/2025
-# hoatfile needed for multinode
-# csc.fi deepspeed doc https://docs.csc.fi/support/tutorials/ml-multi/
-
-def find_free_port():
-    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-        s.bind(('', 0))
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return s.getsockname()[1]
-    
 class Pyfig:
     # SUB CLASSES CANNOT CALL EACH OTHER
 
     run_name:       Path        = 'run.py'
     sweep_id:       str         = ''
-    n_gpu:          int         = 1
-    
+
     seed:           int         = 808017424 # grr
     dtype:          str         = 'float32'
     n_step:         int         = 10000
@@ -89,31 +75,47 @@ class Pyfig:
         ) 
         
     class wandb_c(Sub):
-        job_type        = 'debug'
+        job_type        = 'training'
         entity          = property(lambda _: _._p.project)
         name            = property(lambda _: _._p.exp_name)
         program         = property(lambda _: _._p.run_dir/_._p.run_name)
         
-    class ds_c(Sub):
-        path:      str  = 'ds_c.json'
-        run_ds:    bool = True
-        num_nodes: int  = 1
-        num_gpus:  int  = 1
-        
+
+# When using --cpus-per-task to run multithreaded tasks, be aware that CPU binding is inherited from the parent of the process. This means that the multithreaded task should either specify or clear the CPU binding itself to avoid having all threads of the multithreaded task use the same mask/CPU as the parent. Alternatively, fat masks (masks which specify more than one allowed CPU) could be used for the tasks in order to provide multiple CPUs for the multithreaded tasks.
     class slurm(Sub):
+        # A job consists in one or more steps, each consisting in one or more tasks each using one or more CPU.
         mail_type       = 'FAIL'
         partition       ='sm3090'
-        nodes           = 1                # n_node
-        ntasks          = 8                # n_cpu
-        cpus_per_task   = 1     
-        time            = '0-12:00:00'     # D-HH:MM:SS
-        gres            = property(lambda _: f'gpu:RTX3090:{_._p.n_gpu}')
+        nodes           = '1-1' # (MIN-MAX) 
+        cpus_per_task   = 4
+        mem_per_cpu     = 1024
+        ntasks          = property(lambda _: _._p.n_gpu)
+        time            = '0-01:00:00'     # D-HH:MM:SS
+        partition       = 'sm3090'
+        gres            = property(lambda _: 'gpu:RTX3090:' + str(_._p.n_gpu))
         output          = property(lambda _: _._p.exp_path /'slurm/o-%j.out')
         error           = property(lambda _: _._p.exp_path /'slurm/e-%j.err')
-        # output = 'dump/tmp/o-%j.out'
-        # error = 'dump/tmp/e-%j.err'
-        job_name        = property(lambda _: _._p.exp_name)  # this does not call the instance it is in
-    
+        job_name        = property(lambda _: _._p.exp_name)
+        
+    #SBATCH --cpus-per-task       4
+    #SBATCH --mem-per-cpu         1024
+    #SBATCH --error               dump/exp/demo-12/Wvyonoa/slurm/e-%j.err
+    #SBATCH --gres                gpu:RTX3090:2
+    #SBATCH --job-name            demo
+    #SBATCH --mail-type           FAIL
+    #SBATCH --nodes               1-1
+    #SBATCH --ntasks              2
+    #SBATCH --output              dump/exp/demo-12/Wvyonoa/slurm/o-%j.out
+    #SBATCH --partition           sm3090
+    #SBATCH --time                0-01:00:00
+        
+    class dist(Sub):
+        exchange_dir        = property(lambda _: mkdir(_._p.exp_path / 'exchange'))
+        accumulate_step     = 5
+        dist_id: str        = property(lambda _: f'{_._p.hostname}-{_.gpu_id}')
+        head: bool          = True
+        gpu_id: str      = property(lambda _: ''.join(run_cmds('nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader')))
+
     dump:               str     = property(lambda _: Path('dump'))
     TMP:                Path    = mkdir(Path('./dump/tmp'))
     project:            str     = property(lambda _: 'hwat')
@@ -139,45 +141,35 @@ class Pyfig:
     
     exp_path:           Path     = Path('')
     exp_name:           str      = 'junk'
+    n_gpu:              int      = 1  # submission devices
+    head:               bool     = False
     
-    commit_id           = property(lambda _: 
-        run_cmds('git log --pretty=format:%h -n 1', cwd=_.project_dir)
-    )
+    commit_id           = property(lambda _: run_cmds('git log --pretty=format:%h -n 1', cwd=_.project_dir))
     hostname: str       = property(lambda _: run_cmds('hostname'))
-    exe_mode:               str      = property(lambda _: 
-        ('deepspeed'*_.ds_c.run_ds + f'sweep'*_.run_sweep + 'python'*(~_.run_sweep and ~_.ds_c.run_ds))
-    )
-    _n_job_running: int  = property(lambda _: 
-        len(run_cmds('squeue -u amawi -t pending,running -h -r', cwd='.'))
-    )
+    _n_job_running: int = property(lambda _: len(run_cmds('squeue -u amawi -t pending,running -h -r', cwd='.')))
+    
     _not_in_sweep = property(lambda _: \
         get_cls_dict(_, sub_cls=True, ignore=['sweep',]+list(_.sweep.parameters.keys()), to_cmd=True, flat=True)
     )
     
-    # _free_port = property(lambda _: [int(x.split(':')[-1]) for x in run_cmds('netstat -tunlep | grep LISTEN | awk "{print $4}"')][0])
-    # _free_port = property(lambda _: find_free_port())
-    # range of anonymous ports 32768 - 65535
-    
-    _free_port = property(lambda _: np.random.randint(32768, 65535))
-    _run_cmd = property(
-        lambda _: 
-            dict(
-            deepspeed=f'deepspeed --master_port {_._free_port} \
-                        --include localhost:{",".join([str(i) for i in range(_.n_gpu)])} \
-                        {_.run_name} --deepspeed --deepspeed_config ds_c.json {_.cmd}',
-            sweep=f'wandb agent {_.sweep_path_id}',
-            python=f'python {_.run_name} {_.cmd}')[_.exe_mode]
-    )
+    exe_mode: str = property(lambda _: f'sweep'*_.run_sweep + 'python'*(not _.run_sweep))
+    distribute = property(lambda _: bool(_.n_gpu - 1))
+    device_type: str = 'cuda'  # rocm
+       
+    _pci_id:            str      = property(lambda _: ''.join(run_cmds('nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader')))
     _git_commit_cmd:    list     = 'git commit -a -m "run"' # !NB no spaces in msg 
     _git_pull_cmd:      list     = ['git fetch --all', 'git reset --hard origin/main']
     _sys_arg:           list     = sys.argv[1:]
-    _ignore:            list     = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge', 'set_path', '_get_cls_dict']
+    _ignore:            list     = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge', 'accumulate']
     _wandb_ignore:      list     = ['sbatch', 'sweep']
+    
     _useful = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
     
     def __init__(ii, arg={}, wb_mode='online', submit=False, run_sweep=False, notebook=False, debug=False, cap=3, **kw):
         # wb_mode: online, disabled, offline 
-    
+        print('exe_mode: ', ii.exe_mode)
+        print(run_cmds('nvidia-smi --list-gpus'))
+        
         init_arg = dict(run_sweep=run_sweep, submit=submit, debug=debug, wb_mode=wb_mode, cap=cap) | kw
         
         print('init sub classes')
@@ -191,7 +183,7 @@ class Pyfig:
         pprint.pprint(sys_arg)
         ii.merge(arg | init_arg | sys_arg)
         ii.log(ii.d, create=True, log_name='post_var_init.log')
-        ii.log(ii._run_cmd, create=True, log_name='run_cmd.log')
+        ii.log(ii.sbatch, create=True, log_name='run_cmd.log')
         
         if ii.exp_path == Path(''): 
             if not ii.run_sweep:
@@ -203,15 +195,16 @@ class Pyfig:
         
         if not ii.submit:
             print('running script')
-            ii._run = wandb.init(
-                    entity      = ii.wandb_c.entity,  # team name is hwat
-                    project     = ii.project,         # sub project in team
-                    dir         = ii.exp_path,
-                    config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
-                    mode        = wb_mode,
-                    id          = ii.exp_id,
-                    settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
-            )
+            if ii.head:
+                ii._run = wandb.init(
+                        entity      = ii.wandb_c.entity,  # team name is hwat
+                        project     = ii.project,         # sub project in team
+                        dir         = ii.exp_path,
+                        config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
+                        mode        = wb_mode,
+                        id          = ii.exp_id,
+                        settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+                )
                 
         else:
             ii.submit = False
@@ -242,13 +235,11 @@ class Pyfig:
             n_sweep = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v] 
             n_job = reduce(lambda a,b: a*b, n_sweep if ii.run_sweep else [1,])
             print(f'Running {n_job} on slurm')
-            # if ii._n_job_running < cap:
             if 0 < cap:
-                ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd)), create=True, log_name='slurm_init.log')
+                ii.log(dict(slurm_init=dict(sbatch=ii.sbatch)), create=True, log_name='slurm_init.log')
                 for sub in range(1, n_job+1):
                     ii.exp_id = gen_alphanum(n=7)
-                    print(ii._run_cmd)
-                    Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
+                    Slurm(**ii.slurm.d).sbatch(ii.sbatch)
             folder = f'runs/{ii.exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id}'
             sys.exit(f'https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{folder}')
 
@@ -261,36 +252,94 @@ class Pyfig:
 
     def _outline(ii):
         print(ii.project_dir)
-        
+
     @property
     def sbatch(ii,):
-        s = f"""\
-        module purge
-        source ~/.bashrc
-        module load GCC
-        module load OpenMPI
-        module load CUDA/11.7.0
-        conda activate {ii.env}"""
-        return '\n'.join([' '.join(v.split()) for v in s.split('\n')])
-    
+        s = [f"""\
+module purge
+source ~/.bashrc
+module load foss
+module load CUDA/11.7.0
+conda activate {ii.env}
+
+echo $SLURM_JOB_GPUS
+echo break
+echo $SLURM_JOB_NODELIST
+NODEFILE=$(scontrol show hostnames | tr '[:space:]' ',')
+echo $NODEFILE
+
+set | grep SLURM | while read line; do echo "# $line"; done
+
+nvidia-smi
+
+srun --gpus=1 --cpus-per-task=4 --mem-per-cpu=1024 --ntasks=1 --exclusive --label hostname &
+srun --gpus=1 --cpus-per-task=4 --mem-per-cpu=1024 --ntasks=1 --exclusive --label hostname &
+wait
+"""
+]
+        # https://uwaterloo.ca/math-faculty-computing-facility/services/service-catalogue-teaching-linux/job-submit-commands-examples
+        
+
+# export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+# module purge
+# source ~/.bashrc
+# module load foss
+# module load CUDA/11.7.0
+# # export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+# conda activate lumi
+# # 192GB 
+
+# # srun  python run.py --run_name run.py --seed 808017424 --dtype float32 --n_step 2000 --log_metric_step 10 --log_state_step 10 --charge 0 --spin 0 --a [[0.0,0.0,0.0]] --a_z [4.0] --n_b 256 --n_corr 50 --n_equil 10000 --acc_target 0.5 --with_sign False --n_sv 32 --n_pv 16 --n_fb 2 --n_det 1 --terms_s_emb ['ra','ra_len'] --terms_p_emb ['rr','rr_len'] --ke_method vjp --job_type training --mail_type FAIL --partition sm3090 --nodes 1-1 --cpus_per_task 8 --time 0-01:00:00 --TMP dump/tmp --exp_id Wvyonoa --run_sweep False --user amawi --server svol.fysik.dtu.dk --git_remote origin --git_branch main --env lumi --debug False --wb_mode online --submit False --cap 3 --exp_path dump/exp/demo-12/Wvyonoa --exp_name demo --n_gpu 2 --device_type cuda --head True & 
+# # srun --gres=gpu:RTX3090:1 --ntasks=1 --label --exact python run.py --run_name run.py --seed 808017424 --dtype float32 --n_step 2000 --log_metric_step 10 --log_state_step 10 --charge 0 --spin 0 --a [[0.0,0.0,0.0]] --a_z [4.0] --n_b 256 --n_corr 50 --n_equil 10000 --acc_target 0.5 --with_sign False --n_sv 32 --n_pv 16 --n_fb 2 --n_det 1 --terms_s_emb ['ra','ra_len'] --terms_p_emb ['rr','rr_len'] --ke_method vjp --job_type training --mail_type FAIL --partition sm3090 --nodes 1-1 --cpus_per_task 8 --time 0-01:00:00 --TMP dump/tmp --exp_id Wvyonoa --run_sweep False --user amawi --server svol.fysik.dtu.dk --git_remote origin --git_branch main --env lumi --debug False --wb_mode online --submit False --cap 3 --exp_path dump/exp/demo-12/Wvyonoa --exp_name demo --n_gpu 2 --device_type cuda --head False & 
+# # wait 
+        
+#         module load foss
+# export MKL_NUM_THREADS=1
+# export NUMEXPR_NUM_THREADS=1
+# export OMP_NUM_THREADS=1
+# export OPENBLAS_NUM_THREADS=1
+
+        
+
+        # submit_cmd = dict(
+        #     cuda=f'CUDA_VISIBLE_DEVICES=""',
+        #     rocm=f''
+        # )[ii.device_type]
+
+        submit_cmd = dict(
+            sweep=f'wandb agent {ii.sweep_path_id}',
+            python=f'python {ii.run_name} {ii.cmd}'
+        )[ii.exe_mode]
+        if ii.distribute:
+            # https://groups.google.com/g/slurm-users/c/VpdG0IFZ4n4
+            for i in range(ii.n_gpu):
+                
+                ii.seed = np.random.randint(1, 10000000000)
+                
+                submit_cmd = dict(
+                    sweep=f'wandb agent {ii.sweep_path_id}',
+                    python=f'python {ii.run_name} {ii.cmd}'
+                )[ii.exe_mode]
+        
+                device_log_path = ii.exp_path/'slurm'/(str(i)+"_device.log")
+                head = [True, False][min(i, 1)]
+                
+                s += [f'srun --gpus=1 --cpus-per-task=4 --mem-per-cpu=1024 --ntasks=1 --exclusive --label \
+                      {submit_cmd} --head {head} > {device_log_path} 2>&1 & \n' ]
+            s += ['wait \n']
+        else:
+            s += [submit_cmd + ' --head True']
+        
+        return '\n'.join(s)
+
     @property
     def cmd(ii):
-        cmd_d = dict(sorted(
-            get_cls_dict(ii, sub_cls=True, ignore=ii._ignore + ['sweep',], to_cmd=True, flat=True).items()
-        ))
+        cmd_d = get_cls_dict(ii, sub_cls=True, ignore=ii._ignore + ['sweep', 'head'], to_cmd=True, flat=True)
         return ' '.join([f'--{k} {v}' for k,v in cmd_d.items() if v])
         
     @property
     def d(ii):
         return get_cls_dict(ii, sub_cls=True, prop=True, ignore=ii._ignore)
-    
-    @property
-    def _deepspeed_c(ii):
-        return get_cls_dict(ii, sub_cls=True, prop=True, ignore=ii._ignore)
-                        
-    @property
-    def _sub_cls(ii) -> dict:
-        return {k:v for k,v in ii.__dict__.items() if isinstance(v, Sub)}
     
     def partial(ii, f:Callable, d=None, get_d=False, print_d=False, **kw):
         d = flat_any(d if d else ii.d)
@@ -316,6 +365,61 @@ class Pyfig:
                         print(f'Unmerged {k} at setattr')
             if not assigned:
                 print(k, v, 'not assigned')
+                
+    
+    def accumulate(ii, step: int, v_tr:dict):
+        
+        v_path_fn = lambda k, step, dist_id: ii.dist.exchange_dir / f'{k}_{step}_{dist_id}'
+        
+        for k,v in v_tr.items():
+            np.save(v_path_fn(k, step, ii.dist.dist_id), v)
+
+        if ii.head:
+            for k,v in v_tr.items():
+                # v_path_all = [v_path_fn(k, step, dist_id) for dist_id in ii.dist.dist_id_all]
+                
+                while not len(ii.dist.exchange_dir.glob(f'{k}_')) == ii.n_gpu:
+                    sleep(0.01)
+
+                v_path_all = ii.dist.exchange_dir.glob(f'{k}_')
+                tree_flat_all = None
+                for p in v_path_all:
+                    tree = np.load(p)
+                    
+                    tree_flat, tree_spec = optree.tree_flatten(tree)
+                    if tree_flat_all is None:
+                        tree_flat_all = [v[None] for v in tree_flat]
+                    else:
+                        tree_flat_all = [np.concatenate([v_all, v[None]], axis=0) for v_all, v in zip(tree_flat_all, tree_flat)]
+               
+                [p.unlink() for p in v_path_all]
+                
+                tree_flat_mean = [v.mean(0) for v in tree_flat_all]
+                tree_mean = optree.tree_unflatten(tree_spec, tree_flat_mean)
+                
+                [np.save(p/'-mean', tree_mean) for p in v_path_all]
+        
+        
+        for k,v in v_tr.items():
+            
+            if not k in ii.dist.sync if ii.dist.sync else True:
+                _ = v_tr.pop(k)
+                continue
+            
+            v_path = v_path_fn(k, step, ii.dist.dist_id) / '.npy'
+
+            while not v_path.exists():
+                sleep(0.01)
+                
+            v = np.load(p)
+            v_tr[k] = v
+            p.unlink()
+            
+        return v_tr
+    
+    @property
+    def _sub_cls(ii) -> dict:
+        return {k:v for k,v in ii.__dict__.items() if isinstance(v, Sub)}
     
     def save(ii, data, file_name):
         path:Path = ii.exp_path / file_name
@@ -386,7 +490,36 @@ def get_cls_dict(
 
 
 
+# def accumulate(ii, step: int, v_tr:dict):
+        
+#         v_path_fn = lambda k, step, dist_id: ii.dist.exchange_dir / f'{k}_{step}_{dist_id}'
+        
+#         for k,v in v_tr.items():
+#             np.save(v_path_fn(k, step, ii.dist.dist_id), v)
 
+#         if ii.head:
+#             for k,v in v_tr.items():
+#                 v_path_all = [v_path_fn(k, step, dist_id) for dist_id in ii.dist.dist_id_all]
+                
+#                 while not all([p.with_suffix('.npy') for p in v_path_all]):
+#                     sleep(0.01)
+
+#                 tree_flat_all = None
+#                 for p in v_path_all:
+#                     tree = np.load(p)
+                    
+#                     tree_flat, tree_spec = optree.tree_flatten(tree)
+#                     if tree_flat_all is None:
+#                         tree_flat_all = [v[None] for v in tree_flat]
+#                     else:
+#                         tree_flat_all = [np.concatenate([v_all, v[None]], axis=0) for v_all, v in zip(tree_flat_all, tree_flat)]
+               
+#                 [p.unlink() for p in v_path_all]
+                
+#                 tree_flat_mean = [v.mean(0) for v in tree_flat_all]
+#                 tree_mean = optree.tree_unflatten(tree_spec, tree_flat_mean)
+                
+#                 [np.save(p/'-mean', tree_mean) for p in v_path_all]
 # Data Interface
 
 import pickle as pk

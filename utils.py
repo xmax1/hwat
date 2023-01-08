@@ -206,14 +206,13 @@ def cmd_to_dict(cmd:Union[str, list], ref:dict, delim:str=' --', d=None):
     """
     fmt: [--flag, arg, --true_flag, --flag, arg1]
     # all flags double dash because of negative numbers duh """
-    print(sys.argv[0])    
-    print('cmd', cmd)
-    cmd = ' ' + (' '.join(cmd) if isinstance(cmd, list) else cmd)  # add initial space in case single flag
-    cmd = '--' + '--'.join(cmd.split('--')[1:])
-    print(cmd)
-    cmd = [x.strip().lstrip('--') for x in cmd.split(delim)]
     
-    cmd = [x.split('=', maxsplit=1) if '=' in x else x.split(' ', maxsplit=1) for x in cmd]
+    cmd = ' ' + (' '.join(cmd) if isinstance(cmd, list) else cmd)  # add initial space in case single flag
+    cmd = [x.strip() for x in cmd.split(delim)][1:]
+    cmd = [[sub.strip() for sub in x.split('=', maxsplit=1)] 
+           if '=' in x else 
+           [sub.strip() for sub in x.split(' ', maxsplit=1)] 
+           for x in cmd]
     [x.append('True') for x in cmd if len(x)==1]
     
     d = dict()
@@ -232,10 +231,14 @@ def cmd_to_dict(cmd:Union[str, list], ref:dict, delim:str=' --', d=None):
 
 def run_cmds(cmd:Union[str, list], cwd:Union[str, Path]='.', _res=[]):
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
-        cmd_1 = [c.strip() for c in cmd_1.split(' ')]
-        print(f'Run: {cmd_1} at {cwd}')
-        _res = subprocess.run(cmd_1, cwd=str(cwd), capture_output=True, text=True)
-        print('stdout:', _res.stdout.replace("\n", " "), 'stderr:', _res.stderr.replace("\n", ";"))
+        try:
+            cmd_1 = [c.strip() for c in cmd_1.split(' ')]
+            print(f'Run: {cmd_1} at {cwd}')
+            _res = subprocess.run(cmd_1, cwd=str(cwd), capture_output=True, text=True)
+            print('stdout:', _res.stdout.replace("\n", " "), 'stderr:', _res.stderr.replace("\n", ";"))
+        except Exception as e:
+            print(cmd_1, e)
+            return 'Fail'
     return _res.stdout.split('\n')
 
 def run_cmds_server(server:str, user:str, cmd:Union[str, list], cwd=Union[str, Path], _res=[]):
