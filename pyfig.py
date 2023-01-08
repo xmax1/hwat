@@ -21,12 +21,27 @@ from dump.user import user
 
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 
+import socket
+from contextlib import closing
+
+# slurm runner for multinode backend
+# bash script for hostfile gen https://bytemeta.vip/repo/microsoft/DeepSpeed/issues/2025
+# hoatfile needed for multinode
+# csc.fi deepspeed doc https://docs.csc.fi/support/tutorials/ml-multi/
+
+def find_free_port():
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+        s.bind(('', 0))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return s.getsockname()[1]
+    
 class Pyfig:
     # SUB CLASSES CANNOT CALL EACH OTHER
 
     run_name:       Path        = 'run.py'
     sweep_id:       str         = ''
-
+    n_gpu:          int         = 1
+    
     seed:           int         = 808017424 # grr
     dtype:          str         = 'float32'
     n_step:         int         = 10000
@@ -74,10 +89,16 @@ class Pyfig:
         ) 
         
     class wandb_c(Sub):
-        job_type        = 'training'
+        job_type        = 'debug'
         entity          = property(lambda _: _._p.project)
         name            = property(lambda _: _._p.exp_name)
         program         = property(lambda _: _._p.run_dir/_._p.run_name)
+        
+    class ds_c(Sub):
+        path:      str  = 'ds_c.json'
+        run_ds:    bool = True
+        num_nodes: int  = 1
+        num_gpus:  int  = 1
         
     class slurm(Sub):
         mail_type       = 'FAIL'
@@ -86,7 +107,7 @@ class Pyfig:
         ntasks          = 8                # n_cpu
         cpus_per_task   = 1     
         time            = '0-12:00:00'     # D-HH:MM:SS
-        gres            = 'gpu:RTX3090:1'
+        gres            = property(lambda _: f'gpu:RTX3090:{_._p.n_gpu}')
         output          = property(lambda _: _._p.exp_path /'slurm/o-%j.out')
         error           = property(lambda _: _._p.exp_path /'slurm/e-%j.err')
         # output = 'dump/tmp/o-%j.out'
@@ -119,28 +140,44 @@ class Pyfig:
     exp_path:           Path     = Path('')
     exp_name:           str      = 'junk'
     
-    commit_id           = property(lambda _: run_cmds('git log --pretty=format:%h -n 1', cwd=_.project_dir))
+    commit_id           = property(lambda _: 
+        run_cmds('git log --pretty=format:%h -n 1', cwd=_.project_dir)
+    )
     hostname: str       = property(lambda _: run_cmds('hostname'))
-    _n_job_running: int  = property(lambda _: len(run_cmds('squeue -u amawi -t pending,running -h -r', cwd='.')))
-    
+    exe_mode:               str      = property(lambda _: 
+        ('deepspeed'*_.ds_c.run_ds + f'sweep'*_.run_sweep + 'python'*(~_.run_sweep and ~_.ds_c.run_ds))
+    )
+    _n_job_running: int  = property(lambda _: 
+        len(run_cmds('squeue -u amawi -t pending,running -h -r', cwd='.'))
+    )
     _not_in_sweep = property(lambda _: \
-        get_cls_dict(_, sub_cls=True, ignore=['sweep',]+list(_.sweep.parameters.keys()), to_cmd=True, flat=True))
+        get_cls_dict(_, sub_cls=True, ignore=['sweep',]+list(_.sweep.parameters.keys()), to_cmd=True, flat=True)
+    )
     
-    _run_single_cmd:    str      = property(lambda _: f'python {str(_.run_name)} {_.cmd}')
-    _run_sweep_cmd:     str      = property(lambda _: f'wandb agent {_.sweep_path_id}')
-    _run_cmd:           str      = property(lambda _: _._run_sweep_cmd*_.run_sweep or _._run_single_cmd)
-     
+    # _free_port = property(lambda _: [int(x.split(':')[-1]) for x in run_cmds('netstat -tunlep | grep LISTEN | awk "{print $4}"')][0])
+    # _free_port = property(lambda _: find_free_port())
+    # range of anonymous ports 32768 - 65535
+    
+    _free_port = property(lambda _: np.random.randint(32768, 65535))
+    _run_cmd = property(
+        lambda _: 
+            dict(
+            deepspeed=f'deepspeed --master_port {_._free_port} \
+                        --include localhost:{",".join([str(i) for i in range(_.n_gpu)])} \
+                        {_.run_name} --deepspeed --deepspeed_config ds_c.json {_.cmd}',
+            sweep=f'wandb agent {_.sweep_path_id}',
+            python=f'python {_.run_name} {_.cmd}')[_.exe_mode]
+    )
     _git_commit_cmd:    list     = 'git commit -a -m "run"' # !NB no spaces in msg 
     _git_pull_cmd:      list     = ['git fetch --all', 'git reset --hard origin/main']
     _sys_arg:           list     = sys.argv[1:]
     _ignore:            list     = ['d', 'cmd', 'partial', 'save', 'load', 'log', 'merge', 'set_path', '_get_cls_dict']
     _wandb_ignore:      list     = ['sbatch', 'sweep']
-    
     _useful = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
     
     def __init__(ii, arg={}, wb_mode='online', submit=False, run_sweep=False, notebook=False, debug=False, cap=3, **kw):
         # wb_mode: online, disabled, offline 
-        
+    
         init_arg = dict(run_sweep=run_sweep, submit=submit, debug=debug, wb_mode=wb_mode, cap=cap) | kw
         
         print('init sub classes')
@@ -209,10 +246,8 @@ class Pyfig:
             if 0 < cap:
                 ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd)), create=True, log_name='slurm_init.log')
                 for sub in range(1, n_job+1):
-                    print(ii.sbatch + '\n' + ii._run_cmd)
-                    d = cmd_to_dict(ii._run_cmd.lstrip('python run.py'), flat_any(ii.d))
                     ii.exp_id = gen_alphanum(n=7)
-                    pprint.pprint(d)
+                    print(ii._run_cmd)
                     Slurm(**ii.slurm.d).sbatch(ii.sbatch + '\n' + ii._run_cmd)
             folder = f'runs/{ii.exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id}'
             sys.exit(f'https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{folder}')
@@ -232,13 +267,17 @@ class Pyfig:
         s = f"""\
         module purge
         source ~/.bashrc
+        module load GCC
+        module load OpenMPI
         module load CUDA/11.7.0
         conda activate {ii.env}"""
         return '\n'.join([' '.join(v.split()) for v in s.split('\n')])
     
     @property
     def cmd(ii):
-        cmd_d = get_cls_dict(ii, sub_cls=True, ignore=ii._ignore + ['sweep',], to_cmd=True, flat=True)
+        cmd_d = dict(sorted(
+            get_cls_dict(ii, sub_cls=True, ignore=ii._ignore + ['sweep',], to_cmd=True, flat=True).items()
+        ))
         return ' '.join([f'--{k} {v}' for k,v in cmd_d.items() if v])
         
     @property
@@ -248,6 +287,10 @@ class Pyfig:
     @property
     def _deepspeed_c(ii):
         return get_cls_dict(ii, sub_cls=True, prop=True, ignore=ii._ignore)
+                        
+    @property
+    def _sub_cls(ii) -> dict:
+        return {k:v for k,v in ii.__dict__.items() if isinstance(v, Sub)}
     
     def partial(ii, f:Callable, d=None, get_d=False, print_d=False, **kw):
         d = flat_any(d if d else ii.d)
@@ -273,10 +316,6 @@ class Pyfig:
                         print(f'Unmerged {k} at setattr')
             if not assigned:
                 print(k, v, 'not assigned')
-                        
-    @property
-    def _sub_cls(ii) -> dict:
-        return {k:v for k,v in ii.__dict__.items() if isinstance(v, Sub)}
     
     def save(ii, data, file_name):
         path:Path = ii.exp_path / file_name

@@ -206,8 +206,13 @@ def cmd_to_dict(cmd:Union[str, list], ref:dict, delim:str=' --', d=None):
     """
     fmt: [--flag, arg, --true_flag, --flag, arg1]
     # all flags double dash because of negative numbers duh """
+    print(sys.argv[0])    
+    print('cmd', cmd)
     cmd = ' ' + (' '.join(cmd) if isinstance(cmd, list) else cmd)  # add initial space in case single flag
-    cmd = [x.strip().lstrip('--') for x in cmd.split(delim)][1:]
+    cmd = '--' + '--'.join(cmd.split('--')[1:])
+    print(cmd)
+    cmd = [x.strip().lstrip('--') for x in cmd.split(delim)]
+    
     cmd = [x.split('=', maxsplit=1) if '=' in x else x.split(' ', maxsplit=1) for x in cmd]
     [x.append('True') for x in cmd if len(x)==1]
     
@@ -219,20 +224,19 @@ def cmd_to_dict(cmd:Union[str, list], ref:dict, delim:str=' --', d=None):
         if v_ref is None:
             print(f'{k} not in ref')
         d[k] = type_me(v, v_ref, is_cmd_item=True)
+    pprint.pprint(d)
     return d
+
     
 ### run things
 
-
-
 def run_cmds(cmd:Union[str, list], cwd:Union[str, Path]='.', _res=[]):
-    return 'DidNotRun'
     for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
         cmd_1 = [c.strip() for c in cmd_1.split(' ')]
         print(f'Run: {cmd_1} at {cwd}')
         _res = subprocess.run(cmd_1, cwd=str(cwd), capture_output=True, text=True)
         print('stdout:', _res.stdout.replace("\n", " "), 'stderr:', _res.stderr.replace("\n", ";"))
-    return _res.stdout.replace('\n', ' ')
+    return _res.stdout.split('\n')
 
 def run_cmds_server(server:str, user:str, cmd:Union[str, list], cwd=Union[str, Path], _res=[]):
     client = paramiko.SSHClient()    

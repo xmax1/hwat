@@ -188,7 +188,7 @@ def run(c: Pyfig):
 	wandb.define_metric("*", step_metric="tr/step")
 	for step in range(1, c.n_step+1):
 	 
-		r, acc, deltar = sample_b(model_v, v_tr['params'], r, deltar, n_corr=c.data.n_corr)  # ❗needs testing 
+		r, acc, deltar = sample_b(mdoel, v_tr['params'], r, deltar, n_corr=c.data.n_corr)  # ❗needs testing 
 		r = keep_around_points(r, center_points, l=5.) if step < 50 else r
 
 		v_tr = train_step(model, r)
