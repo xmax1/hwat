@@ -27,7 +27,7 @@ docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 ### Alert
 - push to lumi
 - read gpu intro
-- email rene about running now
+- email rene about running now 
 - run on lumi
 - demo sweep niflheim
 - demo sweep niflheim (offline) and push
@@ -174,7 +174,7 @@ class Pyfig:
 	hostname: str       = property(lambda _: _._static.get('hostname', run_cmds('hostname')))
 	_n_job_running: int = property(lambda _: len(run_cmds('squeue -u amawi -t pending,running -h -r', cwd='.').split('\n')))
 	
-	_not_in_sweep = property(lambda _: \
+	_not_in_sweep: dict = property(lambda _: \
 		get_cls_dict(_, sub_cls=True, ignore=['sweep',]+list(_.sweep.parameters.keys()), to_cmd=True, flat=True)
 	)
 	
@@ -223,6 +223,11 @@ class Pyfig:
 
 		if not ii.submit:
 			print('### running script ###')
+			# if run_sweep:  
+	 		# potentially cleaner way of doing this
+			# 	wandb.agent(sweep_id=ii.sweep_path_id, function=function_name)
+			# 	wandb.init(name=ii.sweep_id)
+
 			if ii.dist.head:
 				ii._run = wandb.init(
 						entity      = ii.wandb_c.entity,  # team name is hwat
@@ -282,6 +287,10 @@ class Pyfig:
 		cmd = f'python -u {ii.run_name} {ii.cmd}'
 		for i in range(ii.n_gpu):
 			head = not bool(i)
+			if ii.run_sweep and head:
+				cmd = f'python -u {ii.run_name} {ii.cmd}'
+			else:
+				cmd = f'wandb agent {ii.sweep_path_id}'
 	
 			device_log_path = ii.slurm_dir/(str(i)+"_device.log")
 			cmd = re.sub(' --seed *[0-9]* ', f' --seed {np.random.randint(0, 1e7)} ', cmd)
