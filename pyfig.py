@@ -14,6 +14,7 @@ import re
 from time import sleep
 import optree
 from copy import deepcopy
+import deepdish as dd
 
 from utils import get_cartesian_product
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum
@@ -23,7 +24,7 @@ from utils import Sub
 from utils import add_to_Path
 
 from dump.user import user
-
+import gc
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 
 """
@@ -57,6 +58,16 @@ docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 - properties can NOT recursively call each other
 
 """
+
+def load(path):
+	with open(path, 'rb') as f:
+		data = pk.load(f)
+	return data
+def dump(path, data):
+	with open(path, 'wb') as f:
+		pk.dump(data, f, protocol=pk.HIGHEST_PROTOCOL)
+	return
+
 import atexit
 def exit_handler():
 	try:
@@ -347,41 +358,49 @@ class Pyfig:
 			if not assigned:
 				print(k, v, 'not assigned')
 
-	def accumulate(ii, step: int, v_tr:dict, sync=None):
-	
-		v_path = (ii.exchange_dir / f'{step}_{ii.dist._dist_id}').with_suffix('.pk')
-		v_mean_path = add_to_Path(v_path, '-mean')
-  
-		data_lo_ve(path=v_path, data=v_tr.copy())
-
-		if ii.dist.head:
-			### 1 wait for workers to dump ###
-			n_ready = 0
-			while n_ready < ii.n_gpu:
-				k_path_all = list(ii.exchange_dir.glob(f'{step}_*')) 
-				n_ready = len(k_path_all)
-				sleep(0.1)
-
-			### 2 collect arrays ###
-			leaves = []
-			for p in k_path_all:
-				v_dist_i = data_lo_ve(path=p)
-				l_sub, treespec = optree.tree_flatten(v_dist_i)
-				leaves += [l_sub]
-	
-			### 3 mean arrays ###
-			leaves_mean = [np.stack(leaves).mean(axis=0) for leaves in zip(*leaves)]
-			v_mean = optree.tree_unflatten(treespec=treespec, leaves=leaves_mean)
-			[ii.lo_ve(path=add_to_Path(p, '-mean'), data=v_mean) for p in k_path_all]
-
-			### 4 remove the variables ###
-			[p.unlink() for p in k_path_all]
+	def accumulate(ii, step: int, v_tr: dict, sync=None):
+		"""
+		potential issues:
+			- loading / unloading too fast / slow? Crashes occasionally.
+		"""
+		try:
+			gc.disable()
+			v_path = (ii.exchange_dir / f'{step}_{ii.dist._dist_id}').with_suffix('.pk')
+			v, treespec = optree.tree_flatten(deepcopy(v_tr))
+			dump(v_path, v)
    
-		while not v_mean_path.exists():
-			sleep(0.01)
+			if ii.dist.head:
+				### 1 wait for workers to dump ###
+				n_ready = 0
+				while n_ready < ii.n_gpu:
+					k_path_all = list(ii.exchange_dir.glob(f'{step}_*')) 
+					n_ready = len(k_path_all)
+					sleep(0.02)
 
-		v_sync = data_lo_ve(path=v_mean_path)  # Speed: Only load sync vars
-		v_mean_path.unlink()
+				### 2 collect arrays ###
+				leaves = []
+				for p in k_path_all:
+					v_dist_i = load(p)
+					leaves += [v_dist_i]
+		
+				### 3 mean arrays ###
+				v_mean = [np.stack(leaves).mean(axis=0) for leaves in zip(*leaves)]
+				[dump(add_to_Path(p, '-mean'), v_mean) for p in k_path_all]
+
+				### 4 remove the variables ###
+				[p.unlink() for p in k_path_all]
+
+				v_mean_path = add_to_Path(v_path, '-mean')
+				while not v_mean_path.exists():
+					sleep(0.02)
+
+			v_sync = load(v_mean_path)  # Speed: Only load sync vars
+			v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync)
+			v_mean_path.unlink()
+		except Exception as e:
+			print(e)
+		finally:
+			gc.enable()
 		return v_sync
 
 	@property
@@ -475,8 +494,8 @@ import json
 
 file_interface_all = dict(
 	pk = dict(
-		rb = pk.load,
-		wb = pk.dump,
+		rb = partial(pk.load, protocol=pk.HIGHEST_PROTOCOL),
+		wb = partial(pk.dump, protocol=pk.HIGHEST_PROTOCOL),
 	),
 	yaml = dict(
 		r = yaml.load,
@@ -485,7 +504,11 @@ file_interface_all = dict(
 	json = dict(
 		r = json.load,
 		w = json.dump,
-	)
+	),
+	deepdish = dict(
+		r = dd.io.load,
+		w = dd.io.save,
+	),
 )      
 
 def data_lo_ve(path:Path, data=None):
@@ -496,7 +519,7 @@ def data_lo_ve(path:Path, data=None):
 	mode += 'b' if file_type in ['pk',] else ''
 	interface = file_interface_all[file_type][mode]
 	with open(path, mode) as f:
-		data = interface(data, f) if data is not None else interface(f)
+		data = interface(data, f) if not data is None else interface(f)
 	return data
 
 
