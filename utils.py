@@ -318,15 +318,13 @@ try:
 
     def compute_metrix(d:dict, mode='tr', fancy=None, ignore = [], _d = {}):
         
-        for k,v in d.items():
-            if any([ig in k for ig in ignore+['step']]):
+        for k,v in d.copy().items():
+            if any([ig in k for ig in ignore+['step',]]):
                 continue 
             
             if not fancy is None:
                 k = fancy.get(k, k)
 
-            # v = jax.device_get(v)
-            
             v_mean = optree.tree_map(lambda x: x.mean() if not np.isscalar(x) else x, v)  if not np.isscalar(v) else v
             v_std = optree.tree_map(lambda x: x.std() if not np.isscalar(x) else x, v)  if not np.isscalar(v) else v
             

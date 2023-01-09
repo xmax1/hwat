@@ -106,7 +106,7 @@ def run(c: Pyfig):
 
 	def train_step(model: nn.Module, r: torch.Tensor):
 			
-			ke = compute_ke_b(model, r, ke_method=c.model.ke_method).detach()
+			ke = compute_ke_b(model, r, ke_method=c.model.ke_method)
 			
 			with torch.no_grad():
 				pe = compute_pe_b(r, c.data.a, c.data.a_z)
@@ -118,13 +118,11 @@ def run(c: Pyfig):
 			model.requires_grad_(True)
 			loss = ((e_clip - e_clip.mean())*model(r)).mean()
 			loss.backward()
+			model.requires_grad_(False)
 
 			v_tr = dict(ke=ke, pe=pe, e=e, loss=loss)
 			return v_tr
 
-	if c.dist.head: 
-		wandb.define_metric("*", step_metric="tr/step")
-	 
 	for step in range(1, c.n_step+1):
 		
 		model.zero_grad()
@@ -148,17 +146,15 @@ def run(c: Pyfig):
 				v_sync = c.accumulate(step, v_sync, sync=None)
 				v_sync = torchify_tree(v_sync, v_tr)
 
-				if c.dist.head:
-					metrix = compute_metrix(v_sync)
-					wandb.log({'tr/step':step, **metrix})
-
-				grads, deltar = v_sync['grads'], v_sync['deltar']
+				deltar = v_sync['deltar']
 
 				model.zero_grad()
-				for p, g in zip(model.parameters(), grads):
+				for p, g in zip(model.parameters(), v_sync['grads']):
 					p.grad += g
 
-				
+				if c.dist.head:
+					metrix = compute_metrix(v_sync)
+					wandb.log(metrix, step=step)
 
 		opt.step()
 		

@@ -203,9 +203,6 @@ def compute_ke_b(wf: nn.Module, r: torch.Tensor, ke_method='jvp', elements=False
 	n_b, n_e, n_dim = r.shape
 	n_jvp = n_e * n_dim
 	r_flat = r.reshape(n_b, n_jvp)
-	r_flat.requires_grad_(True)
-
-	eye = torch.eye(n_jvp, device=device, dtype=dtype, requires_grad=True)
 	ones = torch.ones((n_b, ), device=device, dtype=dtype, requires_grad=True)
 
 	def grad_fn(_r: torch.Tensor):
@@ -218,9 +215,11 @@ def compute_ke_b(wf: nn.Module, r: torch.Tensor, ke_method='jvp', elements=False
 		ggs = torch.stack(ggs, dim=-1)
 		return torch.diagonal(ggs, dim1=1, dim2=2)
 
+	r_flat.requires_grad_(True)
 	g = grad_fn(r_flat)
 	gg = grad_grad_fn(r_flat)
-
+	r_flat.requires_grad_(False)
+ 
 	if elements:
 		return g, gg
 
@@ -257,23 +256,23 @@ def init_r(n_b, n_e, center_points: torch.Tensor, std=0.1):
 	# return torch.stack(sub_r, dim=0) if len(sub_r)>1 else sub_r[0][None, ...]
 
 	
-def sample_b(model, r_0: torch.Tensor, deltar_0, n_corr=10):
+def sample_b(model: nn.Module, r_0: torch.Tensor, deltar_0: torch.Tensor, n_corr=10):
 	""" metropolis hastings sampling with automated step size adjustment """
 	device, dtype = r_0.device, r_0.dtype
 
 	deltar_1 = torch.clip(deltar_0 + 0.01*torch.randn([1,], device=device, dtype=dtype), min=0.005, max=0.5)
 
+	p_0 = torch.exp(model(r_0))**2
+
 	acc = []
 	for deltar in [deltar_0, deltar_1]:
 		
 		for _ in torch.arange(n_corr):
-
-			p_0 = torch.exp(model(r_0))**2  			# ❗can make more efficient with where modelment at end
 			r_1 = r_0 + torch.randn_like(r_0, device=device, dtype=dtype)*deltar
-
 			p_1 = torch.exp(model(r_1))**2
-			# p_1 = torch.where(torch.isnan(p_1), 0., p_1)    # :❗ needed when there was a bug in pe, needed now?!
-			p_mask = (p_1/p_0) > torch.rand_like(p_1, device=device, dtype=dtype)		# metropolis hastings
+
+			p_mask = (p_1/p_0) > torch.rand_like(p_1, device=device, dtype=dtype)
+			p_0 = torch.where(p_mask, p_1, p_0)
 
 			r_0 = torch.where(p_mask[..., None, None], r_1, r_0)
 
