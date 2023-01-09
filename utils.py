@@ -165,7 +165,6 @@ def type_me(v, v_ref=None, is_cmd_item=False):
         bool, list of list (str, float, int), dictionary, str, explicit str (' "this" '), """
         v = format_cmd_item(v)
         
-        print(v, v_ref)
         if v.startswith('[['):
             v = v.strip('[]')
             nest_lst = v.split('],[')
@@ -185,7 +184,6 @@ def type_me(v, v_ref=None, is_cmd_item=False):
         if isinstance(v, str):
             v = v.strip('\'\"')
         
-        # print(type(v), type(v_ref), v, v_ref)
         if isinstance(v, (np.ndarray, np.generic)):
             if isinstance(v.flatten()[0], str):
                 return v.tolist()
@@ -228,7 +226,6 @@ def cmd_to_dict(cmd:Union[str, list], ref:dict, delim:str=' --', d=None):
         if v_ref is None:
             print(f'{k} not in ref')
         d[k] = type_me(v, v_ref, is_cmd_item=True)
-    pprint.pprint(d)
     return d
 
     
@@ -244,7 +241,7 @@ def run_cmds(cmd:Union[str, list], cwd:Union[str, Path]='.', _res=[]):
         except Exception as e:
             print(cmd_1, e)
             return ('Fail', '')
-    return _res.stdout.split('\n')
+    return _res.stdout.rstrip('\n')
 
 
 def run_cmds_server(server:str, user:str, cmd:Union[str, list], cwd=Union[str, Path], _res=[]):

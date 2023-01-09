@@ -203,16 +203,16 @@ def compute_ke_b(wf: nn.Module, r: torch.Tensor, ke_method='jvp', elements=False
 	n_b, n_e, n_dim = r.shape
 	n_jvp = n_e * n_dim
 	r_flat = r.reshape(n_b, n_jvp)
+	r_flat.requires_grad_(True)
+
 	eye = torch.eye(n_jvp, device=device, dtype=dtype, requires_grad=True)
 	ones = torch.ones((n_b, ), device=device, dtype=dtype, requires_grad=True)
 
 	def grad_fn(_r: torch.Tensor):
-		_r.requires_grad_(True)
 		lp = wf(_r).sum()
 		return torch.autograd.grad(lp, _r, create_graph=True)[0]
 
 	def grad_grad_fn(_r: torch.Tensor):
-		_r.requires_grad_(True)
 		g = grad_fn(_r)
 		ggs = [torch.autograd.grad(g[:, i], _r, grad_outputs=ones, retain_graph=True)[0] for i in range(n_jvp)]
 		ggs = torch.stack(ggs, dim=-1)

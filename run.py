@@ -12,6 +12,7 @@ from pathlib import Path
 from time import sleep
 import shutil
 import optree
+
 """ 
 - tmp directory 
 - head node does the things 💚
@@ -53,14 +54,14 @@ def torchify_tree(v, v_ref):
 	leaves, tree_spec = optree.tree_flatten(v)
 	leaves_ref, _ = optree.tree_flatten(v_ref)
 	leaves = [torch.tensor(data=v, device=ref.device, dtype=ref.dtype) 
-           			if isinstance(ref, torch.Tensor)
-     				else v for v, ref in zip(leaves, leaves_ref)]
+           	  if isinstance(ref, torch.Tensor) else v 
+              for v, ref in zip(leaves, leaves_ref)]
 	return optree.tree_unflatten(treespec=tree_spec, leaves=leaves)
 		
 def numpify_tree(v):
-	leaves, tree_spec = optree.tree_flatten(v)
+	leaves, treespec = optree.tree_flatten(v)
 	leaves = [v.detach().cpu().numpy() if isinstance(v, torch.Tensor) else v for v in leaves]
-	return optree.tree_unflatten(tree_spec, leaves)
+	return optree.tree_unflatten(treespec=treespec, leaves=leaves)
 
 """ Distributed Synchronous SGD Example """
 def run(c: Pyfig):
@@ -72,12 +73,13 @@ def run(c: Pyfig):
 
 	### model (aka Trainmodel) ### 
 	from hwat import Ansatz_fb
+	from torch import nn
 
 	_dummy = torch.randn((1,))
 	dtype = _dummy.dtype
 	device = 'cuda' if torch.cuda.is_available() else 'cpu'
 	c._convert(device=device, dtype=dtype)
-	model = c.partial(Ansatz_fb).to(device).to(dtype)
+	model: nn.Module = c.partial(Ansatz_fb).to(device).to(dtype)
 
 	### train step ###
 	from hwat import compute_ke_b, compute_pe_b
@@ -102,8 +104,8 @@ def run(c: Pyfig):
 	model.train()
 	opt = torch.optim.RAdam(model.parameters(), lr=0.01)
 
-	def train_step(model, r):
-
+	def train_step(model: nn.Module, r: torch.Tensor):
+			
 			ke = compute_ke_b(model, r, ke_method=c.model.ke_method).detach()
 			
 			with torch.no_grad():
@@ -112,52 +114,54 @@ def run(c: Pyfig):
 				e_mean_dist = torch.mean(torch.abs(torch.median(e) - e))
 				e_clip = torch.clip(e, min=e-5*e_mean_dist, max=e+5*e_mean_dist)
 
-			[p.requires_grad_(True) for p in model.parameters()]
-			opt.zero_grad()
+			model.zero_grad()
+			model.requires_grad_(True)
 			loss = ((e_clip - e_clip.mean())*model(r)).mean()
 			loss.backward()
-			[p.requires_grad_(False) for p in model.parameters()]
-			grads = [p.grad.detach() for p in model.parameters()]
-			params = [p.detach() for p in model.parameters()]
-			
-			v_tr = dict(ke=ke, pe=pe, e=e, loss=loss, grads=grads, params=params)
+
+			v_tr = dict(ke=ke, pe=pe, e=e, loss=loss)
 			return v_tr
 
 	if c.dist.head: 
 		wandb.define_metric("*", step_metric="tr/step")
 	 
 	for step in range(1, c.n_step+1):
-
-		r, acc, deltar = sample_b(model, r, deltar, n_corr=c.data.n_corr)  # ❗needs testing 
-		r = keep_around_points(r, center_points, l=5.) if step < 50 else r
+		
+		model.zero_grad()
+		model.requires_grad_(False)
+		
+		with torch.no_grad():
+			r, acc, deltar = sample_b(model, r, deltar, n_corr=c.data.n_corr)  # ❗needs testing 
+			r = keep_around_points(r, center_points, l=5.) if step < 50 else r
 
 		v_tr = train_step(model, r)
-		v_tr |= dict(acc=acc, r=r, deltar=deltar)
-		
 
 		if not (step % c.log_metric_step):
-			
-			v_gather = numpify_tree(v_tr.copy())
-			v_gather = c.accumulate(step, v_gather)
-			v_gather = torchify_tree(v_gather, {k:v_tr[k] for k in v_gather.keys()})
-			v_tr |= v_gather
-			for p, p_new, g in zip(model.parameters(), v_tr['params'], v_tr['grads']):
-				# p.copy_(p_new).requires_grad_(False)
-				p.grad = g
-			metrix = compute_metrix(v_tr.copy())  # ❗ needs converting to torch, ie tree maps
-	
-			if c.dist.head:
-				wandb.log({'tr/step':step, **metrix})
+
+			with torch.no_grad():
+				grads = [p.grad for p in model.parameters()]
+				params = [p for p in model.parameters()]
+
+				v_tr |= dict(acc=acc, r=r, deltar=deltar, grads=grads, params=params)
+				
+				v_sync = numpify_tree(v_tr)
+				v_sync = c.accumulate(step, v_sync, sync=None)
+				v_sync = torchify_tree(v_sync, v_tr)
+
+				if c.dist.head:
+					metrix = compute_metrix(v_sync)
+					wandb.log({'tr/step':step, **metrix})
+
+				grads, deltar = v_sync['grads'], v_sync['deltar']
+
+				model.zero_grad()
+				for p, g in zip(model.parameters(), grads):
+					p.grad += g
+
+				
 
 		opt.step()
 		
-		# print_keys = ['e']
-		# pprint.pprint(dict(step=step) | {k:v.mean() 
-		# 	if isinstance(v, torch.Tensor) else v for k,v in v_tr.items() if k in print_keys})
-		
-		if not (step-1):
-			print('End Of 1')
-   
 if __name__ == "__main__":
 	
 	### pyfig ###
@@ -166,13 +170,13 @@ if __name__ == "__main__":
 		spin  = 0,
 		a = np.array([[0.0, 0.0, 0.0],]),
 		a_z  = np.array([4.,]),
-		n_b = 32, 
-		n_sv = 16, 
+		n_b = 256, 
+		n_sv = 32, 
 		n_pv = 16,
 		n_det = 1,
-		n_corr = 50, 
+		n_corr = 10, 
 		n_step = 2000, 
-		log_metric_step = 10, 
+		log_metric_step = 5, 
 		exp_name = 'demo',
 		# sweep = {},
 	)
