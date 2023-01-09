@@ -123,12 +123,17 @@ def mkdir(path: Path) -> Path:
     path = Path(path)
     if path.suffix != '':
         path = path.parent
-    if not path.exists():
-        path.mkdir(parents=True)
+    try:
+        if not path.exists() or not path.is_dir():
+            path.mkdir(parents=True)
+    except Exception as e:
+        print(e)
     return path
 
 def add_to_Path(path: Path, string: Union[str, Path]):
-    return Path(str(path) + str(string))
+    suffix = path.suffix
+    path = path.with_suffix('')
+    return Path(str(path) + str(string)).with_suffix(suffix)
 
 ### convert things
 
@@ -238,8 +243,9 @@ def run_cmds(cmd:Union[str, list], cwd:Union[str, Path]='.', _res=[]):
             print('stdout:', _res.stdout.replace("\n", " "), 'stderr:', _res.stderr.replace("\n", ";"))
         except Exception as e:
             print(cmd_1, e)
-            return 'Fail'
+            return ('Fail', '')
     return _res.stdout.split('\n')
+
 
 def run_cmds_server(server:str, user:str, cmd:Union[str, list], cwd=Union[str, Path], _res=[]):
     client = paramiko.SSHClient()    

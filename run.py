@@ -11,6 +11,7 @@ import pprint
 from pathlib import Path
 from time import sleep
 import shutil
+import optree
 """ 
 - tmp directory 
 - head node does the things 💚
@@ -48,7 +49,18 @@ import shutil
 # 		param.grad.data /= size
 		
 
+def torchify_tree(v, v_ref):
+	leaves, tree_spec = optree.tree_flatten(v)
+	leaves_ref, _ = optree.tree_flatten(v_ref)
+	leaves = [torch.tensor(data=v, device=ref.device, dtype=ref.dtype) 
+           			if isinstance(ref, torch.Tensor)
+     				else v for v, ref in zip(leaves, leaves_ref)]
+	return optree.tree_unflatten(treespec=tree_spec, leaves=leaves)
 		
+def numpify_tree(v):
+	leaves, tree_spec = optree.tree_flatten(v)
+	leaves = [v.detach().cpu().numpy() if isinstance(v, torch.Tensor) else v for v in leaves]
+	return optree.tree_unflatten(tree_spec, leaves)
 
 """ Distributed Synchronous SGD Example """
 def run(c: Pyfig):
@@ -100,50 +112,45 @@ def run(c: Pyfig):
 				e_mean_dist = torch.mean(torch.abs(torch.median(e) - e))
 				e_clip = torch.clip(e, min=e-5*e_mean_dist, max=e+5*e_mean_dist)
 
+			[p.requires_grad_(True) for p in model.parameters()]
 			opt.zero_grad()
 			loss = ((e_clip - e_clip.mean())*model(r)).mean()
 			loss.backward()
-			opt.step()
-   
+			[p.requires_grad_(False) for p in model.parameters()]
 			grads = [p.grad.detach() for p in model.parameters()]
 			params = [p.detach() for p in model.parameters()]
-
-			v_tr = dict(ke=ke, pe=pe, e=e, loss=loss, params=params, grads=grads)
+			
+			v_tr = dict(ke=ke, pe=pe, e=e, loss=loss, grads=grads, params=params)
 			return v_tr
 
-	if c.head: 
+	if c.dist.head: 
 		wandb.define_metric("*", step_metric="tr/step")
 	 
 	for step in range(1, c.n_step+1):
-	 
+
 		r, acc, deltar = sample_b(model, r, deltar, n_corr=c.data.n_corr)  # ❗needs testing 
 		r = keep_around_points(r, center_points, l=5.) if step < 50 else r
 
 		v_tr = train_step(model, r)
 		v_tr |= dict(acc=acc, r=r, deltar=deltar)
 		
+
 		if not (step % c.log_metric_step):
-			metrix = compute_metrix(v_tr.copy())  # ❗ needs converting to torch, ie tree maps
-			v_tr = c.accumulate(step, v_tr)
 			
-			def torchify_tree(v):
-				if np.isscalar(v):
-					return v
-				import optree
-				leaves, tree_spec = optree.tree_flatten(v)
-				leaves = [torch.Tensor(v) for v in leaves]
-				return optree.tree_unflatten(tree_spec, leaves)
-
-			v_tr = {k:torchify_tree(v) for k,v in v_tr.items()}
-			for p torch.Tensor, p_new in zip(model.parameters(), p_new):
-				p = p_new.requires_grad(True)
-
-			if c.head:
+			v_gather = numpify_tree(v_tr.copy())
+			v_gather = c.accumulate(step, v_gather)
+			v_gather = torchify_tree(v_gather, {k:v_tr[k] for k in v_gather.keys()})
+			v_tr |= v_gather
+			for p, p_new, g in zip(model.parameters(), v_tr['params'], v_tr['grads']):
+				# p.copy_(p_new).requires_grad_(False)
+				p.grad = g
+			metrix = compute_metrix(v_tr.copy())  # ❗ needs converting to torch, ie tree maps
+	
+			if c.dist.head:
 				wandb.log({'tr/step':step, **metrix})
-		
 
-		# if not (step % c.dist.accumulate_step):
-	  		
+		opt.step()
+		
 		# print_keys = ['e']
 		# pprint.pprint(dict(step=step) | {k:v.mean() 
 		# 	if isinstance(v, torch.Tensor) else v for k,v in v_tr.items() if k in print_keys})
@@ -159,8 +166,8 @@ if __name__ == "__main__":
 		spin  = 0,
 		a = np.array([[0.0, 0.0, 0.0],]),
 		a_z  = np.array([4.,]),
-		n_b = 256, 
-		n_sv = 32, 
+		n_b = 32, 
+		n_sv = 16, 
 		n_pv = 16,
 		n_det = 1,
 		n_corr = 50, 
@@ -170,6 +177,7 @@ if __name__ == "__main__":
 		# sweep = {},
 	)
 	
-	c = Pyfig(wb_mode='online', arg=arg, submit=False, run_sweep=False)
+	print('aqui')
+	c = Pyfig(wb_mode='online', arg=arg, run_sweep=False)
 	
 	run(c)
