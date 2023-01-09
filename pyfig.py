@@ -12,7 +12,9 @@ import numpy as np
 import re
 from time import sleep
 import optree
+from copy import deepcopy
 
+from utils import get_cartesian_product
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum
 from utils import mkdir, cmd_to_dict, dict_to_wandb, iterate_n_dir
 from utils import type_me
@@ -51,18 +53,25 @@ docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 
 ### Issues 
 - sub classes can NOT call each other
+- properties can NOT recursively call each other
 
 """
 
+def dict_to_cmd(d: dict):
+	items = d.items()
+	items = ((k, (v.tolist() if isinstance(v, np.ndarray) else v)) for (k,v) in items)
+	items = ((str(k).replace(" ", ""), str(v).replace(" ", "")) for (k,v) in items)
+	return ' '.join([f'--{k} {v}' for k,v in items if v])
 
+# exp_id:             str     = gen_alphanum(n=7)
 
 class Pyfig:
 	
 	run_name:       Path        = 'run.py'
-	exp_id:             str     = gen_alphanum(n=7)
-	sweep_id:       str         = ''
-	exp_name:           str     = 'junk'
-
+	exp_dir:        Path	    = ''
+	exp_name:       str     	= ''
+	exp_id: 		str		 	= ''
+ 
 	seed:           int         = 808017424 # grr
 	dtype:          str         = 'float32'
 	n_step:         int         = 10000
@@ -107,15 +116,16 @@ class Pyfig:
 		method          = 'grid'
 		parameters = dict(
 			n_b  = {'values' : [16, 32, 64]},
-		) 
-		
+		)
+  
 	class wandb_c(Sub):
 		job_type        = 'debug'
 		entity          = property(lambda _: _._p.project)
-		name            = property(lambda _: _._p.exp_name)
 		program         = property(lambda _: _._p.run_dir/_._p.run_name)
+		# wandb sync wandb/dryrun-folder-name 
 
-# When using --cpus-per-task to run multithreaded tasks, be aware that CPU binding is inherited from the parent of the process. This means that the multithreaded task should either specify or clear the CPU binding itself to avoid having all threads of the multithreaded task use the same mask/CPU as the parent. Alternatively, fat masks (masks which specify more than one allowed CPU) could be used for the tasks in order to provide multiple CPUs for the multithreaded tasks.
+	# When using --cpus-per-task to run multithreaded tasks, be aware that CPU binding is inherited from the parent of the process. This means that the multithreaded task 
+ # should either specify or clear the CPU binding itself to avoid having all threads of the multithreaded task use the same mask/CPU as the parent. Alternatively, fat masks (masks which specify more than one allowed CPU) could be used for the tasks in order to provide multiple CPUs for the multithreaded tasks.
 	class slurm(Sub):
 		# A job consists in one or more steps, each consisting in one or more tasks each using one or more CPU.
 		mail_type       = 'FAIL'
@@ -138,7 +148,7 @@ class Pyfig:
 		gpu_id: str         = property(lambda _: \
 			''.join(run_cmds('nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader')).split('.')[0]
 		)
-		sync: list          = ['grads',]
+		_sync: list          = ['grads',]
 
 	project:            str     = property(lambda _: 'hwat')
 	project_dir:        Path    = property(lambda _: Path().home() / 'projects' / _.project)
@@ -147,16 +157,17 @@ class Pyfig:
 	dump_exp_dir: 		Path 	= property(lambda _: _.dump/'exp')
 	TMP:                Path    = property(lambda _: _.dump/'tmp')
 	
-	exp_dir:            Path     = Path('')
-	slurm_dir: 			Path 	 = property(lambda _: _.exp_dir/'slurm')
-	exchange_dir: 		Path     = property(lambda _: _.exp_dir/'exchange')
+	slurm_dir: 			Path 	 = property(lambda _: Path(_.exp_dir, 'slurm'))
+	exchange_dir: 		Path     = property(lambda _: Path(_.exp_dir,'exchange'))
+	
 
 	run_dir:            Path    = property(lambda _: Path(__file__).parent.relative_to(Path().home()))
-		
-	sweep_path_id:      str     = property(lambda _: (f'{_.wandb_c.entity}/{_.project}/{_.sweep_id}')*bool(_.sweep_id))
+	sweep_path_id:      str     = property(lambda _: (f'{_.wandb_c.entity}/{_.project}/{_.exp_name}')*bool(_.exp_name))
 		
 	n_device:           int     = property(lambda _: count_gpu())
-	run_sweep:          bool    = False
+	run_sweep:          bool    = False	
+	wandb_sweep: 		bool	= False
+	group_exp: 			bool	= False
 	user:               str     = 'amawi'           # SERVER
 	server:             str     = 'svol.fysik.dtu.dk'   # SERVER
 	git_remote:         str     = 'origin'      
@@ -171,17 +182,11 @@ class Pyfig:
 	n_gpu:              int      = 1  # submission devices
 	
 	commit_id           = property(lambda _: run_cmds('git log --pretty=format:%h -n 1', cwd=_.project_dir))
-	hostname: str       = property(lambda _: _._static.get('hostname', run_cmds('hostname')))
+	hostname: str       = property(lambda _: _._static.setdefault('hostname', run_cmds('hostname')))
 	_n_job_running: int = property(lambda _: len(run_cmds('squeue -u amawi -t pending,running -h -r', cwd='.').split('\n')))
 	
-	_not_in_sweep: dict = property(lambda _: \
-		get_cls_dict(_, sub_cls=True, ignore=['sweep',]+list(_.sweep.parameters.keys()), to_cmd=True, flat=True)
-	)
-	
-	exe_mode: str = property(lambda _: f'sweep'*_.run_sweep + 'python'*(not _.run_sweep))
-	distribute = property(lambda _: bool(_.n_gpu - 1))
-	# device_type: str = 'cuda'  # rocm
 	   
+	# device_type: str = 'cuda'  # rocm
 	_pci_id:            str      = property(lambda _: ''.join(run_cmds('nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader')))
 	_git_commit_cmd:    list     = 'git commit -a -m "run"' # !NB no spaces in msg 
 	_git_pull_cmd:      list     = ['git fetch --all', 'git reset --hard origin/main']
@@ -189,6 +194,10 @@ class Pyfig:
 	_ignore:            list     = ['d', 'cmd', 'partial', 'lo_ve', 'log', 'merge', 'accumulate', '_static']
 	_wandb_ignore:      list     = ['sbatch', 'sweep']
 	_static: 			dict     = dict()
+ 
+	_wandb_run_url = property(lambda _: 
+			f'https://wandb.ai/{_.wandb_c.entity}/{_.project}/' \
+   				+(_.wandb_sweep*('sweeps/'+_.exp_name) or f'runs/{_.exp_id}'))
 	
 	_useful = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
 
@@ -206,66 +215,49 @@ class Pyfig:
 		print('### updating configuration ###')
 		sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d)) if not notebook else {}
 		ii.merge(arg | init_arg | sys_arg)
-  
-		print('### post-init ###')
-		if ii.exp_dir == Path(''): 
-			ii.exp_dir = iterate_n_dir(ii.dump_exp_dir/ii.exp_name, True) / [ii.sweep_id, ii.exp_id][ii.run_sweep]
-   
-		[mkdir(ii.exp_dir / _dir) for _dir in ['slurm', 'exchange', 'wandb']]
-		
-		ii.dist._dist_id = ii.dist.gpu_id + '-' + ii.hostname.split('.')[0]
-		print('dist_id: ', ii.dist._dist_id)
 
-		project_structure = dict(filter(lambda x: any([k in x[0] for k in ['dir', 'path', 'name']]), ii.d.items()))
-		ii.log(project_structure, create=True, log_name='structure.log')
-		ii.log(ii.d, create=True, log_name='post_init_d.log')
-		ii.log(ii.sbatch, create=True, log_name='run_cmd.log')
+		print(f'### Hardware IDs {ii.dist._dist_id} ###')
+		ii.dist._dist_id = ii.dist.gpu_id + '-' + ii.hostname.split('.')[0]
 
 		if not ii.submit:
 			print('### running script ###')
-			# if run_sweep:  
-	 		# potentially cleaner way of doing this
-			# 	wandb.agent(sweep_id=ii.sweep_path_id, function=function_name)
-			# 	wandb.init(name=ii.sweep_id)
-
 			if ii.dist.head:
-				ii._run = wandb.init(
+				if ii.wandb_sweep:
+					wandb.agent(sweep_id=ii.sweep_path_id)
+					ii.run = wandb.init(project=ii.project, entity=ii.wandb_c.entity)
+				else:
+					ii._run = wandb.init(
 						entity      = ii.wandb_c.entity,  # team name is hwat
 						project     = ii.project,         # sub project in team
 						dir         = ii.exp_dir,
 						config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
 						mode        = wb_mode,
+						group		= ii.exp_name,
 						id          = ii.exp_id,
 						settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
-				)
-
-		else:
+					)
+			ii.log(ii.d, create=True, log_name='post_init_d.log')
+		
+		if ii.submit:
 			print(f'### running {ii._n_job_running} on slurm ###')
-			print('Server -> hostname', ii.server, ii.hostname, 'Place local dreams here, ...')
-			
 			ii.submit = False
 			if ii.run_sweep:
-				print(f'### sweep ###')
-				ii.sweep.parameters |= dict((k, dict(value=v)) for k,v in ii._not_in_sweep.items())
-				
-				pprint.pprint(ii.sweep.parameters)
-				
-				ii.sweep_id = wandb.sweep(
-					sweep   = ii.sweep.d, 
-					entity  = ii.wandb_c.entity,
-					project = ii.project,
-				)
-				
-			n_sweep = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v] 
-			n_job = reduce(lambda a,b: a*b, n_sweep if ii.run_sweep else [1,])
-			
-			if 0 < ii.cap:
-				ii.log(dict(slurm_init=dict(sbatch=ii.sbatch)), create=True, log_name='slurm_init.log')
-				for sub in range(1, n_job+1):
-					ii.exp_id = gen_alphanum(n=7)
-					Slurm(**ii.slurm.d).sbatch(ii.sbatch)
-			folder = f'runs/{ii.exp_id}' if not ii.run_sweep else f'sweeps/{ii.sweep_id}'
-			sys.exit(f'https://wandb.ai/{ii.wandb_c.entity}/{ii.project}/{folder}')
+				sweep_d = ii._get_pyfig_sweep()
+				for i, d in enumerate(sweep_d):
+					ii._setup_dir(group_exp=bool(i), force_new=True)
+					base_c = get_cls_dict(ii, sub_cls=True, flat=True, 
+                           ignore=ii._ignore+['sweep', 'sbatch', *d.keys()])
+					sbatch = ii._sbatch(base_c | d)
+					Slurm(**ii.slurm.d).sbatch(sbatch)
+
+			elif ii.wandb_sweep:
+				# job_all = ii._setup_wandb_sweep()
+				raise NotImplementedError
+
+			else:
+				sbatch = ii._sbatch()
+				Slurm(**ii.slurm.d).sbatch(sbatch)
+			sys.exit(ii._wandb_run_url)
 
 	def _convert(ii, device, dtype):
 		import torch
@@ -274,39 +266,75 @@ class Pyfig:
 		d = {k:torch.tensor(v, dtype=dtype, device=device, requires_grad=False) for k,v in d.items() if not isinstance(v[0], str)}
 		ii.merge(d)
 
-	def _show_project_struct(ii):
-		raise NotImplementedError
-
-	@property
-	def sbatch(ii,):
-		mod = ['module purge', 'module load foss', 'module load CUDA/11.7.0']
-		env = ['source ~/.bashrc', f'conda activate {ii.env}',]
-		debug = ['echo $SLURM_JOB_GPUS', 'echo $SLURM_JOB_NODELIST', 'nvidia-smi']
-		sb = mod + env + debug
-
-		cmd = f'python -u {ii.run_name} {ii.cmd}'
-		for i in range(ii.n_gpu):
-			head = not bool(i)
-			if ii.run_sweep and head:
-				cmd = f'python -u {ii.run_name} {ii.cmd}'
-			else:
-				cmd = f'wandb agent {ii.sweep_path_id}'
-	
-			device_log_path = ii.slurm_dir/(str(i)+"_device.log")
-			cmd = re.sub(' --seed *[0-9]* ', f' --seed {np.random.randint(0, 1e7)} ', cmd)
-			cmd = re.sub(' --head *[a-zA-Z]* ', f' --head {head} ', cmd)
-			
-			srun_cmd = 'srun --gpus=1 --cpus-per-task=4 --mem-per-cpu=1024 --ntasks=1 --exclusive --label '
-			sb += [f'{srun_cmd} {cmd} --head {head} 1> {device_log_path} 2>&1 & ']
-		sb += ['wait',]
+	def _setup_wandb_sweep(ii):
+		d = deepcopy(ii.sweep.d)
+		sweep_keys = list(d['parameters'].keys())
+		n_sweep = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v] 
+		print(f'### sweep over {sweep_keys} ({n_sweep} total) ###')
   
-		return '\n'.join(sb)
+		base_c = get_cls_dict(ii, sub_cls=True, flat=True, ignore=ii._ignore + ['sweep', 'head',])
+		base_c = dict(parameters=dict((k, dict(value=v)) for k,v in base_c.items()))
+		d['parameters'] |= base_c['parameters']
+
+		ii.exp_name = wandb.sweep(
+			sweep   = d, 
+			entity  = ii.wandb_c.entity,
+			project = ii.project,
+			name	= ii.exp_name,
+		)
+		# command = ['$\{env\}', 'python -u', '$\{program\}', '$\{args\}', f'--sweep_id_pseudo={ii.exp_id}']
+		return [dict() for i in range(n_sweep)]
+
+	def _setup_dir(ii, force_new=False, group_exp=False):
+		if ii.exp_dir and not force_new:
+			return None
+		exp_name = ii.exp_name or 'junk'
+		exp_group_dir = Path(ii.dump_exp_dir, 'sweep'*ii.run_sweep, exp_name)
+		exp_group_dir = iterate_n_dir(exp_group_dir, group_exp=group_exp)
+		ii.exp_name = exp_group_dir.name
+		ii.exp_id = (~force_new)*ii.exp_id or gen_alphanum(7)
+		ii.exp_dir = exp_group_dir/ii.exp_id
+		[mkdir(ii.exp_dir/_dir) for _dir in ['slurm', 'exchange', 'wandb']]
+  
+	def _get_pyfig_sweep(ii):
+		d = deepcopy(ii.sweep.d)
+		sweep_keys = list(d['parameters'].keys())
+		sweep_vals = [v['values'] for v in d['parameters'].values()]
+		sweep_vals = get_cartesian_product(*sweep_vals)
+		print(f'### sweep over {sweep_keys} ({len(sweep_vals)} total) ###')
+		return [{k:v for k,v in zip(sweep_keys, v_set)} for v_set in sweep_vals]
+		
+	def _sbatch(ii, job: dict=None):
+		mod = ['module purge', 'module load foss', 'module load CUDA/11.7.0']
+		env = ['source ~/.bashrc', f'conda activate {ii.env}', ]
+		debug = ['echo $SLURM_JOB_GPUS', 'echo $SLURM_JOB_NODELIST', 'nvidia-smi']
+		srun_cmd = 'srun --gpus=1 --cpus-per-task=4 --mem-per-cpu=1024 --ntasks=1 --exclusive --label '
+		sb = mod + env + debug
+		
+		job = job or  get_cls_dict(ii, sub_cls=True, flat=True, 
+                           ignore=ii._ignore+['sweep', 'sbatch',])
+		
+		for i in range(ii.n_gpu):
+			device_log_path = ii.slurm_dir/(str(i)+"_device.log")
+			job['head'] = head = not bool(i)			
+			cmd = dict_to_cmd(job)
+
+			if ii.wandb_sweep and head:
+				cmd = f'wandb agent {ii.sweep_path_id} --count 1'
+			else:
+				cmd = f'python -u {ii.run_name} {cmd}'
+				
+			sb += [f'{srun_cmd} {cmd} 1> {device_log_path} 2>&1 & ']
+   
+		sb += ['wait',]
+		sb = '\n'.join(sb)
+		return sb
 
 	@property
 	def cmd(ii):
-		cmd_d = get_cls_dict(ii, sub_cls=True, ignore=ii._ignore + ['sweep', 'head'], to_cmd=True, flat=True)
-		return ' '.join([f'--{k} {v}' for k,v in cmd_d.items() if v])
-		
+		d = get_cls_dict(ii, sub_cls=True, ignore=ii._ignore + ['sweep', 'head',], flat=True)
+		return dict_to_cmd(d)
+    
 	@property
 	def d(ii):
 		return get_cls_dict(ii, sub_cls=True, prop=True, ignore=ii._ignore)
@@ -373,10 +401,8 @@ class Pyfig:
 
 		v_sync = ii.lo_ve(path=v_mean_path)  # Speed: Only load sync vars
 		v_mean_path.unlink()
-		
 		return v_sync
 
-	
 	@property
 	def _sub_cls(ii) -> dict:
 		return {k:v for k,v in ii.__dict__.items() if isinstance(v, Sub)}
@@ -387,13 +413,9 @@ class Pyfig:
 	def log(ii, info: Union[dict,str], create=False, log_name='dump/log.tmp'):
 		mode = 'w' if create else 'a'
 		info = pprint.pformat(info)
-		for p in [ii.exp_dir/log_name, ]:
+		for p in [Path(ii.exp_dir, log_name), ]:
 			with open(p, mode) as f:
 				f.writelines(info)
-
-
-
-
 
 def get_cls_dict(
 		cls,
@@ -404,7 +426,6 @@ def get_cls_dict(
 		hidn=False,
 		ignore:list=None,
 		add:list=None,
-		to_cmd:bool=False,
 		flat:bool=False
 	) -> dict:
 	# ref > ignore > add
@@ -432,17 +453,13 @@ def get_cls_dict(
 				
 				if sub_cls and isinstance(v, Sub) or (k in ref if ref else False):
 					v = get_cls_dict(
-						v, ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore, to_cmd=to_cmd, add=add)
+						v, ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore, add=add)
 					if flat:
 						items.extend(v.items())
 						continue
 					
 				items.append([k, v])     
-		
-		if to_cmd:
-			items = ((k, (v.tolist() if isinstance(v, np.ndarray) else v)) for (k,v) in items)
-			items = ((str(k).replace(" ", ""), str(v).replace(" ", "")) for (k,v) in items)
-				  
+		  
 		return dict(items)
 
 
@@ -632,4 +649,5 @@ def cls_filter(
 			v_path_mean.unlink()
 
 		return v_sync
+print('Server -> hostname', ii.server, ii.hostname, 'Place local dreams here, ...')
 """
