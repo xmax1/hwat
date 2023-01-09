@@ -9,6 +9,7 @@ import sys
 import pprint
 from copy import copy
 import numpy as np
+import os
 import re
 from time import sleep
 import optree
@@ -56,14 +57,19 @@ docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 - properties can NOT recursively call each other
 
 """
+import atexit
+def exit_handler():
+	try:
+		run_cmds(f'scancel {os.environ["SLURM_JOBID"]}')
+	except Exception as e:
+		print('')
+atexit.register(exit_handler)
 
 def dict_to_cmd(d: dict):
 	items = d.items()
 	items = ((k, (v.tolist() if isinstance(v, np.ndarray) else v)) for (k,v) in items)
 	items = ((str(k).replace(" ", ""), str(v).replace(" ", "")) for (k,v) in items)
 	return ' '.join([f'--{k} {v}' for k,v in items if v])
-
-# exp_id:             str     = gen_alphanum(n=7)
 
 class Pyfig:
 	
@@ -110,9 +116,7 @@ class Pyfig:
 		terms_p_emb:    list    = ['rr', 'rr_len']
 		ke_method:      str     = 'vjp'
 
-	class sweep(Sub):        
-		# program         = property(lambda _: _._p._static.get('run_name', _._p.run_name))
-		name            = 'demo'
+	class sweep(Sub):
 		method          = 'grid'
 		parameters = dict(
 			n_b  = {'values' : [16, 32, 64]},
@@ -130,6 +134,7 @@ class Pyfig:
 		# A job consists in one or more steps, each consisting in one or more tasks each using one or more CPU.
 		mail_type       = 'FAIL'
 		partition       ='sm3090'
+		export			= 'ALL'
 		nodes           = '1-1' # (MIN-MAX) 
 		cpus_per_task   = 4
 		mem_per_cpu     = 1024
@@ -194,18 +199,23 @@ class Pyfig:
 	_ignore:            list     = ['d', 'cmd', 'partial', 'lo_ve', 'log', 'merge', 'accumulate', '_static']
 	_wandb_ignore:      list     = ['sbatch', 'sweep']
 	_static: 			dict     = dict()
- 
+	_job_id: 			str      = property(lambda _: os.environ['SLURM_JOBID'])
+	# _end_this_job: 		str	     = property(lambda _: ''.join(run_cmds(f'scancel {_._job_id}')))
 	_wandb_run_url = property(lambda _: 
 			f'https://wandb.ai/{_.wandb_c.entity}/{_.project}/' \
-   				+(_.wandb_sweep*('sweeps/'+_.exp_name) or f'runs/{_.exp_id}'))
+   				+(_.wandb_sweep*('sweeps/'+_.exp_name) 
+         		or _.run_sweep*f'groups/{_.exp_name}' 
+           		or f'runs/{_.exp_id}'))
 	
 	_useful = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
 
 	# wb_mode: online, disabled, offline
 	def __init__(ii, arg={}, wb_mode='online', submit=False, run_sweep=False, notebook=False, **kw):
 		
+		# ii.log(dict(os.environ.items()), create=True, log_name='env.log')
+  
 		init_arg = dict(run_sweep=run_sweep, submit=submit, wb_mode=wb_mode) | kw
-		
+	
 		print('init sub classes')
 		for k,v in Pyfig.__dict__.items():
 			if isinstance(v, type):
@@ -216,8 +226,8 @@ class Pyfig:
 		sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d)) if not notebook else {}
 		ii.merge(arg | init_arg | sys_arg)
 
-		print(f'### Hardware IDs {ii.dist._dist_id} ###')
 		ii.dist._dist_id = ii.dist.gpu_id + '-' + ii.hostname.split('.')[0]
+		print(f'### Hardware IDs {ii.dist._dist_id} ###')
 
 		if not ii.submit:
 			print('### running script ###')
@@ -239,7 +249,7 @@ class Pyfig:
 			ii.log(ii.d, create=True, log_name='post_init_d.log')
 		
 		if ii.submit:
-			print(f'### running {ii._n_job_running} on slurm ###')
+			print(f'### running on slurm ###')
 			ii.submit = False
 			if ii.run_sweep:
 				sweep_d = ii._get_pyfig_sweep()
@@ -259,33 +269,16 @@ class Pyfig:
 				Slurm(**ii.slurm.d).sbatch(sbatch)
 			sys.exit(ii._wandb_run_url)
 
-	def _convert(ii, device, dtype):
-		import torch
-		d = get_cls_dict(ii, sub_cls=True, flat=True)
-		d = {k:v for k,v in d.items() if isinstance(v, (np.ndarray, np.generic, list))}
-		d = {k:torch.tensor(v, dtype=dtype, device=device, requires_grad=False) for k,v in d.items() if not isinstance(v[0], str)}
-		ii.merge(d)
+	@property
+	def cmd(ii):
+		d = get_cls_dict(ii, sub_cls=True, flat=True, ignore=ii._ignore + ['sweep', 'head',])
+		return dict_to_cmd(d)
+    
+	@property
+	def d(ii):
+		return get_cls_dict(ii, sub_cls=True, prop=True, ignore=ii._ignore)
 
-	def _setup_wandb_sweep(ii):
-		d = deepcopy(ii.sweep.d)
-		sweep_keys = list(d['parameters'].keys())
-		n_sweep = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v] 
-		print(f'### sweep over {sweep_keys} ({n_sweep} total) ###')
-  
-		base_c = get_cls_dict(ii, sub_cls=True, flat=True, ignore=ii._ignore + ['sweep', 'head',])
-		base_c = dict(parameters=dict((k, dict(value=v)) for k,v in base_c.items()))
-		d['parameters'] |= base_c['parameters']
-
-		ii.exp_name = wandb.sweep(
-			sweep   = d, 
-			entity  = ii.wandb_c.entity,
-			project = ii.project,
-			name	= ii.exp_name,
-		)
-		# command = ['$\{env\}', 'python -u', '$\{program\}', '$\{args\}', f'--sweep_id_pseudo={ii.exp_id}']
-		return [dict() for i in range(n_sweep)]
-
-	def _setup_dir(ii, force_new=False, group_exp=False):
+	def _setup_dir(ii, group_exp=False, force_new=False):
 		if ii.exp_dir and not force_new:
 			return None
 		exp_name = ii.exp_name or 'junk'
@@ -306,14 +299,15 @@ class Pyfig:
 		
 	def _sbatch(ii, job: dict=None):
 		mod = ['module purge', 'module load foss', 'module load CUDA/11.7.0']
-		env = ['source ~/.bashrc', f'conda activate {ii.env}', ]
+		env = ['source ~/.bashrc', f'conda activate {ii.env}',]
+		export = ['export $SLURM_JOB_ID',]
 		debug = ['echo $SLURM_JOB_GPUS', 'echo $SLURM_JOB_NODELIST', 'nvidia-smi']
 		srun_cmd = 'srun --gpus=1 --cpus-per-task=4 --mem-per-cpu=1024 --ntasks=1 --exclusive --label '
 		sb = mod + env + debug
 		
 		job = job or  get_cls_dict(ii, sub_cls=True, flat=True, 
                            ignore=ii._ignore+['sweep', 'sbatch',])
-		
+
 		for i in range(ii.n_gpu):
 			device_log_path = ii.slurm_dir/(str(i)+"_device.log")
 			job['head'] = head = not bool(i)			
@@ -329,27 +323,14 @@ class Pyfig:
 		sb += ['wait',]
 		sb = '\n'.join(sb)
 		return sb
-
-	@property
-	def cmd(ii):
-		d = get_cls_dict(ii, sub_cls=True, ignore=ii._ignore + ['sweep', 'head',], flat=True)
-		return dict_to_cmd(d)
-    
-	@property
-	def d(ii):
-		return get_cls_dict(ii, sub_cls=True, prop=True, ignore=ii._ignore)
 	
-	def partial(ii, f:Callable, d=None, get_d=False, print_d=False, **kw):
-		d = flat_any(d if d else ii.d)
+	def partial(ii, f:Callable, args=None, **kw):
+		d = flat_any(args if args else ii.d)
 		d_k = inspect.signature(f.__init__).parameters.keys()
 		d = {k:copy(v) for k,v in d.items() if k in d_k} | kw
-		if get_d:
-			return d
-		if print_d:
-			pprint.pprint(d)
 		return f(**d)
 
-	def merge(ii, merge:dict):
+	def merge(ii, merge: dict):
 		for k,v in merge.items():
 			assigned = False
 			for cls in [ii,] + list(ii._sub_cls.values()):
@@ -371,7 +352,7 @@ class Pyfig:
 		v_path = (ii.exchange_dir / f'{step}_{ii.dist._dist_id}').with_suffix('.pk')
 		v_mean_path = add_to_Path(v_path, '-mean')
   
-		ii.lo_ve(path=v_path, data=v_tr.copy())
+		data_lo_ve(path=v_path, data=v_tr.copy())
 
 		if ii.dist.head:
 			### 1 wait for workers to dump ###
@@ -384,7 +365,7 @@ class Pyfig:
 			### 2 collect arrays ###
 			leaves = []
 			for p in k_path_all:
-				v_dist_i = ii.lo_ve(path=p)
+				v_dist_i = data_lo_ve(path=p)
 				l_sub, treespec = optree.tree_flatten(v_dist_i)
 				leaves += [l_sub]
 	
@@ -399,16 +380,40 @@ class Pyfig:
 		while not v_mean_path.exists():
 			sleep(0.01)
 
-		v_sync = ii.lo_ve(path=v_mean_path)  # Speed: Only load sync vars
+		v_sync = data_lo_ve(path=v_mean_path)  # Speed: Only load sync vars
 		v_mean_path.unlink()
 		return v_sync
 
 	@property
 	def _sub_cls(ii) -> dict:
 		return {k:v for k,v in ii.__dict__.items() if isinstance(v, Sub)}
-	
-	def lo_ve(ii, path, data=None):
-		return data_save_load(path, data)
+
+	def _convert(ii, device, dtype):
+		import torch
+		d = get_cls_dict(ii, sub_cls=True, flat=True)
+		d = {k:v for k,v in d.items() if isinstance(v, (np.ndarray, np.generic, list))}
+		d = {k:torch.tensor(v, dtype=dtype, device=device, requires_grad=False) for k,v in d.items() if not isinstance(v[0], str)}
+		ii.merge(d)
+
+	def _setup_wandb_sweep(ii):
+		d = deepcopy(ii.sweep.d)
+		sweep_keys = list(d['parameters'].keys())
+		n_sweep = [len(v['values']) for k,v in ii.sweep.parameters.items() if 'values' in v] 
+		print(f'### sweep over {sweep_keys} ({n_sweep} total) ###')
+  
+		base_c = get_cls_dict(ii, sub_cls=True, flat=True, ignore=ii._ignore + ['sweep', 'head',])
+		base_c = dict(parameters=dict((k, dict(value=v)) for k,v in base_c.items()))
+		d['parameters'] |= base_c['parameters']
+
+		ii.exp_name = wandb.sweep(
+			sweep   = d,
+			entity  = ii.wandb_c.entity,
+			program = ii.run_name,
+			project = ii.project,
+			name	= ii.exp_name,
+		)
+		# command = ['$\{env\}', 'python -u', '$\{program\}', '$\{args\}', f'--sweep_id_pseudo={ii.exp_id}']
+		return [dict() for i in range(n_sweep)]
 		
 	def log(ii, info: Union[dict,str], create=False, log_name='dump/log.tmp'):
 		mode = 'w' if create else 'a'
@@ -428,7 +433,7 @@ def get_cls_dict(
 		add:list=None,
 		flat:bool=False
 	) -> dict:
-	# ref > ignore > add
+		# ref > ignore > add
 		ignore = cls._ignore + (ignore or [])
 		
 		items = []
@@ -483,7 +488,7 @@ file_interface_all = dict(
 	)
 )      
 
-def data_save_load(path:Path, data=None):
+def data_lo_ve(path:Path, data=None):
 	if not path.suffix:
 		path = path.with_suffix('.pk')
 	file_type = path.suffix[1:]
@@ -618,7 +623,7 @@ def cls_filter(
 		for k,v in v_tr.copy().items():
 			v_path = (ii.exchange_dir / f'{k}_{step}_{ii.dist._dist_id}').with_suffix('.pk')
 			ii.lo_ve(path=v_path, data=v)
-	
+
 			v_path_mean = add_to_Path(v_path, '-mean')
 
 			if ii.dist.head:
