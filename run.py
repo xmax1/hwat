@@ -101,7 +101,7 @@ def run(c: Pyfig):
 	
 	### add in optimiser
 	model.train()
-	opt = torch.optim.RAdam(model.parameters(), lr=0.01)
+	opt = torch.optim.RAdam(model.parameters(), lr=0.001)
 
 	def train_step(model: nn.Module, r: torch.Tensor):
 			

@@ -74,6 +74,7 @@ class nifl_slurm(Sub):
 	output          = property(lambda _: _._p.cluster_dir/'o-%j.out')
 	error           = property(lambda _: _._p.cluster_dir/'e-%j.err')
 	job_name        = property(lambda _: _._p.exp_name)
+
 	# cpus_per_task   = 1
 	# ntasks_per_node = 
 	# tasks_per_gpu  = 8 
@@ -98,7 +99,7 @@ class nifl_slurm(Sub):
 
 		n_dist = int(ii.nodes) * ii._p.n_gpu  # nodes much 
 		for i in range(n_dist):
-			device_log_path = ii._p.cluster_dir/(str(i)) # + ii._p.hostname.split('.')[0]+"_device.log")
+			device_log_path = ii._p.cluster_dir/(str(i)+"_device.log") # + ii._p.hostname.split('.')[0])
 			job['head'] = head = not bool(i)			
 			cmd = dict_to_cmd(job)
 

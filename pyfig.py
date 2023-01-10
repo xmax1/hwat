@@ -239,9 +239,10 @@ class Pyfig:
 		if not ii.submit:
 			print('### running script ###')
 			if ii.dist.head:
+				ii._setup_dir(group_exp=ii.group_exp, force_new=False)
 				if ii.wandb_sweep:
 					wandb.agent(sweep_id=ii.sweep_path_id)
-					ii.run = wandb.init(project=ii.project, entity=ii.wandb_c.entity)
+					ii._run = wandb.init(project=ii.project, entity=ii.wandb_c.entity)
 				else:
 					ii._run = wandb.init(
 						entity      = ii.wandb_c.entity,  # team name is hwat
@@ -251,9 +252,9 @@ class Pyfig:
 						mode        = wb_mode,
 						group		= ii.exp_name,
 						id          = ii.exp_id,
-						settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+						# settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
 					)
-
+				print(ii._run.get_url())
 			ii._debug_log([dict(os.environ.items()), ii.d,], ['env.log', 'd.log',])
 		
 		if ii.submit:
