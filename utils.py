@@ -22,27 +22,62 @@ dl_arr = torch.Tensor
 
 this_dir = Path(__file__).parent
 
-### Pyfig Subclass 
+### exit handling ###
+# NB: !Important! Distribution if 1 gpu fails the others continue without this
+import atexit
 
-class Sub:
-    _p = None
-    _ignore = ['d', '_d'] 
+def exit_handler():
+	try:
+		run_cmds(f'scancel {os.environ["SLURM_JOBID"]}')
+	except Exception as e:
+		print('')
+atexit.register(exit_handler)
 
-    def __init__(ii, parent=None):
-        ii._p = parent
-    
-    @property
-    def d(ii,):
-        out={} # becomes class variable in call line, accumulates
-        for k,v in ii.__class__.__dict__.items():
-            if k.startswith('_') or k in ii._ignore:
-                continue
-            if isinstance(v, partial): 
-                v = ii.__dict__[k]   # if getattr then calls the partial, which we don't want
-            else:
-                v = getattr(ii, k)
-            out[k] = v
-        return out
+### data save and load
+import pickle as pk
+import yaml
+import json
+import deepdish as dd
+
+file_interface_all = dict(
+	pk = dict(
+		rb = partial(pk.load, protocol=pk.HIGHEST_PROTOCOL),
+		wb = partial(pk.dump, protocol=pk.HIGHEST_PROTOCOL),
+	),
+	yaml = dict(
+		r = yaml.load,
+		w = yaml.dump,
+	),
+	json = dict(
+		r = json.load,
+		w = json.dump,
+	),
+	deepdish = dict(
+		r = dd.io.load,
+		w = dd.io.save,
+	),
+)      
+
+def data_lo_ve(path:Path, data=None):
+	if not path.suffix:
+		path = path.with_suffix('.pk')
+	file_type = path.suffix[1:]
+	mode = 'r' if data is None else 'w'
+	mode += 'b' if file_type in ['pk',] else ''
+	interface = file_interface_all[file_type][mode]
+	with open(path, mode) as f:
+		data = interface(data, f) if not data is None else interface(f)
+	return data
+
+def load(path):
+	with open(path, 'rb') as f:
+		data = pk.load(f)
+	return data
+
+def dump(path, data):
+	with open(path, 'wb') as f:
+		pk.dump(data, f, protocol=pk.HIGHEST_PROTOCOL)
+	return
 
 ### metrics ###
 
@@ -137,22 +172,86 @@ def add_to_Path(path: Path, string: Union[str, Path]):
 
 ### convert things
 
+def dict_to_cmd(d: dict):
+	items = d.items()
+	items = ((k, (v.tolist() if isinstance(v, np.ndarray) else v)) for (k,v) in items)
+	items = ((str(k).replace(" ", ""), str(v).replace(" ", "")) for (k,v) in items)
+	return ' '.join([f'--{k} {v}' for k,v in items if v])
+
+def cls_to_dict(
+		cls,
+		ref:Union[list, dict]=None,
+		sub_cls=False, 
+		fn=False, 
+		prop=False, 
+		hidn=False,
+		ignore:list=None,
+		add:list=None,
+		flat:bool=False
+	) -> dict:
+		# ref > ignore > add
+		ignore = cls._ignore + (ignore or [])
+		
+		items = []
+		for k, v_cls in cls.__class__.__dict__.items():
+			
+			keep = k in ref if ref else True
+			keep = False if (k in ignore) else keep
+			keep |= k in add if add else False
+			
+			if keep:
+				if not ref:
+					if k.startswith('__'):
+						continue    
+					if (not hidn) and k.startswith('_'):
+						continue
+					if (not fn) and isinstance(v_cls, partial):
+						continue
+					if (not prop) and isinstance(v_cls, property):
+						continue
+	
+				v = getattr(cls, k)
+				
+				if sub_cls and isinstance(v, Sub) or (k in ref if ref else False):
+					v = cls_to_dict(
+						v, ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore, add=add)
+					if flat:
+						items.extend(v.items())
+						continue
+					
+				items.append([k, v])     
+		  
+		return dict(items)
+    
+def cmd_to_dict(cmd:Union[str, list], ref:dict, delim:str=' --', d=None):
+    """
+    fmt: [--flag, arg, --true_flag, --flag, arg1]
+    # all flags double dash because of negative numbers duh """
+    
+    cmd = ' ' + (' '.join(cmd) if isinstance(cmd, list) else cmd)  # add initial space in case single flag
+    cmd = [x.strip() for x in cmd.split(delim)][1:]
+    cmd = [[sub.strip() for sub in x.split('=', maxsplit=1)] 
+           if '=' in x else 
+           [sub.strip() for sub in x.split(' ', maxsplit=1)] 
+           for x in cmd]
+    [x.append('True') for x in cmd if len(x)==1]
+    
+    d = dict()
+    for k,v in cmd:
+        v = format_cmd_item(v)
+        k = k.replace(' ', '')
+        v_ref = ref.get(k, None)
+        if v_ref is None:
+            print(f'{k} not in ref')
+        d[k] = type_me(v, v_ref, is_cmd_item=True)
+    return d
+
 def npify(v):
     return torch.tensor(v.numpy())
 
 def format_cmd_item(v):
     v = v.replace('(', '[').replace(')', ']')
     return v.replace(' ', '')
-
-def to_cmd(d:dict):
-    """ Accepted: int, float, str, list, dict, np.ndarray"""
-    
-    def prep_cmd_item(k:str, v:Any):
-        if isinstance(v, np.ndarray):
-            v = v.tolist()
-        return str(k).replace(" ", ""), str(v).replace(" ", "")
-    
-    return dict(prep_cmd_item(k,v) for k,v in d.items())
     
 def type_me(v, v_ref=None, is_cmd_item=False):
     def count_leading_char(s, char): 
@@ -204,31 +303,6 @@ def type_me(v, v_ref=None, is_cmd_item=False):
     except:
         return str(v).strip('\'\"')
     
-    
-def cmd_to_dict(cmd:Union[str, list], ref:dict, delim:str=' --', d=None):
-    """
-    fmt: [--flag, arg, --true_flag, --flag, arg1]
-    # all flags double dash because of negative numbers duh """
-    
-    cmd = ' ' + (' '.join(cmd) if isinstance(cmd, list) else cmd)  # add initial space in case single flag
-    cmd = [x.strip() for x in cmd.split(delim)][1:]
-    cmd = [[sub.strip() for sub in x.split('=', maxsplit=1)] 
-           if '=' in x else 
-           [sub.strip() for sub in x.split(' ', maxsplit=1)] 
-           for x in cmd]
-    [x.append('True') for x in cmd if len(x)==1]
-    
-    d = dict()
-    for k,v in cmd:
-        v = format_cmd_item(v)
-        k = k.replace(' ', '')
-        v_ref = ref.get(k, None)
-        if v_ref is None:
-            print(f'{k} not in ref')
-        d[k] = type_me(v, v_ref, is_cmd_item=True)
-    return d
-
-    
 ### run things
 
 def run_cmds(cmd:Union[str, list], cwd:Union[str, Path]='.', _res=[]):
@@ -257,9 +331,7 @@ def run_cmds_server(server:str, user:str, cmd:Union[str, list], cwd=Union[str, P
     client.close()
     return stdout.replace("\n", " ")
 
-    
-    
-# flatten things
+### flatten things
 
 def flat_arr(v):
     return v.reshape(v.shape[0], -1)
@@ -341,6 +413,29 @@ try:
 
 except: 
     print('Metrix: No Torch')
+    
+### Pyfig Subclass 
+
+class Sub:
+    _p = None
+    _ignore = ['d', '_d'] 
+
+    def __init__(ii, parent=None):
+        ii._p = parent
+    
+    @property
+    def d(ii,):
+        out={} # becomes class variable in call line, accumulates
+        for k,v in ii.__class__.__dict__.items():
+            if k.startswith('_') or k in ii._ignore:
+                continue
+            if isinstance(v, partial): 
+                v = ii.__dict__[k]   # if getattr then calls the partial, which we don't want
+            else:
+                v = getattr(ii, k)
+            out[k] = v
+        return out
+    
 # ### jax ###
 
 # try:
@@ -405,3 +500,17 @@ except:
 
 # except:
 #     print('no flax or jax installed')
+
+""" BONE ZONE
+# def to_cmd(d:dict):
+#     ' Accepted: int, float, str, list, dict, np.ndarray'
+    
+#     def prep_cmd_item(k:str, v:Any):
+#         if isinstance(v, np.ndarray):
+#             v = v.tolist()
+#         return str(k).replace(" ", ""), str(v).replace(" ", "")
+    
+#     return dict(prep_cmd_item(k,v) for k,v in d.items())
+# 
+# 
+"""

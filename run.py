@@ -178,6 +178,8 @@ if __name__ == "__main__":
 	)
 	
 	print('aqui')
+	# from pyfig import slurm
+	# setattr(Pyfig, 'cluster', slurm)
 	c = Pyfig(wb_mode='online', arg=arg, run_sweep=False)
 	
 	run(c)
