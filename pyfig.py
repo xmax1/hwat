@@ -402,55 +402,55 @@ class Pyfig:
 		finally:
 			gc.enable()
 		
-			if ii.dist.head:
-				### 1 wait for workers to dump ###
-				n_ready = 0
-				while n_ready < ii.n_gpu:
-					k_path_all = list(ii.exchange_dir.glob(f'{step}_*')) 
-					n_ready = len(k_path_all)
-					sleep(0.02)
-
-				### 2 collect arrays ###
-				try:
-					gc.disable()
-					leaves = []
-					for p in k_path_all:
-						v_dist_i = load(p)
-						leaves += [v_dist_i]
-				except Exception as e:
-					print(e)
-				finally:
-					gc.enable()
-
-				### 3 mean arrays ###
-				v_mean = [np.stack(leaves).mean(axis=0) for leaves in zip(*leaves)]
-
-				try:
-					gc.disable()
-					for p in k_path_all:
-						dump(add_to_Path(p, '-mean'), v_mean)
-				except Exception as e:
-					print(e)
-				finally:
-					for p in k_path_all:
-						p.unlink()
-					gc.enable()
-
-			v_mean_path = add_to_Path(v_path, '-mean')
-			while v_path.exists():
-				while not v_mean_path.exists():
-					sleep(0.02)
+		if ii.dist.head:
+			### 1 wait for workers to dump ###
+			n_ready = 0
+			while n_ready < ii.n_gpu:
+				k_path_all = list(ii.exchange_dir.glob(f'{step}_*')) 
+				n_ready = len(k_path_all)
 				sleep(0.02)
+
+			### 2 collect arrays ###
+			try:
+				gc.disable()
+				leaves = []
+				for p in k_path_all:
+					v_dist_i = load(p)
+					leaves += [v_dist_i]
+			except Exception as e:
+				print(e)
+			finally:
+				gc.enable()
+
+			### 3 mean arrays ###
+			v_mean = [np.stack(leaves).mean(axis=0) for leaves in zip(*leaves)]
+
+			try:
+				gc.disable()
+				for p in k_path_all:
+					dump(add_to_Path(p, '-mean'), v_mean)
+			except Exception as e:
+				print(e)
+			finally:
+				for p in k_path_all:
+					p.unlink()
+				gc.enable()
+
+		v_mean_path = add_to_Path(v_path, '-mean')
+		while v_path.exists():
+			while not v_mean_path.exists():
+				sleep(0.02)
+			sleep(0.02)
 		try:
 			gc.disable()
 			v_sync = load(v_mean_path)  # Speed: Only load sync vars
 			v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync)
-			v_mean_path.unlink()
 		except Exception as e:
 			print(e)
 			gc.enable()
-			return v_tr
-		finally:
+			v_sync = v_tr
+		finally: # ALWAYS EXECUTED
+			v_mean_path.unlink()
 			gc.enable()
 			return v_sync
 
