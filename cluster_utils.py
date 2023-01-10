@@ -25,6 +25,11 @@ RocmCMD = dict(
 	pci_id: str = lambda _: ''.join(run_cmds('rocm-smi --query-gpu=pci.bus_id --format=csv,noheader'))
 )
 
+backend_cmd = dict(
+	cuda=CudaCMD,
+	rocm=RocmCMD
+)
+
 class nifl_slurm(Sub):
 	export			= 'ALL'
 	nodes           = '1' # (MIN-MAX) 
@@ -162,7 +167,3 @@ cluster_options = dict(
 	lumi=lumi_slurm
 )
 
-engine_cmd_options = dict(
-	cuda=CudaCMD,
-	rocm=RocmCMD
-)

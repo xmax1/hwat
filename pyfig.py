@@ -20,7 +20,9 @@ from utils import type_me
 from utils import add_to_Path, flat_any
 from utils import load, dump, cls_to_dict, dict_to_cmd
 
-import secret
+from cluster_utils import backend_cmd
+
+import proj_secrets
 
 import gc
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
@@ -177,12 +179,12 @@ class Pyfig:
 	_git_pull_cmd:      list     = ['git fetch --all', 'git reset --hard origin/main']
 
 	### User/Env Deets
-	user:               str     = secret.user
-	git_remote:         str     = secret.git_remote
-	git_branch:         str     = secret.git_branch
-	env:                str     = secret.env
-	cluster_name: 		str		= secret.cluster_name
-	backend:	 		str 	= secrets.backend
+	user:               str     = proj_secrets.user
+	git_remote:         str     = proj_secrets.git_remote
+	git_branch:         str     = proj_secrets.git_branch
+	env:                str     = proj_secrets.env
+	cluster_name: 		str		= proj_secrets.cluster_name
+	backend:	 		str 	= proj_secrets.backend
 	n_gpu:              int     = 1  					# submission devices
 
 	backend_cmd: type = backend_cmd[backend]
