@@ -48,7 +48,6 @@ import optree
 # 	for param in model.parameters():
 # 		dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
 # 		param.grad.data /= size
-		
 
 def torchify_tree(v, v_ref):
 	leaves, tree_spec = optree.tree_flatten(v)

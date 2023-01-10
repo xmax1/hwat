@@ -425,7 +425,7 @@ class Sub:
     
     @property
     def d(ii,):
-        out={} # becomes class variable in call line, accumulates
+        out = {} # becomes class variable in call line, accumulates
         for k,v in ii.__class__.__dict__.items():
             if k.startswith('_') or k in ii._ignore:
                 continue

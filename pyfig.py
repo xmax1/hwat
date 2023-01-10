@@ -1,8 +1,6 @@
 from utils import flat_any
 import inspect
 from typing import Callable, Union
-from functools import reduce, partial
-from simple_slurm import Slurm
 import wandb
 from pathlib import Path
 import sys
@@ -77,80 +75,7 @@ Examples:
 
 """
 
-class slurm(Sub):
-	# A job consists in one or more steps, each consisting in one or more tasks each using one or more CPU.
-	# mail_type       = 'FAIL'
-	export			= 'ALL'
-	nodes           = '2-2' # (MIN-MAX) 
-	mem_per_cpu     = 1024
-	cpus_per_task   = 4
-	# ntasks			= 40
-	gres            = property(lambda _: 'gpu:RTX3090:' + str(_._p.n_gpu))
-	partition       = 'sm3090'
-	# cpus_per_task   = 1
-	# ntasks_per_node = 
-	# tasks_per_gpu  = 8 
-	ntasks          = property(lambda _: _._p.n_gpu)
-	time            = '0-01:00:00'     # D-HH:MM:SS
-	output          = property(lambda _: _._p.cluster_dir/'o-%j.out')
-	error           = property(lambda _: _._p.cluster_dir/'e-%j.err')
-	job_name        = property(lambda _: _._p.exp_name)
-	# nodelist		= 's001,s005'
-
-	_job_id: 			str      = property(lambda _: os.environ['SLURM_JOBID'])
-  
-	def sbatch(
-		ii, 
-		n_gpu: int, 
-		job: dict,
-		env: str,
-		run_name: Union[Path,str] = 'run.py',
-		wandb_sweep: bool = False
-	):
-		mod = ['module purge', 'module load foss', 'module load CUDA/11.7.0']
-		env = ['source ~/.bashrc', f'conda activate {ii._p.env}',]
-		export = ['export $SLURM_JOB_ID',]
-		debug = ['echo $SLURM_JOB_GPUS', 'echo $cluster_JOB_NODELIST', 'nvidia-smi']
-		srun_cmd = 'srun --gpus=1 --cpus-per-task=4 --mem-per-cpu=1024 --ntasks=1 --exclusive --label '
-		sb = mod + env + debug
-		
-		# job = job or cls_to_dict(pyfig_cls, sub_cls=True, flat=True, ignore=ii._ignore+['sweep', 'sbatch',])
-
-		for i in range(n_gpu):
-			device_log_path = ii._p.cluster_dir/(str(i)+ii._p.hostname.split('.')[0]+"_device.log")
-			job['head'] = head = not bool(i)			
-			cmd = dict_to_cmd(job)
-
-			if wandb_sweep and head:
-				cmd = f'wandb agent {ii._p.sweep_path_id} --count 1'
-			else:
-				cmd = f'python -u {run_name} {cmd}'
-				
-			sb += [f'{srun_cmd} {cmd} 1> {device_log_path} 2>&1 & ']
-   
-		sb += ['wait',]
-		sb = '\n'.join(sb)
-		return sb
-
-	def submit(ii, job):
-		sbatch = ii.sbatch(ii._p.n_gpu, job, ii._p.env)
-		print(ii)
-		pprint.pprint(ii.__class__.__dict__)
-		d_c = cls_to_dict(ii, prop=True, ignore=ii._ignore)
-		pprint.pprint(d_c)
-		Slurm(**d_c).sbatch(sbatch)
-
 class Pyfig:
-
-	# setattr(Pyfig, 'cluster', cluster)
- 
-	# class cluster(slurm):
-	# 	def __init__(ii_sub, parent=None):
-	# 		super().__init__(parent)
-	# 		for k,v in slurm.__dict__.items():
-	# 			if not isinstance(v, (Callable, property)):
-	# 				print(k, v)
-	# 				setattr(ii_sub, k, v)
  
 	run_name:       Path        = 'run.py'
 	exp_dir:        Path	    = ''
@@ -207,10 +132,6 @@ class Pyfig:
 		program         = property(lambda _: _._p.run_dir/_._p.run_name)
 		# wandb sync wandb/dryrun-folder-name 
 
-# When using --cpus-per-task to run multithreaded tasks, be aware that CPU binding is inherited from the parent of the process. This means that the multithreaded task 
-# should either specify or clear the CPU binding itself to avoid having all threads of the multithreaded task use the same mask/CPU as the parent. Alternatively, fat masks 
-# (masks which specify more than one allowed CPU) could be used for the tasks in order to provide multiple CPUs for the multithreaded tasks.
-		
 	class dist(Sub):
 		accumulate_step     = 5
 		_dist_id: str       = ''
@@ -270,48 +191,28 @@ class Pyfig:
 		   		or f'runs/{_.exp_id}'))
 	
 	_useful = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
-
-	# wb_mode: online, disabled, offline
-	def __new__(cls, *args, **kw):
-		# PyfigCls = super().__new__(cls)
-  
-		cls.cluster = slurm
-		# super(class_name, cls).__new__(cls, *args, **kwargs)
-		return super(Pyfig, cls).__new__(cls)
-		# return super().__new__(cls, *args, **kwargs)
     
+	class cluster(Sub):
+		pass
+		
 	def __init__(ii, arg={}, wb_mode='online', submit=False, run_sweep=False, notebook=False, **kw):
-		# ii.__setattr__('cluster', slurm)
+		from cluster_utils import slurm
 
 		ii._set_debug_mode()
   
 		init_arg = dict(run_sweep=run_sweep, submit=submit, wb_mode=wb_mode) | kw
 
-		# ii.__class__.__dict__['cluster']: type = slurm
-		# super.cluster = slurm
-		# setattr(parent, 'cluster', slurm)
-		# _dummy = Pyfig
-		# setattr(_dummy, 'cluster', slurm)
-		# print(vars(_dummy))
-		
+		### unstable ###
 		print('init sub classes')
-		for k,v in Pyfig.__dict__.items():
+		for k, v in Pyfig.__dict__.items():
 			if isinstance(v, type):
-				print(v)
-				if '.Pyfig' not in str(v):
-					print('here', str(v))
-					# print(_dummy)
-					# v = getattr(_dummy, 'cluster')
-					print(v)
-					# setattr(ii, 'Pyfig.'+k, v)
-					# continue
+				if 'cluster' in k:
+					for k_attr,v_attr in slurm.__dict__.items():
+						setattr(v, k_attr, v_attr)
 				v = v(parent=ii)
 				setattr(ii, k, v)
-    
-    
-		
-		[print(k,v) for k,v in ii.__dict__.items() if isinstance(v, Sub)]
-		exit()
+		### unstable ###
+
 		print('### updating configuration ###')
 		sys_arg = cmd_to_dict(sys.argv[1:], flat_any(ii.d)) if not notebook else {}
 		ii.merge(arg | init_arg | sys_arg)
@@ -348,7 +249,9 @@ class Pyfig:
 					ii._setup_dir(group_exp=bool(i), force_new=True)
 					base_c = cls_to_dict(ii, sub_cls=True, flat=True, ignore=ii._ignore+['sweep', 'sbatch', *d.keys()])
 					job = base_c | d
-					ii.cluster.submit(job)
+					### unstable ###
+					ii.cluster._submit_to_cluster(job)
+					### unstable ###
 
 			elif ii.wandb_sweep:
 				# job_all = ii._setup_wandb_sweep()
@@ -357,7 +260,9 @@ class Pyfig:
 			else:
 				ii._setup_dir(group_exp=(ii.group_exp or ii.debug), force_new=True) # ii.group_exp
 				job = cls_to_dict(ii, sub_cls=True, flat=True, ignore=ii._ignore+['sweep', 'sbatch',])
-				ii.cluster.submit(job)
+				### unstable ###
+				ii.cluster._submit_to_cluster(job)
+				### unstable ###
 
 			ii._debug_log([dict(os.environ.items()), ii.d], ['dump/tmp/env.log', 'dump/tmp/d.log',])
 			sys.exit(ii._wandb_run_url)
@@ -525,13 +430,28 @@ class Pyfig:
 		return [dict() for i in range(n_sweep)]
 		
 	def log(ii, info: Union[dict,str], create=False, path='dump/tmp/log.tmp'):
+		mkdir(path)
 		mode = 'w' if create else 'a'
 		info = pprint.pformat(info)
 		with open(path, mode) as f:
 			f.writelines(info)
-
-# setattr(Pyfig, 'cluster', slurm)
-
+   
+# class slurm(Sub):
+# 		# A job consists in one or more steps, each consisting in one or more tasks each using one or more CPU.
+# 		mail_type       = 'FAIL'
+# 		partition       ='sm3090'
+# 		export			= 'ALL'
+# 		nodes           = '1' # (MIN-MAX) 
+# 		cpus_per_task   = 4
+# 		mem_per_cpu     = 1024
+# 		ntasks          = property(lambda _: _._p.n_gpu)
+# 		time            = '0-01:00:00'     # D-HH:MM:SS
+# 		partition       = 'sm3090'
+# 		gres            = property(lambda _: 'gpu:RTX3090:' + str(_._p.n_gpu))
+# 		output          = property(lambda _: _._p.slurm_dir/'o-%j.out')
+# 		error           = property(lambda _: _._p.slurm_dir/'e-%j.err')
+# 		job_name        = property(lambda _: _._p.exp_name)
+# 		# nodelist		= 's001,s005'
 """ Bone Zone
 
 		# if ii.distribute:
