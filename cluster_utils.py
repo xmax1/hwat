@@ -17,15 +17,48 @@ from utils import run_cmds
 # class RocmCMD:
 #     
 
+# sinfo -p cluster
+# groups
+# sbalance
+# sreport -t hours cluster AccountUtilization account=project_465000153
+# sbatch - submit a batch script
+# salloc - allocate compute resources
+# srun - allocate compute resources and launch job-steps
+# squeue - check the status of running and/or pending jobs
+# scancel - delete jobs from the queue
+# sinfo - view intormation abount cluster nodes and partitions
+# scontrol - show detailed information on active and/or recently completed jobs, nodes and partitions
+# sacct - provide the accounting information on running and completed jobs
+# slurmtop - text-based view of cluster nodes' free and in-use resources and status of jobs
+
+# Based on available resources and in keeping with maintaining a fair balance between all users, we may sometimes be able to accommodate special needs for a limited time. In that case, please submit a short explanation to cluster-help@luis.uni-hannover.de.
+
+# To list job limits relevant for you, use the sacctmgr command:
+
+# sacctmgr -s show user
+# sacctmgr -s show user adwilson (works on lumi)
+# sacctmgr -s show user format=user,account,maxjobs,maxsubmit,maxwall,qos
+# sacctmgr -s show user zailacka
+
+
+# Up-to-date information on ALL available nodes:
+
+#  sinfo -Nl
+#  scontrol show nodes
+# Information on partitons and their configuration:
+
+#  sinfo -s
+#  scontrol show partitions
+
 CudaCMD = dict(
-	pci_id: str = lambda _: ''.join(run_cmds('nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'))
+	pci_id=lambda _: ''.join(run_cmds('nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'))
 )
 
 RocmCMD = dict(
-	pci_id: str = lambda _: ''.join(run_cmds('rocm-smi --query-gpu=pci.bus_id --format=csv,noheader'))
+	pci_id=lambda _: ''.join(run_cmds('rocm-smi --query-gpu=pci.bus_id --format=csv,noheader'))
 )
 
-backend_cmd = dict(
+backend_cmd_all = dict(
 	cuda=CudaCMD,
 	rocm=RocmCMD
 )
@@ -86,13 +119,17 @@ class nifl_slurm(Sub):
 		d_c = cls_to_dict(ii, prop=True, ignore=ii._ignore)
 		Slurm(**d_c).sbatch(sbatch)
   
+  
+#  standard-g: max 1024 GPU nodes, max runtime 48 hours. Exclusive mode, i.e., full nodes reserved.
+#  small-g: max 4 GPU nodes, max runtime 72 hours. Possibility of allocating individual GPUs.
+#  dev-g: max 16 GPU nodes, max runtime 6 hours.
 class lumi_slurm(Sub):
 	export			= 'ALL'
 	nodes           = '1' # (MIN-MAX) 
 	mem_per_cpu     = 1024
 	cpus_per_task   = 4
 	gres            = property(lambda _: 'gpu:RTX3090:' + str(_._p.n_gpu))
-	partition       = 'eap'
+	partition       = 'dev-g'
 	ntasks          = property(lambda _: _._p.n_gpu)
 	time            = '0-00:10:00'     # D-HH:MM:SS
 	output          = property(lambda _: _._p.cluster_dir/'o-%j.out')
@@ -158,7 +195,6 @@ class lumi_slurm(Sub):
 
 	def _submit_to_cluster(ii, job):
 		sbatch = ii._sbatch(job)
-		pprint.pprint(ii.__class__.__dict__)
 		d_c = cls_to_dict(ii, prop=True, ignore=ii._ignore)
 		Slurm(**d_c).sbatch(sbatch)
   

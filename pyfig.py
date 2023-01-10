@@ -20,7 +20,7 @@ from utils import type_me
 from utils import add_to_Path, flat_any
 from utils import load, dump, cls_to_dict, dict_to_cmd
 
-from cluster_utils import backend_cmd
+from cluster_utils import backend_cmd_all
 
 import proj_secrets
 
@@ -133,7 +133,7 @@ class Pyfig:
 	class wandb_c(Sub):
 		job_type        = 'debug'
 		entity          = property(lambda _: _._p.project)
-		program         = property(lambda _: _._p.run_dir/_._p.run_name)
+		program         = property(lambda _: Path(_._p.run_dir,_._p.run_name))
 		# wandb sync wandb/dryrun-folder-name 
 
 	class dist(Sub):
@@ -187,9 +187,9 @@ class Pyfig:
 	backend:	 		str 	= proj_secrets.backend
 	n_gpu:              int     = 1  					# submission devices
 
-	backend_cmd: type = backend_cmd[backend]
+	backend_cmd: type = backend_cmd_all[backend]
 
-	pci_id: str = property(lambda _: backend_cmd['pci_id'])
+	pci_id: str = property(lambda _: _.backend_cmd['pci_id'])
 	### things that should be put somewhere better
 	# slurm
 	_n_job_running: int = \
