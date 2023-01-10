@@ -146,7 +146,7 @@ class Pyfig:
 		mail_type       = 'FAIL'
 		partition       ='sm3090'
 		export			= 'ALL'
-		nodes           = '1-1' # (MIN-MAX) 
+		nodes           = '1' # (MIN-MAX) 
 		cpus_per_task   = 4
 		mem_per_cpu     = 1024
 		ntasks          = property(lambda _: _._p.n_gpu)
@@ -156,6 +156,7 @@ class Pyfig:
 		output          = property(lambda _: _._p.slurm_dir/'o-%j.out')
 		error           = property(lambda _: _._p.slurm_dir/'e-%j.err')
 		job_name        = property(lambda _: _._p.exp_name)
+		# nodelist		= 's001,s005'
 		
 	class dist(Sub):
 		accumulate_step     = 5
@@ -393,7 +394,12 @@ class Pyfig:
 				v_mean_path = add_to_Path(v_path, '-mean')
 				while not v_mean_path.exists():
 					sleep(0.02)
-
+		except Exception as e:
+			print(e)
+		finally:
+			gc.enable()
+		try:
+			gc.disable()
 			v_sync = load(v_mean_path)  # Speed: Only load sync vars
 			v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync)
 			v_mean_path.unlink()
