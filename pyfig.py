@@ -163,8 +163,8 @@ class Pyfig:
 	wandb_sweep: 		bool	= False
 	group_exp: 			bool	= False
 	
-	debug:              bool     = False
 	wb_mode:            str      = 'disabled'
+	debug:              bool     = False
 	submit:             bool     = False
 	cap:                int      = 40
 
@@ -173,12 +173,11 @@ class Pyfig:
 	_git_pull_cmd:      list     = ['git fetch --all', 'git reset --hard origin/main']
 
 	### User/Env Deets
-	user:               str     = 'amawi'           	# SERVER
-	server:             str     = 'svol.fysik.dtu.dk'   # SERVER
-	git_remote:         str     = 'origin'      
-	git_branch:         str     = 'main'        
-	env:                str     = 'lumi'                # CONDA ENV
-	cluster_name: 		str		= 'lumi'
+	user:               str     = secret.user
+	git_remote:         str     = secret.git_remote
+	git_branch:         str     = secret.git_branch
+	env:                str     = secret.env
+	cluster_name: 		str		= secret.cluster_name
 	n_gpu:              int      = 1  					# submission devices
 	# device_type: str = 'cuda'  # rocm
 
