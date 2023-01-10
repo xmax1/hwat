@@ -12,16 +12,16 @@ from time import sleep, time
 import optree
 from copy import deepcopy
 
+from utils import Sub
 from utils import get_cartesian_product
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum
 from utils import mkdir, cmd_to_dict, dict_to_wandb, iterate_n_dir
 from utils import type_me
-from utils import Sub
 from utils import add_to_Path, flat_any
-
 from utils import load, dump, cls_to_dict, dict_to_cmd
 
-from dump.user import user
+import secret
+
 import gc
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 
@@ -49,6 +49,10 @@ docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 """
 
 """ Pyfig Docs
+### NEED BEFORE
+- wandb api key 
+- change secrets file
+
 ### Usage 10/1/23
 - python run.py
 
