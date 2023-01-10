@@ -11,7 +11,7 @@ from copy import copy
 import numpy as np
 import os
 import re
-from time import sleep
+from time import sleep, time
 import optree
 from copy import deepcopy
 import deepdish as dd
@@ -51,6 +51,16 @@ docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 """
 
 """ Pyfig Docs
+### Usage 10/1/23
+- python run.py 
+- python run.py --submit --n_gpu 2 
+- python run.py --submit --run_sweep --n_gpu 2
+
+Notes:
+- --debug flag to print logs to dump/tmp
+
+
+
 ### What can you do 
 
 ### Issues 
@@ -223,8 +233,7 @@ class Pyfig:
 
 	# wb_mode: online, disabled, offline
 	def __init__(ii, arg={}, wb_mode='online', submit=False, run_sweep=False, notebook=False, **kw):
-		
-		# ii.log(dict(os.environ.items()), create=True, log_name='env.log')
+		ii._set_debug_mode()
   
 		init_arg = dict(run_sweep=run_sweep, submit=submit, wb_mode=wb_mode) | kw
 	
@@ -258,7 +267,8 @@ class Pyfig:
 						id          = ii.exp_id,
 						settings    = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
 					)
-			ii.log(ii.d, create=True, log_name='post_init_d.log')
+
+			ii._debug_log([dict(os.environ.items()), ii.d,], ['env.log', 'd.log',])
 		
 		if ii.submit:
 			print(f'### running on slurm ###')
@@ -277,10 +287,25 @@ class Pyfig:
 				raise NotImplementedError
 
 			else:
-				sbatch = ii._sbatch()
+				ii._setup_dir(group_exp=(ii.group_exp or ii.debug), force_new=True) # ii.group_exp
+				base_c = get_cls_dict(ii, sub_cls=True, flat=True, 
+						ignore=ii._ignore+['sweep', 'sbatch',])
+				sbatch = ii._sbatch(base_c)
 				Slurm(**ii.slurm.d).sbatch(sbatch)
-			sys.exit(ii._wandb_run_url)
 
+			ii._debug_log([dict(os.environ.items()), ii.d, sbatch], ['dump/tmp/env.log', 'dump/tmp/d.log', 'dump/tmp/sbatch.log'])
+			sys.exit(ii._wandb_run_url)
+	
+	def _set_debug_mode(ii):
+		ii.group_exp = ii.debug # force single exps into single folder for neatness
+
+	def _debug_log(ii, d_all:list, p_all: list):
+		if ii.debug:
+			d_all = d_all if isinstance(d_all, list) else [d_all]
+			p_all = p_all if isinstance(p_all, list) else [p_all]
+			for d, p in zip(d_all, p_all):
+				ii.log(d, create=True, path=p)
+			
 	@property
 	def cmd(ii):
 		d = get_cls_dict(ii, sub_cls=True, flat=True, ignore=ii._ignore + ['sweep', 'head',])
@@ -290,6 +315,9 @@ class Pyfig:
 	def d(ii):
 		return get_cls_dict(ii, sub_cls=True, prop=True, ignore=ii._ignore)
 
+	def _time_id(ii, n=7):
+		return str(round(time() * 1000))[-n:]
+
 	def _setup_dir(ii, group_exp=False, force_new=False):
 		if ii.exp_dir and not force_new:
 			return None
@@ -297,7 +325,7 @@ class Pyfig:
 		exp_group_dir = Path(ii.dump_exp_dir, 'sweep'*ii.run_sweep, exp_name)
 		exp_group_dir = iterate_n_dir(exp_group_dir, group_exp=group_exp)
 		ii.exp_name = exp_group_dir.name
-		ii.exp_id = (~force_new)*ii.exp_id or gen_alphanum(7)
+		ii.exp_id = (~force_new)*ii.exp_id or ii._time_id(7)
 		ii.exp_dir = exp_group_dir/ii.exp_id
 		[mkdir(ii.exp_dir/_dir) for _dir in ['slurm', 'exchange', 'wandb']]
   
@@ -369,7 +397,11 @@ class Pyfig:
 			v_path = (ii.exchange_dir / f'{step}_{ii.dist._dist_id}').with_suffix('.pk')
 			v, treespec = optree.tree_flatten(deepcopy(v_tr))
 			dump(v_path, v)
-   
+		except Exception as e:
+			print(e)
+		finally:
+			gc.enable()
+		
 			if ii.dist.head:
 				### 1 wait for workers to dump ###
 				n_ready = 0
@@ -379,27 +411,35 @@ class Pyfig:
 					sleep(0.02)
 
 				### 2 collect arrays ###
-				leaves = []
-				for p in k_path_all:
-					v_dist_i = load(p)
-					leaves += [v_dist_i]
-		
+				try:
+					leaves = []
+					for p in k_path_all:
+						v_dist_i = load(p)
+						leaves += [v_dist_i]
+				except Exception as e:
+					print(e)
+				finally:
+					gc.enable()
+
 				### 3 mean arrays ###
 				v_mean = [np.stack(leaves).mean(axis=0) for leaves in zip(*leaves)]
-				[dump(add_to_Path(p, '-mean'), v_mean) for p in k_path_all]
+
+				try:
+					for p in k_path_all:
+						dump(add_to_Path(p, '-mean'), v_mean)
+				except Exception as e:
+					print(e)
+				finally:
+					gc.enable()
 
 				### 4 remove the variables ###
 				[p.unlink() for p in k_path_all]
-
-				v_mean_path = add_to_Path(v_path, '-mean')
-				while not v_mean_path.exists():
-					sleep(0.02)
-		except Exception as e:
-			print(e)
-		finally:
-			gc.enable()
+   
 		try:
 			gc.disable()
+			v_mean_path = add_to_Path(v_path, '-mean')
+			while not v_mean_path.exists():
+				sleep(0.02)
 			v_sync = load(v_mean_path)  # Speed: Only load sync vars
 			v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync)
 			v_mean_path.unlink()
@@ -440,12 +480,11 @@ class Pyfig:
 		# command = ['$\{env\}', 'python -u', '$\{program\}', '$\{args\}', f'--sweep_id_pseudo={ii.exp_id}']
 		return [dict() for i in range(n_sweep)]
 		
-	def log(ii, info: Union[dict,str], create=False, log_name='dump/log.tmp'):
+	def log(ii, info: Union[dict,str], create=False, path='dump/tmp/log.tmp'):
 		mode = 'w' if create else 'a'
 		info = pprint.pformat(info)
-		for p in [Path(ii.exp_dir, log_name), ]:
-			with open(p, mode) as f:
-				f.writelines(info)
+		with open(path, mode) as f:
+			f.writelines(info)
 
 def get_cls_dict(
 		cls,
