@@ -412,6 +412,7 @@ class Pyfig:
 
 				### 2 collect arrays ###
 				try:
+					gc.disable()
 					leaves = []
 					for p in k_path_all:
 						v_dist_i = load(p)
@@ -425,29 +426,33 @@ class Pyfig:
 				v_mean = [np.stack(leaves).mean(axis=0) for leaves in zip(*leaves)]
 
 				try:
+					gc.disable()
 					for p in k_path_all:
 						dump(add_to_Path(p, '-mean'), v_mean)
 				except Exception as e:
 					print(e)
 				finally:
+					for p in k_path_all:
+						p.unlink()
 					gc.enable()
 
-				### 4 remove the variables ###
-				[p.unlink() for p in k_path_all]
-   
+			v_mean_path = add_to_Path(v_path, '-mean')
+			while v_path.exists():
+				while not v_mean_path.exists():
+					sleep(0.02)
+				sleep(0.02)
 		try:
 			gc.disable()
-			v_mean_path = add_to_Path(v_path, '-mean')
-			while not v_mean_path.exists():
-				sleep(0.02)
 			v_sync = load(v_mean_path)  # Speed: Only load sync vars
 			v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync)
 			v_mean_path.unlink()
 		except Exception as e:
 			print(e)
+			gc.enable()
+			return v_tr
 		finally:
 			gc.enable()
-		return v_sync
+			return v_sync
 
 	@property
 	def _sub_cls(ii) -> dict:
