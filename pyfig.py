@@ -158,14 +158,15 @@ class Pyfig:
 	run_sweep:          bool    = False	
 	wandb_sweep: 		bool	= False
 	group_exp: 			bool	= False
-	user:               str     = 'amawi'           # SERVER
+	
+	user:               str     = 'amawi'           	# SERVER
 	server:             str     = 'svol.fysik.dtu.dk'   # SERVER
 	git_remote:         str     = 'origin'      
 	git_branch:         str     = 'main'        
 	env:                str     = 'lumi'                 # CONDA ENV
 	
-	debug:              bool     = False
 	wb_mode:            str      = 'disabled'
+	debug:              bool     = False
 	submit:             bool     = False
 	cap:                int      = 40
 

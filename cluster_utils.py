@@ -66,6 +66,5 @@ class slurm(Sub):
 
 	def _submit_to_cluster(ii, job):
 		sbatch = ii._sbatch(job)
-		pprint.pprint(ii.__class__.__dict__)
 		d_c = cls_to_dict(ii, prop=True, ignore=ii._ignore)
 		Slurm(**d_c).sbatch(sbatch)
