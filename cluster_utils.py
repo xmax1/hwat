@@ -5,15 +5,24 @@ import pprint
 from utils import dict_to_cmd, cls_to_dict
 from simple_slurm import Slurm
 import os
-
-
+from utils import run_cmds
 
 # When using --cpus-per-task to run multithreaded tasks, be aware that CPU binding is inherited from the parent of the process. This means that the multithreaded task 
 # should either specify or clear the CPU binding itself to avoid having all threads of the multithreaded task use the same mask/CPU as the parent. Alternatively, fat masks 
 # (masks which specify more than one allowed CPU) could be used for the tasks in order to provide multiple CPUs for the multithreaded tasks.
-cluster_options = dict(
-	nifl=nifl_slurm
-	lumi=lumi_slurm
+
+# class CudaCMD:
+#     pci_id: str = property(lambda _: ''.join(run_cmds('nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader')))
+
+# class RocmCMD:
+#     
+
+CudaCMD = dict(
+	pci_id: str = lambda _: ''.join(run_cmds('nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'))
+)
+
+RocmCMD = dict(
+	pci_id: str = lambda _: ''.join(run_cmds('rocm-smi --query-gpu=pci.bus_id --format=csv,noheader'))
 )
 
 class nifl_slurm(Sub):
@@ -84,7 +93,7 @@ class lumi_slurm(Sub):
 	output          = property(lambda _: _._p.cluster_dir/'o-%j.out')
 	error           = property(lambda _: _._p.cluster_dir/'e-%j.err')
 	job_name        = property(lambda _: _._p.exp_name)
-	account			= project_465000153
+	account			= 'project_465000153'
  
 	#SBATCH --ntasks=4
 	#SBATCH --ntasks-per-node=8
@@ -147,3 +156,13 @@ class lumi_slurm(Sub):
 		pprint.pprint(ii.__class__.__dict__)
 		d_c = cls_to_dict(ii, prop=True, ignore=ii._ignore)
 		Slurm(**d_c).sbatch(sbatch)
+  
+cluster_options = dict(
+	nifl=nifl_slurm,
+	lumi=lumi_slurm
+)
+
+engine_cmd_options = dict(
+	cuda=CudaCMD,
+	rocm=RocmCMD
+)

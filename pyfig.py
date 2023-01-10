@@ -148,7 +148,6 @@ class Pyfig:
 
 	project:            str     = property(lambda _: 'hwat')
 	project_dir:        Path    = property(lambda _: Path().home() / 'projects' / _.project)
-	server_project_dir: Path    = property(lambda _: _.project_dir.relative_to(Path().home()))
 	dump:               str     = property(lambda _: Path('dump'))
 	dump_exp_dir: 		Path 	= property(lambda _: _.dump/'exp')
 	TMP:                Path    = property(lambda _: _.dump/'tmp')
@@ -156,11 +155,12 @@ class Pyfig:
 	cluster_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'cluster'))
 	exchange_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exchange'))
 	
-	run_dir:            Path    = property(lambda _: Path(__file__).parent.relative_to(Path().home()))
+	run_dir:            Path    = property(lambda _: _.project)
+	# run_dir:            Path    = property(lambda _: Path(__file__).parent.relative_to(Path().home()))
+
 	sweep_path_id:      str     = property(lambda _: (f'{_.wandb_c.entity}/{_.project}/{_.exp_name}')*bool(_.exp_name))
 
 	hostname: 			str      = property(lambda _: _._static.setdefault('hostname', run_cmds('hostname')))
-	pci_id:            str      = property(lambda _: ''.join(run_cmds('nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader')))
 	n_device:           int      = property(lambda _: count_gpu())
 
 	run_sweep:          bool    = False	
@@ -182,9 +182,12 @@ class Pyfig:
 	git_branch:         str     = secret.git_branch
 	env:                str     = secret.env
 	cluster_name: 		str		= secret.cluster_name
-	n_gpu:              int      = 1  					# submission devices
-	# device_type: str = 'cuda'  # rocm
+	backend:	 		str 	= secrets.backend
+	n_gpu:              int     = 1  					# submission devices
 
+	backend_cmd: type = backend_cmd[backend]
+
+	pci_id: str = property(lambda _: backend_cmd['pci_id'])
 	### things that should be put somewhere better
 	# slurm
 	_n_job_running: int = \
@@ -444,23 +447,7 @@ class Pyfig:
 		info = pprint.pformat(info)
 		with open(path, mode) as f:
 			f.writelines(info)
-   
-# class slurm(Sub):
-# 		# A job consists in one or more steps, each consisting in one or more tasks each using one or more CPU.
-# 		mail_type       = 'FAIL'
-# 		partition       ='sm3090'
-# 		export			= 'ALL'
-# 		nodes           = '1' # (MIN-MAX) 
-# 		cpus_per_task   = 4
-# 		mem_per_cpu     = 1024
-# 		ntasks          = property(lambda _: _._p.n_gpu)
-# 		time            = '0-01:00:00'     # D-HH:MM:SS
-# 		partition       = 'sm3090'
-# 		gres            = property(lambda _: 'gpu:RTX3090:' + str(_._p.n_gpu))
-# 		output          = property(lambda _: _._p.slurm_dir/'o-%j.out')
-# 		error           = property(lambda _: _._p.slurm_dir/'e-%j.err')
-# 		job_name        = property(lambda _: _._p.exp_name)
-# 		# nodelist		= 's001,s005'
+
 """ Bone Zone
 
 		# if ii.distribute:
