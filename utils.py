@@ -30,14 +30,14 @@ def exit_handler():
 	try:
 		run_cmds(f'scancel {os.environ["SLURM_JOBID"]}')
 	except Exception as e:
-		print('')
+		print('Exiting via the handler, run_cmd did not work')
+    
 atexit.register(exit_handler)
 
 ### data save and load
 import pickle as pk
 import yaml
 import json
-import deepdish as dd
 
 file_interface_all = dict(
 	pk = dict(
@@ -52,10 +52,10 @@ file_interface_all = dict(
 		r = json.load,
 		w = json.dump,
 	),
-	deepdish = dict(
-		r = dd.io.load,
-		w = dd.io.save,
-	),
+	# deepdish = dict(
+	# 	r = dd.io.load,
+	# 	w = dd.io.save,
+	# ),
 )      
 
 def data_lo_ve(path:Path, data=None):

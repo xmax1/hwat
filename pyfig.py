@@ -1,4 +1,3 @@
-from utils import flat_any
 import inspect
 from typing import Callable, Union
 import wandb
@@ -12,14 +11,13 @@ import re
 from time import sleep, time
 import optree
 from copy import deepcopy
-import deepdish as dd
 
 from utils import get_cartesian_product
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum
 from utils import mkdir, cmd_to_dict, dict_to_wandb, iterate_n_dir
 from utils import type_me
 from utils import Sub
-from utils import add_to_Path
+from utils import add_to_Path, flat_any
 
 from utils import load, dump, cls_to_dict, dict_to_cmd
 
@@ -133,13 +131,16 @@ class Pyfig:
 		# wandb sync wandb/dryrun-folder-name 
 
 	class dist(Sub):
-		accumulate_step     = 5
 		_dist_id: str       = ''
+		accumulate_step     = 5
 		head: bool          = True
 		gpu_id: str         = property(lambda _: \
 			''.join(run_cmds('nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader')).split('.')[0]
 		)
 		_sync: list          = ['grads',]
+
+	class cluster(Sub):
+		pass
 
 	project:            str     = property(lambda _: 'hwat')
 	project_dir:        Path    = property(lambda _: Path().home() / 'projects' / _.project)
@@ -149,60 +150,65 @@ class Pyfig:
 	TMP:                Path    = property(lambda _: _.dump/'tmp')
 	
 	cluster_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'cluster'))
-	exchange_dir: 		Path    = property(lambda _: Path(_.exp_dir,'exchange'))
+	exchange_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exchange'))
 	
 	run_dir:            Path    = property(lambda _: Path(__file__).parent.relative_to(Path().home()))
 	sweep_path_id:      str     = property(lambda _: (f'{_.wandb_c.entity}/{_.project}/{_.exp_name}')*bool(_.exp_name))
-		
-	n_device:           int     = property(lambda _: count_gpu())
+
+	hostname: 			str      = property(lambda _: _._static.setdefault('hostname', run_cmds('hostname')))
+	pci_id:            str      = property(lambda _: ''.join(run_cmds('nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader')))
+	n_device:           int      = property(lambda _: count_gpu())
+
 	run_sweep:          bool    = False	
 	wandb_sweep: 		bool	= False
 	group_exp: 			bool	= False
-	user:               str     = 'amawi'           # SERVER
-	server:             str     = 'svol.fysik.dtu.dk'   # SERVER
-	git_remote:         str     = 'origin'      
-	git_branch:         str     = 'main'        
-	env:                str     = 'lumi'                 # CONDA ENV
 	
 	debug:              bool     = False
 	wb_mode:            str      = 'disabled'
 	submit:             bool     = False
 	cap:                int      = 40
 
-	n_gpu:              int      = 1  # submission devices
-	
 	commit_id           = property(lambda _: run_cmds('git log --pretty=format:%h -n 1', cwd=_.project_dir))
-	hostname: str       = property(lambda _: _._static.setdefault('hostname', run_cmds('hostname')))
-	_n_job_running: int = property(lambda _: len(run_cmds('squeue -u amawi -t pending,running -h -r', cwd='.').split('\n')))
-	
-	# device_type: str = 'cuda'  # rocm
-	_pci_id:            str      = property(lambda _: ''.join(run_cmds('nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader')))
 	_git_commit_cmd:    list     = 'git commit -a -m "run"' # !NB no spaces in msg 
 	_git_pull_cmd:      list     = ['git fetch --all', 'git reset --hard origin/main']
-	_sys_arg:           list     = sys.argv[1:]
-	_ignore:            list     = ['d', 'cmd', 'partial', 'lo_ve', 'log', 'merge', 'accumulate', '_static']
-	_wandb_ignore:      list     = ['sbatch', 'sweep']
-	_static: 			dict     = dict()
-	# _end_this_job: 		str	     = property(lambda _: ''.join(run_cmds(f'scancel {_._job_id}')))
+
+	### User/Env Deets
+	user:               str     = 'amawi'           	# SERVER
+	server:             str     = 'svol.fysik.dtu.dk'   # SERVER
+	git_remote:         str     = 'origin'      
+	git_branch:         str     = 'main'        
+	env:                str     = 'lumi'                # CONDA ENV
+	cluster_name: 		str		= 'lumi'
+	n_gpu:              int      = 1  					# submission devices
+	# device_type: str = 'cuda'  # rocm
+
+	### things that should be put somewhere better
+	# slurm
+	_n_job_running: int = \
+		property(lambda _: len(run_cmds('squeue -u amawi -t pending,running -h -r', cwd='.').split('\n')))
+	# wandb
 	_wandb_run_url = property(lambda _: 
 			f'https://wandb.ai/{_.wandb_c.entity}/{_.project}/' \
    				+(_.wandb_sweep*('sweeps/'+_.exp_name) 
 		 		or _.run_sweep*f'groups/{_.exp_name}' 
 		   		or f'runs/{_.exp_id}'))
-	
+	_wandb_ignore:      list     = ['sbatch', 'sweep']
+	# commands
 	_useful = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
-    
-	class cluster(Sub):
-		pass
-		
-	def __init__(ii, arg={}, wb_mode='online', submit=False, run_sweep=False, notebook=False, **kw):
-		from cluster_utils import slurm
+	_end_this_job:	str = property(lambda _: ''.join(run_cmds(f'scancel {_.cluster._job_id}')))
 
+	### these are left alone by pyfig ops
+	_ignore:            list     = ['d', 'cmd', 'partial', 'lo_ve', 'log', 'merge', 'accumulate', '_static']
+	_static: 			dict     = dict() # allows single execution properties
+
+	def __init__(ii, arg={}, wb_mode='online', submit=False, run_sweep=False, notebook=False, **kw):
 		ii._set_debug_mode()
   
 		init_arg = dict(run_sweep=run_sweep, submit=submit, wb_mode=wb_mode) | kw
 
 		### unstable ###
+		from cluster_utils import cluster_options
+		slurm = cluster_options[ii.cluster_name]
 		print('init sub classes')
 		for k, v in Pyfig.__dict__.items():
 			if isinstance(v, type):
@@ -299,7 +305,7 @@ class Pyfig:
 		ii.exp_id = (~force_new)*ii.exp_id or ii._time_id(7)
 		ii.exp_dir = exp_group_dir/ii.exp_id
 		[mkdir(ii.exp_dir/_dir) for _dir in ['cluster', 'exchange', 'wandb']]
-  
+
 	def _get_pyfig_sweep(ii):
 		d = deepcopy(ii.sweep.d)
 		sweep_keys = list(d['parameters'].keys())
@@ -307,7 +313,7 @@ class Pyfig:
 		sweep_vals = get_cartesian_product(*sweep_vals)
 		print(f'### sweep over {sweep_keys} ({len(sweep_vals)} total) ###')
 		return [{k:v for k,v in zip(sweep_keys, v_set)} for v_set in sweep_vals]
-	
+
 	def partial(ii, f:Callable, args=None, **kw):
 		d = flat_any(args if args else ii.d)
 		d_k = inspect.signature(f.__init__).parameters.keys()
