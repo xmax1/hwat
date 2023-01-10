@@ -187,9 +187,10 @@ class Pyfig:
 	backend:	 		str 	= proj_secrets.backend
 	n_gpu:              int     = 1  					# submission devices
 
-	backend_cmd: type = backend_cmd_all[backend]
-
-	pci_id: str = property(lambda _: _.backend_cmd['pci_id'])
+	# backend_cmd: type = backend_cmd_all[backend]
+	# pci_id: str = property(lambda _: _.backend_cmd['pci_id'])
+ 
+	pci_id = property(lambda _: ''.join(run_cmds('nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader')))
 	### things that should be put somewhere better
 	# slurm
 	_n_job_running: int = \
@@ -217,6 +218,7 @@ class Pyfig:
 		### unstable ###
 		from cluster_utils import cluster_options
 		slurm = cluster_options[ii.cluster_name]
+		print(slurm)
 		print('init sub classes')
 		for k, v in Pyfig.__dict__.items():
 			if isinstance(v, type):

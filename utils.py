@@ -30,7 +30,7 @@ def exit_handler():
 	try:
 		run_cmds(f'scancel {os.environ["SLURM_JOBID"]}')
 	except Exception as e:
-		print('Exiting via the handler, run_cmd did not work')
+		print('Exiting boop beep bap.')
     
 atexit.register(exit_handler)
 

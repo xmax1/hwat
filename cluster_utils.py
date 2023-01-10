@@ -2,10 +2,9 @@ from utils import Sub
 from typing import Union
 from pathlib import Path
 import pprint
-from utils import dict_to_cmd, cls_to_dict
+from utils import dict_to_cmd, cls_to_dict, run_cmds
 from simple_slurm import Slurm
 import os
-from utils import run_cmds
 
 # When using --cpus-per-task to run multithreaded tasks, be aware that CPU binding is inherited from the parent of the process. This means that the multithreaded task 
 # should either specify or clear the CPU binding itself to avoid having all threads of the multithreaded task use the same mask/CPU as the parent. Alternatively, fat masks 
