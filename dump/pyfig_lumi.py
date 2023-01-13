@@ -11,7 +11,7 @@ import re
 from time import sleep, time
 import optree
 from copy import deepcopy
-from cluster_util import cluster_options
+from pyfig_util import cluster_options, PyfigBase
 
 from utils import Sub
 from utils import get_cartesian_product
@@ -21,10 +21,29 @@ from utils import type_me
 from utils import add_to_Path, flat_any
 from utils import load, dump, cls_to_dict, dict_to_cmd
 
-from cluster_util import backend_cmd_all
-import proj_secrets
+import user_secret
 
 import gc
+
+
+""" 
+System
+n_e = \sum_i charge_nuclei_i - charge = n_e
+spin = n_u - n_d
+n_e = n_u + n_d
+n_u = 1/2 ( spin + n_e ) = 1/2 ( spin +  \sum_i charge_nuclei_i - charge)
+
+
+"""
+
+""" pyfig
+wandb
+wandb sync wandb/dryrun-folder-name    # to sync data stored offline
+
+
+"""
+
+
 
 """
 ### Alert
@@ -78,7 +97,7 @@ Examples:
 
 """
 
-class Pyfig:
+class Pyfig(PyfigBase):
  
 	run_name:       Path        = 'run.py'
 	exp_dir:        Path	    = ''
@@ -171,18 +190,18 @@ class Pyfig:
 	_git_pull_cmd:      list     = ['git fetch --all', 'git reset --hard origin/main']
 
 	### User/Env Deets
-	user:               str     = proj_secrets.user
-	git_remote:         str     = proj_secrets.git_remote
-	git_branch:         str     = proj_secrets.git_branch
-	env:                str     = proj_secrets.env
-	cluster_name: 		str		= proj_secrets.cluster_name
-	backend:	 		str 	= proj_secrets.backend
+	user:               str     = user_secret.user
+	git_remote:         str     = user_secret.git_remote
+	git_branch:         str     = user_secret.git_branch
+	env:                str     = user_secret.env
+	cluster_name: 		str		= user_secret.cluster_name
+	backend:	 		str 	= user_secret.backend
 	n_gpu:              int     = 1  					# submission devices
 
 	# backend_cmd: type = backend_cmd_all[backend]
 	# pci_id: str = property(lambda _: _.backend_cmd['pci_id'])
  
-	pci_id = property(lambda _: ''.join(run_cmds('nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader')))
+	pci_id = property(lambda _: ''.join(run_cmds()))
 	### things that should be put somewhere better
 	# slurm
 	_n_job_running: int = \
@@ -203,7 +222,7 @@ class Pyfig:
 	_static: 			dict     = dict() # allows single execution properties
 
 	def __init__(ii, arg={}, wb_mode='online', submit=False, run_sweep=False, notebook=False, **kw):
-		ii._set_debug_mode()
+		super().__init__()
   
 		init_arg = dict(run_sweep=run_sweep, submit=submit, wb_mode=wb_mode) | kw
 
