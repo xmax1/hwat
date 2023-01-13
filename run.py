@@ -67,7 +67,7 @@ def run(c: Pyfig):
 	torch.manual_seed(c.seed)
 	torch.set_default_tensor_type(torch.DoubleTensor)   # ❗ Ensure works when default not set AND can go float32 or 64
 	
-	n_device = c.n_device
+	n_device = c.resources.n_device
 	print(f'🤖 {n_device} GPUs available')
 
 	### model (aka Trainmodel) ### 
@@ -77,7 +77,7 @@ def run(c: Pyfig):
 	_dummy = torch.randn((1,))
 	dtype = _dummy.dtype
 	device = 'cuda' if torch.cuda.is_available() else 'cpu'
-	c._convert(device=device, dtype=dtype)
+	c.to_torch(device=device, dtype=dtype)
 	model: nn.Module = c.partial(Ansatz_fb).to(device).to(dtype)
 
 	### train step ###

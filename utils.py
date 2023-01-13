@@ -508,11 +508,11 @@ class PyfigBase:
 		remote:     str     = 'origin' 
   
 		commit_id_cmd:	str 	= 'git log --pretty=format:%h -n 1'
-		commit_id:   	list	= property(lambda _: run_cmds(_.commit_id_cmd, cwd=_.project_dir))
+		# commit_id:   	list	= property(lambda _: run_cmds(_.commit_id_cmd, cwd=_.project_dir))
 		commit_cmd:		str 	= 'git commit -a -m "run"' # !NB no spaces in msg 
-		commit: 		list	= property(lambda _: run_cmds(_.commit_cmd, cwd=_.project_dir)) 
+		# commit: 		list	= property(lambda _: run_cmds(_.commit_cmd, cwd=_.project_dir)) 
 		pull_cmd:		str 	= ['git fetch --all', 'git reset --hard origin/main']
-		pull:   		list	= property(lambda _: run_cmds(_.pull_cmd, cwd=_.project_dir))
+		# pull:   		list	= property(lambda _: run_cmds(_.pull_cmd, cwd=_.project_dir))
   
   
 	home:				Path	= Path().home()
