@@ -69,13 +69,6 @@ class Pyfig(PyfigBase):
 		wb_mode: 		str		= 'disabled'
 		wb_sweep: 		bool	= False
   
-		entity:			str		= property(lambda _: _.p.project)
-		program: 		Path	= property(lambda _: Path( _.p.project_dir, _.p.run_name))
-		sweep_path_id:  str     = property(lambda _: f'{_.entity}/{_.project}/{_.exp_name}')
-		wb_type: 		str		= property(lambda _: _.wb_sweep*'sweeps' or _.run_sweep*f'groups' or 'runs')
-		run_url: 		str		= property(lambda _: f'www.wandb.ai/{_.entity}/{_.project}/{_.wb_type}/{_.exp_name}')
-  
-
 	class distribute(Sub):
 		head:			bool	= True 
 		dist_mode: 		str		= 'pyfig'  # options: accelerate
