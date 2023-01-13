@@ -62,6 +62,9 @@ backend_cmd_all = dict(
 	rocm=RocmCMD
 )
 
+# class Cluster():
+#	_ignore = ['submit', 'sbatch']
+
 class nifl_slurm(Sub):
 	export			= 'ALL'
 	nodes           = '1' # (MIN-MAX) 
@@ -83,8 +86,8 @@ class nifl_slurm(Sub):
 	# mail_type       = 'FAIL'
 
 	_job_id: 			str      = property(lambda _: os.environ['SLURM_JOBID'])
- 
-	def _sbatch(
+	
+	def sbatch(
 		ii, 
 		job: dict,
 		run_name: Union[Path,str] = 'run.py',
@@ -114,8 +117,8 @@ class nifl_slurm(Sub):
 		sb = '\n'.join(sb)
 		return sb
 
-	def _submit_to_cluster(ii, job):
-		sbatch = ii._sbatch(job)
+	def submit(ii, job):
+		sbatch = ii.sbatch(job)
 		d_c = cls_to_dict(ii, prop=True, ignore=ii._ignore)
 		Slurm(**d_c).sbatch(sbatch)
   

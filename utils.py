@@ -14,6 +14,7 @@ import os
 import pprint
 import torch
 import optree
+from time import time
 
 import numpy as np
 from copy import copy
@@ -140,6 +141,9 @@ def gen_alphanum(n: int = 7, test=False):
     characters = ascii_uppercase + ascii_lowercase + numbers
     name = ''.join([random.choice(characters) for _ in range(n)])
     return name
+
+def gen_time_id(n=7):
+	return str(round(time() * 1000))[-n:]
 
 def iterate_n_dir(folder: Path, group_exp: bool=False, n_max=1000) -> Path:
     if not group_exp and Path(folder).is_dir():
@@ -414,7 +418,7 @@ try:
 except: 
     print('Metrix: No Torch')
     
-### Pyfig Subclass 
+### Pyfig
 
 class Sub:
     _p = None
