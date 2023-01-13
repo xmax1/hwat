@@ -190,7 +190,7 @@ def cls_to_dict(
 		flat:bool=False
 	) -> dict:
 		# ref > ignore > add
-		ignore = cls.ignore + (ignore or [])
+		ignore = ignore or []
 		
 		items = []
 		for k, v_cls in cls.__class__.__dict__.items():
@@ -205,8 +205,6 @@ def cls_to_dict(
 						continue    
 					if (not hidn) and k.startswith('_'):
 						continue
-					# if (not fn) and isinstance(v_cls, partial):
-					# 	continue
 					if (not prop) and isinstance(v_cls, property):
 						continue
 					if (not fn) and callable(v_cls):
@@ -481,9 +479,9 @@ class PyfigBase:
   
 		entity:			str		= property(lambda _: _.p.project)
 		program: 		Path	= property(lambda _: Path( _.p.project_dir, _.p.run_name))
-		sweep_path_id:  str     = property(lambda _: f'{_.entity}/{_.project}/{_.exp_name}')
-		wb_type: 		str		= property(lambda _: _.wb_sweep*'sweeps' or _.run_sweep*f'groups' or 'runs')
-		run_url: 		str		= property(lambda _: f'www.wandb.ai/{_.entity}/{_.project}/{_.wb_type}/{_.exp_name}')
+		sweep_path_id:  str     = property(lambda _: f'{_.entity}/{_.p.project}/{_.p.exp_name}')
+		wb_type: 		str		= property(lambda _: _.wb_sweep*'sweeps' or _.p.sweep.run_sweep*f'groups' or 'runs')
+		run_url: 		str		= property(lambda _: f'www.wandb.ai/{_.entity}/{_.p.project}/{_.wb_type}/{_.p.exp_name}')
   
 
 	class distribute(Sub):
@@ -508,10 +506,10 @@ class PyfigBase:
 		remote:     str     = 'origin' 
   
 		commit_id_cmd:	str 	= 'git log --pretty=format:%h -n 1'
-		# commit_id:   	list	= property(lambda _: run_cmds(_.commit_id_cmd, cwd=_.project_dir))
-		commit_cmd:		str 	= 'git commit -a -m "run"' # !NB no spaces in msg 
+		commit_id:   	list	= property(lambda _: run_cmds(_.commit_id_cmd, cwd=_.p.project_dir))
+		# commit_cmd:		str 	= 'git commit -a -m "run"' # !NB no spaces in msg 
 		# commit: 		list	= property(lambda _: run_cmds(_.commit_cmd, cwd=_.project_dir)) 
-		pull_cmd:		str 	= ['git fetch --all', 'git reset --hard origin/main']
+		# pull_cmd:		str 	= ['git fetch --all', 'git reset --hard origin/main']
 		# pull:   		list	= property(lambda _: run_cmds(_.pull_cmd, cwd=_.project_dir))
   
   
@@ -546,6 +544,7 @@ class PyfigBase:
 		sub_cls = {k:v for k,v in pyfig_base_d.items() if isinstance(v, type)}
 		for sub_name, sub in sub_cls.items():
 			sub_instance = sub(parent=ii)
+			[setattr(sub_instance, k, v) for k,v in cls_to_dict(sub_instance, prop=True)]
 			setattr(ii, sub_name, sub_instance)
 
 	def setup_exp_dir(ii, group_exp=False, force_new_id=False):
