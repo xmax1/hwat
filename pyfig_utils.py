@@ -350,7 +350,7 @@ class PyfigBase:
 		gc.disable()
 		try:
 			v_sync_leaves = load(v_mean_path)  # Speed: Only load sync vars
-			leaves = [torch.tensor(data=v, device=ref.device, dtype=ref.dtype) 
+			v_sync_leaves = [torch.tensor(data=v, device=ref.device, dtype=ref.dtype) 
 				if isinstance(ref, torch.Tensor) else v 
 				for v, ref in zip(v_sync_leaves, v_ref_leaves)]
 			v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync_leaves)
