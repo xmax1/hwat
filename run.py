@@ -13,22 +13,6 @@ from time import sleep
 import shutil
 import optree
 
-def gen_profile(funcs: dict, wait=1, warmup=1, active=3, repeat=2):
-	for tb_path, fn in funcs.items():
-		print('profiling ', tb_path)
-		with torch.profiler.profile(
-			schedule=torch.profiler.schedule(wait=wait, warmup=warmup, active=active, repeat=repeat),
-			on_trace_ready=torch.profiler.tensorboard_trace_handler(tb_path),
-			record_shapes=True,
-			profile_memory=True,
-			with_stack=True
-		) as prof:
-			for step in range(100):
-				if step >= (1 + 1 + 3) * 2:
-					break
-				fn()
-				prof.step()
-
 """ Distributed Synchronous SGD Example """
 def run(c: Pyfig):
 	torch.manual_seed(c.seed)
@@ -45,7 +29,10 @@ def run(c: Pyfig):
 	dtype = _dummy.dtype
 	device = 'cuda' if torch.cuda.is_available() else 'cpu'
 	c.to(to='torch', device=device, dtype=dtype)
+	# model: nn.Module = c.partial(Ansatz_fb).to(device).to(dtype)
+
 	model: nn.Module = c.partial(Ansatz_fb).to(device).to(dtype)
+	
 
 	### train step ###
 	from hwat import compute_ke_b, compute_pe_b
@@ -54,6 +41,11 @@ def run(c: Pyfig):
 	center_points = get_center_points(c.data.n_e, c.data.a)
 	r = init_r(c.data.n_b, c.data.n_e, center_points, std=0.1)
 	deltar = torch.tensor([0.02]).to(device).to(dtype)
+
+	# model.eval()
+	# model(r)
+	# model = torch.jit.script(model, r)
+	# model(r)
  
 	print(f"""exp/actual | 
 		cps    : {(c.data.n_e, 3)}/{center_points.shape}
@@ -123,6 +115,7 @@ def run(c: Pyfig):
 		opt.step()
   
 		if not (step-1) and c.distribute.head:
+
 			def get_profile_funcs():
 				model_pr = lambda : model(r)
 				sample_pr = lambda : sample_b(model, r, deltar, n_corr=c.data.n_corr) 
@@ -133,16 +126,33 @@ def run(c: Pyfig):
 					ke=ke_pr,
 				)
 				return {(c.profile_dir/k):v for k,v in funcs.items()}
-			funcs = get_profile_funcs()
-			gen_profile(funcs)
-			print('profile end.')
 
-	profile_art = wandb.Artifact(f"trace-{wandb.run.id}", type="profile")
-	for p in c.profile_dir.listdir():
-		profile_art.add_file(p, "trace.pt.trace.json")
-	# glob.glob("wandb/latest-run/tbprofile/*.pt.trace.json")[0]
-		c.wb.run.log_artifact(profile_art)
-		
+			def gen_profile(wait=1, warmup=1, active=3, repeat=2):
+				model_pr = lambda : model(r)
+				sample_pr = lambda : sample_b(model, r, deltar, n_corr=c.data.n_corr) 
+				ke_pr = lambda : compute_ke_b(model, r, ke_method=c.model.ke_method)
+
+				with torch.profiler.profile(
+					schedule=torch.profiler.schedule(wait=wait, warmup=warmup, active=active, repeat=repeat),
+					on_trace_ready=torch.profiler.tensorboard_trace_handler(c.profile_dir),
+					record_shapes=True, profile_memory=True, with_stack=True
+				) as prof:
+
+					for _ in range((wait + warmup + active) * repeat):
+						model_pr()
+						sample_pr()
+						ke_pr()
+						prof.step()
+
+				profile_art = wandb.Artifact(f"trace-{wandb.run.id}", type="profile")
+				for p in c.profile_dir.iterdir():
+					print(p)
+					profile_art.add_file(p)
+					c.wb.run.log_artifact(profile_art)
+				print('profile end.')
+
+			gen_profile()
+
 if __name__ == "__main__":
 	
 	### pyfig ###

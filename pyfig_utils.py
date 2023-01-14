@@ -148,7 +148,7 @@ class PyfigBase:
 	project_dir:        Path    = property(lambda _: _.home / 'projects' / _.project)
 	cluster_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'cluster'))
 	exchange_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exchange'))
-	profile_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'tb'))
+	profile_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'profile'))
 	log_dir: 			Path    = property(lambda _: _.cluster_dir)
 
 
@@ -241,7 +241,7 @@ class PyfigBase:
 		exp_group_dir = Path(ii.dump_exp_dir, 'sweep'*ii.sweep.run_sweep, exp_name)
 		exp_group_dir = iterate_n_dir(exp_group_dir, group_exp=group_exp)
 		ii.exp_name = exp_group_dir.name
-		ii.exp_id = (not force_new_id)*ii.exp_id or gen_time_id(7)
+		ii.exp_id = (not force_new_id)*ii.exp_id or (ii.exp_id+'-'+gen_time_id(7) if ii.exp_id else gen_time_id(7))
 		ii.exp_dir = exp_group_dir/ii.exp_id
 		[mkdir(ii.exp_dir/_dir) for _dir in ['cluster', 'exchange', 'wandb', 'profile']]
 	
@@ -298,12 +298,6 @@ class PyfigBase:
 		ii.debug_log([d,], ['to_torch.log',])
 		ii.update_configuration(d)
   
-	def debug_mode(on=False):
-		if on:
-			os.environ['debug'] = 'debug'
-		else:
-			os.environ['debug'] = ''
-
 	def sync(ii, step: int, v_tr: dict):
 		v_path = (ii.exchange_dir / f'{step}_{ii.distribute.dist_id}').with_suffix('.pk')
 		v_mean_path = add_to_Path(v_path, '-mean')
@@ -447,69 +441,6 @@ class niflheim_resource(Sub):
 		ii._p.log([sbatch,], ii._p.tmp_dir/'sbatch.log')
 		ii.slurm.sbatch(sbatch)
 
-
-
-
-
-# def sync(ii, step: int, v_tr: dict):
-# 	v_sync = numpify_tree(v_tr)
-	
-# 	try:
-# 		gc.disable()
-# 		v_path = (ii.exchange_dir / f'{step}_{ii.distribute.dist_id}').with_suffix('.pk')
-# 		v, treespec = optree.tree_flatten(v_tr)
-# 		dump(v_path, v)
-# 	except Exception as e:
-# 		print(e)
-# 	finally:
-# 		gc.enable()
-	
-# 	if ii.distribute.head:
-# 		### 1 wait for workers to dump ###
-# 		n_ready = 0
-# 		while n_ready < ii.resource.n_gpu:
-# 			k_path_all = list(ii.exchange_dir.glob(f'{step}_*')) 
-# 			n_ready = len(k_path_all)
-# 			sleep(0.02)
-
-# 		### 2 collect arrays ###
-# 		leaves = []
-# 		for p in k_path_all:
-# 			v_dist_i = load(p)
-# 			leaves += [v_dist_i]
-	
-# 		### 3 mean arrays ###
-# 		v_mean = [np.stack(leaves).mean(axis=0) for leaves in zip(*leaves)]
-
-# 		try:
-# 			gc.disable()
-# 			for p in k_path_all:
-# 				dump(add_to_Path(p, '-mean'), v_mean)
-# 		except Exception as e:
-# 			print(e)
-# 		finally:
-# 			for p in k_path_all:
-# 				p.unlink()
-# 			gc.enable()
-
-# 	v_mean_path = add_to_Path(v_path, '-mean')
-# 	while v_path.exists():
-# 		sleep(0.02)
-# 	sleep(0.02)
-	
-# 	try:
-# 		gc.disable()
-# 		v_sync = load(v_mean_path)  # Speed: Only load sync vars
-# 		v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync)
-# 	except Exception as e:
-# 		print(e)
-# 		gc.enable()
-# 		v_sync = v_tr
-# 	finally: # ALWAYS EXECUTED
-# 		v_mean_path.unlink()
-# 		gc.enable()
-# 		v_sync = torchify_tree(v_sync, v_tr)
-# 		return v_sync
 """ slurm docs
 sinfo -p cluster
 groups
