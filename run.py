@@ -13,44 +13,9 @@ from time import sleep
 import shutil
 import optree
 
-""" 
-- tmp directory 
-- head node does the things 💚
-	- get head node
-	- get worker nodes
-- functions
-	- identify head node
-	- get path for saving
-	- list local values to share
-	- 'most recent model'
-	- try, except for open file
-	- some notion of sync
-		- dump data files, get new model, iterate again
-	- data files:
-		- numpy, cpu, 
-		- dir: v_exchange
-		- name: v_node_gpu 
-
-- issues
-	- does not work for sweep
-"""
-
-# def init_process(rank, size, fn, backend='gloo'):
-# 	""" Initialize the distributed environment. """
-# 	os.environ['MASTER_ADDR'] = '127.0.0.1'
-# 	os.environ['MASTER_PORT'] = '29500'
-# 	dist.init_process_group(backend, rank=rank, world_size=size)
-# 	fn(rank, size)
-
-# """ Gradient averaging. """
-# def average_gradients(model):
-# 	size = float(dist.get_world_size())
-# 	for param in model.parameters():
-# 		dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
-# 		param.grad.data /= size
-
 def gen_profile(funcs: dict, wait=1, warmup=1, active=3, repeat=2):
 	for tb_path, fn in funcs.items():
+		print('profiling ', tb_path)
 		with torch.profiler.profile(
 			schedule=torch.profiler.schedule(wait=wait, warmup=warmup, active=active, repeat=repeat),
 			on_trace_ready=torch.profiler.tensorboard_trace_handler(tb_path),
@@ -58,7 +23,6 @@ def gen_profile(funcs: dict, wait=1, warmup=1, active=3, repeat=2):
 			profile_memory=True,
 			with_stack=True
 		) as prof:
-			
 			for step in range(100):
 				if step >= (1 + 1 + 3) * 2:
 					break
@@ -158,21 +122,26 @@ def run(c: Pyfig):
 
 		opt.step()
   
-		if not step:
+		if not (step-1) and c.distribute.head:
 			def get_profile_funcs():
-				model = lambda : model(r)
-				sample = lambda : sample_b(model, r, deltar, n_corr=c.data.n_corr) 
-				ke = lambda : compute_ke_b(model, r, ke_method=c.model.ke_method)
+				model_pr = lambda : model(r)
+				sample_pr = lambda : sample_b(model, r, deltar, n_corr=c.data.n_corr) 
+				ke_pr = lambda : compute_ke_b(model, r, ke_method=c.model.ke_method)
 				funcs = dict(
-					model=model,
-					sample=sample,
-					ke=ke,
+					model=model_pr,
+					sample=sample_pr,
+					ke=ke_pr,
 				)
-				return {c.profile_dir/k:v for k,v in funcs}
+				return {(c.profile_dir/k):v for k,v in funcs.items()}
 			funcs = get_profile_funcs()
 			gen_profile(funcs)
+			print('profile end.')
 
-
+	profile_art = wandb.Artifact(f"trace-{wandb.run.id}", type="profile")
+	for p in c.profile_dir.listdir():
+		profile_art.add_file(p, "trace.pt.trace.json")
+	# glob.glob("wandb/latest-run/tbprofile/*.pt.trace.json")[0]
+		c.wb.run.log_artifact(profile_art)
 		
 if __name__ == "__main__":
 	

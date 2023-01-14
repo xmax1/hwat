@@ -21,6 +21,8 @@ class Pyfig(PyfigBase):
 	log_state_step: 	int   	= 10
 	
 	class data(PyfigBase.data):
+		system: 	str			= None # overwrites base
+
 		charge:     int         = 0
 		spin:       int         = 0
 		a:          np.ndarray  = np.array([[0.0, 0.0, 0.0],])
@@ -72,7 +74,19 @@ class Pyfig(PyfigBase):
 		print('loading wandb from base class')
 
 	def __init__(ii, notebook:bool=False, sweep: dict=None, **init_arg) -> None:
+
 		super().__init__(notebook=notebook, sweep=sweep, **init_arg)
+  
+		if ii.data.system:
+			from dump.systems import systems
+			system = systems.get(ii.data.system, None)
+			if system is None:
+				exit(ii.data.system + ' not in systems dict (located dump/systems)')
+			ii.pr(system)
+			print('Loading system, currently overwritten by sys_arg so be careful not to double set')
+			ii.update_configuration(system, sweep=ii.sweep.d if ii.sweep.run_sweep else None)
+
+
 		"""  # Pyfig Docs
 		## Prerequisite
 		- wandb api key 

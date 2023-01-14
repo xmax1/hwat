@@ -88,6 +88,7 @@ class PyfigBase:
 		)
   
 	class wb(Sub):
+		run = None
 		job_type:		str		= 'debug'		
 		wb_mode: 		str		= 'disabled'
 		wb_sweep: 		bool	= False
@@ -129,9 +130,9 @@ class PyfigBase:
 	dump_exp_dir: 		Path 	= property(lambda _: _.dump/'exp')
 	tmp_dir:            Path	= property(lambda _: _.dump/'tmp')
 	project_dir:        Path    = property(lambda _: _.home / 'projects' / _.project)
-	cluster_dir: 	Path    = property(lambda _: Path(_.exp_dir, 'cluster'))
-	exchange_dir: 	Path    = property(lambda _: Path(_.exp_dir, 'exchange'))
-	profile_dir: 	Path    = property(lambda _: Path(_.exp_dir, 'tb'))
+	cluster_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'cluster'))
+	exchange_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exchange'))
+	profile_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'tb'))
 
 	debug: bool    = False
 	env_log_path = 'dump/tmp/env.log'
@@ -165,7 +166,7 @@ class PyfigBase:
 		ii.debug_log([dict(os.environ.items()), ii.d,], [ii.env_log_path, ii.d_log_path])
   
 		if not ii.resource.submit and ii.distribute.head:
-			run = wandb.init(
+			ii.wb.run = wandb.init(
 				project     = ii.project, 
 				group		= ii.exp_name,
 				id          = ii.exp_id,
@@ -193,6 +194,9 @@ class PyfigBase:
 				ii.resource.cluster_submit(run_d)
 
 			sys.exit(ii.wb.run_url)
+	
+	def pr(d: dict):
+		pprint.pprint(d)
 
 	@property
 	def cmd(ii):
@@ -344,15 +348,14 @@ class PyfigBase:
 
 class niflheim_resource(Sub):
 	env: str     	= ''
-
 	n_gpu: int 		= 1
-	
+
 	architecture:   str 	= 'cuda'
 	nifl_gpu_per_node: int  = property(lambda _: 10)
 
 	job_id: 		str  	= property(lambda _: os.environ.get('SLURM_JOBID', 'No SLURM_JOBID available.'))  # slurm only
 
-	_pci_id_cmd:		str		= 'nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'
+	_pci_id_cmd:	str		= 'nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'
 	pci_id:			str		= property(lambda _: ''.join(run_cmds(_._pci_id_cmd, silent=True)))
 
 	n_device_env:	str		= 'CUDA_VISIBLE_DEVICES'
@@ -361,12 +364,13 @@ class niflheim_resource(Sub):
 	### Slurm Configuration ###
 	export			= 'ALL'
 	nodes           = '1' 			# (MIN-MAX) 
-	mem_per_cpu     = 1024
+	# mem_per_cpu     = 1024
+	# mem				= 'MaxMemPerNode'
 	cpus_per_task   = 8				# 1 task 1 gpu 8 cpus per task 
 	partition       = 'sm3090'
 	time            = '0-00:20:00'  # D-HH:MM:SS
 
-	gres            = property(lambda _: 'gpu:RTX3090:' + (str(_.n_gpu) if _.nodes == 1 else '10'))
+	gres            = property(lambda _: 'gpu:RTX3090:' + (str(_.n_gpu) if int(_.nodes) == 1 else '10'))
 	ntasks          = property(lambda _: _.n_gpu)
 	job_name        = property(lambda _: _._p.exp_name)
 	output          = property(lambda _: _._p.cluster_dir/'o-%j.out')
@@ -381,7 +385,8 @@ class niflheim_resource(Sub):
 		ii.slurm = Slurm(
 			export			= ii.export,
 			nodes           = ii.nodes        ,
-			mem_per_cpu     = ii.mem_per_cpu  ,
+			# mem_per_cpu     = ii.mem_per_cpu  ,
+			# mem     		= ii.mem  ,
 			cpus_per_task   = ii.cpus_per_task,
 			partition       = ii.partition,
 			time            = ii.time         ,
@@ -398,7 +403,7 @@ class niflheim_resource(Sub):
 		env = ['source ~/.bashrc', f'conda activate {ii.env}',]
 		export = ['export $SLURM_JOB_ID',]
 		debug = ['echo $SLURM_JOB_GPUS', 'echo $SLURM_JOB_NODELIST', 'nvidia-smi']
-		srun_cmd = 'srun --gpus=1 --cpus-per-task=4 --mem-per-cpu=1024 --ntasks=1 --exclusive --label '
+		srun_cmd = 'srun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label '
 		body = mod + env + debug
  
 		for i in range(ii.n_gpu):
