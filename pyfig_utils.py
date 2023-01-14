@@ -131,6 +131,7 @@ class PyfigBase:
 	project_dir:        Path    = property(lambda _: _.home / 'projects' / _.project)
 	cluster_dir: 	Path    = property(lambda _: Path(_.exp_dir, 'cluster'))
 	exchange_dir: 	Path    = property(lambda _: Path(_.exp_dir, 'exchange'))
+	profile_dir: 	Path    = property(lambda _: Path(_.exp_dir, 'tb'))
 
 	debug: bool    = False
 	env_log_path = 'dump/tmp/env.log'
@@ -217,7 +218,7 @@ class PyfigBase:
 		ii.exp_name = exp_group_dir.name
 		ii.exp_id = (not force_new_id)*ii.exp_id or gen_time_id(7)
 		ii.exp_dir = exp_group_dir/ii.exp_id
-		[mkdir(ii.exp_dir/_dir) for _dir in ['cluster', 'exchange', 'wandb']]
+		[mkdir(ii.exp_dir/_dir) for _dir in ['cluster', 'exchange', 'wandb', 'profile']]
 	
 	def get_run_or_sweep_d(ii,):
 		ii.resource.submit = False
@@ -363,7 +364,7 @@ class niflheim_resource(Sub):
 	mem_per_cpu     = 1024
 	cpus_per_task   = 8				# 1 task 1 gpu 8 cpus per task 
 	partition       = 'sm3090'
-	time            = '0-01:00:00'  # D-HH:MM:SS
+	time            = '0-00:20:00'  # D-HH:MM:SS
 
 	gres            = property(lambda _: 'gpu:RTX3090:' + (str(_.n_gpu) if _.nodes == 1 else '10'))
 	ntasks          = property(lambda _: _.n_gpu)

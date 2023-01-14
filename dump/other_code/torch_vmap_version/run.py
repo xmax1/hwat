@@ -81,54 +81,7 @@ def run(c: Pyfig):
 			fn()
 		except Exception as e:
 			print(e)
-			
-
-	def profile():
-		# def profile_fn(fn, name=None):
-		# 	try:
-		# 		# https://pytorch.org/tutorials/recipes/recipes/profiler_recipe.html
-		# 		from torch.profiler import profile, record_function, ProfilerActivity
-		# 		with profile(activities=[ProfilerActivity.CUDA], record_shapes=True, profile_memory=True) as prof:
-		# 			with record_function("model_inference"):
-		# 				fn()
-		# 		print('Profile: ', name, '\n')
-		# 		print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-		# 		print(vars(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10)).keys())
-		# 		# print(vars(prof))
-		# 	except Exception as e:
-		# 		print(e)
-    
-		def profile_fn(fn, name):
-			try:
-				with torch.profiler.profile(
-					schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
-					on_trace_ready=torch.profiler.tensorboard_trace_handler(c.exp_path / name),
-					record_shapes=True,
-					profile_memory=True,
-					with_stack=True
-					) as prof:
-					
-					for step in range(100):
-						if step >= (1 + 1 + 3) * 2:
-							break
-						fn()
-						prof.step()  # Need to call this at the end of each step to notify profiler of steps' boundary.
-			except Exception as e:
-				print(e)
-
-		def ke_fn():
-			with torch.no_grad():
-				model_ke = lambda _r: model_v(params, _r).sum()
-				ke = compute_ke_b(model_ke, r)
-			return ke
-    
-		profile_fn(lambda: ke_fn(), 'kinetic')
-		profile_fn(lambda: model(r[0]), 'model')
-		profile_fn(lambda: model_compile(r[0]), 'model_compile')
-		profile_fn(lambda: model_fn(params, r[0]), 'model_functorch')
-		profile_fn(lambda: model_fn_compile(params, r[0]), 'model_functorch_compile')
-
-	profile()
+		
     
 	def train_step(model, r):
 

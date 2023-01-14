@@ -49,6 +49,22 @@ import optree
 # 		dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
 # 		param.grad.data /= size
 
+def gen_profile(funcs: dict, wait=1, warmup=1, active=3, repeat=2):
+	for tb_path, fn in funcs.items():
+		with torch.profiler.profile(
+			schedule=torch.profiler.schedule(wait=wait, warmup=warmup, active=active, repeat=repeat),
+			on_trace_ready=torch.profiler.tensorboard_trace_handler(tb_path),
+			record_shapes=True,
+			profile_memory=True,
+			with_stack=True
+		) as prof:
+			
+			for step in range(100):
+				if step >= (1 + 1 + 3) * 2:
+					break
+				fn()
+				prof.step()
+
 """ Distributed Synchronous SGD Example """
 def run(c: Pyfig):
 	torch.manual_seed(c.seed)
@@ -128,19 +144,35 @@ def run(c: Pyfig):
 
 				v_tr |= dict(acc=acc, r=r, deltar=deltar, grads=grads, params=params)
 
-				v_sync = c.sync(step, v_tr)
-
-				deltar = v_sync['deltar']
+				if c.resource.n_gpu > 1:
+					v_tr = c.sync(step, v_tr)
+					deltar = v_tr['deltar']
 
 				model.zero_grad()
-				for p, g in zip(model.parameters(), v_sync['grads']):
+				for p, g in zip(model.parameters(), v_tr['grads']):
 					p.grad += g
 
 				if c.distribute.head:
-					metrix = compute_metrix(v_sync)
+					metrix = compute_metrix(v_tr)
 					wandb.log(metrix, step=step)
 
 		opt.step()
+  
+		if not step:
+			def get_profile_funcs():
+				model = lambda : model(r)
+				sample = lambda : sample_b(model, r, deltar, n_corr=c.data.n_corr) 
+				ke = lambda : compute_ke_b(model, r, ke_method=c.model.ke_method)
+				funcs = dict(
+					model=model,
+					sample=sample,
+					ke=ke,
+				)
+				return {c.profile_dir/k:v for k,v in funcs}
+			funcs = get_profile_funcs()
+			gen_profile(funcs)
+
+
 		
 if __name__ == "__main__":
 	
