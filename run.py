@@ -49,25 +49,12 @@ import optree
 # 		dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
 # 		param.grad.data /= size
 
-def torchify_tree(v, v_ref):
-	leaves, tree_spec = optree.tree_flatten(v)
-	leaves_ref, _ = optree.tree_flatten(v_ref)
-	leaves = [torch.tensor(data=v, device=ref.device, dtype=ref.dtype) 
-           	  if isinstance(ref, torch.Tensor) else v 
-              for v, ref in zip(leaves, leaves_ref)]
-	return optree.tree_unflatten(treespec=tree_spec, leaves=leaves)
-		
-def numpify_tree(v):
-	leaves, treespec = optree.tree_flatten(v)
-	leaves = [v.detach().cpu().numpy() if isinstance(v, torch.Tensor) else v for v in leaves]
-	return optree.tree_unflatten(treespec=treespec, leaves=leaves)
-
 """ Distributed Synchronous SGD Example """
 def run(c: Pyfig):
 	torch.manual_seed(c.seed)
 	torch.set_default_tensor_type(torch.DoubleTensor)   # ❗ Ensure works when default not set AND can go float32 or 64
 	
-	n_device = c.resources.n_device
+	n_device = c.resource.n_device
 	print(f'🤖 {n_device} GPUs available')
 
 	### model (aka Trainmodel) ### 
@@ -90,8 +77,8 @@ def run(c: Pyfig):
  
 	print(f"""exp/actual | 
 		cps    : {(c.data.n_e, 3)}/{center_points.shape}
-		r      : {(c.n_device, c.data.n_b, c.data.n_e, 3)}/{r.shape}
-		deltar : {(c.n_device, 1)}/{deltar.shape}
+		r      : {(c.resource.n_device, c.data.n_b, c.data.n_e, 3)}/{r.shape}
+		deltar : {(c.resource.n_device, 1)}/{deltar.shape}
 	""")
 
 	### train ###
@@ -141,9 +128,7 @@ def run(c: Pyfig):
 
 				v_tr |= dict(acc=acc, r=r, deltar=deltar, grads=grads, params=params)
 				
-				v_sync = numpify_tree(v_tr)
-				v_sync = c.accumulate(step, v_sync, sync=None)
-				v_sync = torchify_tree(v_sync, v_tr)
+				v_sync = c.sync(step, v_tr)
 
 				deltar = v_sync['deltar']
 
@@ -151,7 +136,7 @@ def run(c: Pyfig):
 				for p, g in zip(model.parameters(), v_sync['grads']):
 					p.grad += g
 
-				if c.dist.head:
+				if c.distribute.head:
 					metrix = compute_metrix(v_sync)
 					wandb.log(metrix, step=step)
 

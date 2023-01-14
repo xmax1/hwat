@@ -2,8 +2,10 @@ import sys
 import gc
 from pathlib import Path
 from typing import Union, Callable, Iterable, Any
+
+
 from copy import deepcopy, copy
-from itertools import product
+from itertools import product, islice
 from functools import partial
 import random
 import re
@@ -178,50 +180,38 @@ def dict_to_cmd(d: dict):
 	items = ((str(k).replace(" ", ""), str(v).replace(" ", "")) for (k,v) in items)
 	return ' '.join([f'--{k} {v}' for k,v in items if v])
 
-def cls_to_dict(
-		cls,
-		ref:Union[list, dict]=None,
-		sub_cls=False, 
-		fn=False, 
-		prop=False, 
-		hidn=False,
-		ignore:list=None,
-		add:list=None,
-		flat:bool=False
-	) -> dict:
-		# ref > ignore > add
-		ignore = ignore or []
+def inst_to_dict(
+	inst, 
+	attr=False,
+	sub_cls=False, 
+	prop=False,
+	ignore:list=[],
+	flat:bool=False,
+	debug:bool=False
+) -> dict:
+		inst_keys = [k for k in dir(inst) if not k.startswith('_') and not k in ignore]
 		
-		items = []
-		for k, v_cls in cls.__class__.__dict__.items():
-			
-			keep = k in ref if ref else True
-			keep = False if (k in ignore) else keep
-			keep |= k in add if add else False
-			
-			if keep:
-				if not ref:
-					if k.startswith('__'):
-						continue    
-					if (not hidn) and k.startswith('_'):
-						continue
-					if (not prop) and isinstance(v_cls, property):
-						continue
-					if (not fn) and callable(v_cls):
-						continue
-	
-				v = getattr(cls, k)
-				
-				if sub_cls and isinstance(v, Sub) or (k in ref if ref else False):
-					v = cls_to_dict(
-						v, ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore, add=add)
-					if flat:
-						items.extend(v.items())
-						continue
-					
-				items.append([k, v])     
-		  
-		return dict(items)
+		d_cls = {k:getattr(inst.__class__, k) for k in inst_keys}
+		d_ins = {k:getattr(inst, k) for k in inst_keys}
+		
+		d_callable = {k:v for k,v in d_ins.items() if callable(v) and not isinstance(v, Sub)}
+		d_prop = {k:v for k,v in d_ins.items() if isinstance(d_cls[k], property)}
+		
+		d_sub = {}
+		for k,v in d_ins.items():
+			if isinstance(v, Sub):
+				d_sub[k] = inst_to_dict(v, attr=attr, sub_cls=sub_cls, prop=prop, ignore=ignore)
+		
+		d_attr = {k:v for k,v in d_ins.items() if not k in (d_callable | d_prop | d_sub).keys()}
+		
+		d = dict()
+		[d.setdefault(k, v) for k,v in d_sub.items() if sub_cls]
+		[d.setdefault(k, v) for k,v in d_attr.items() if attr]
+		[d.setdefault(k, v) for k,v in d_prop.items() if prop]
+		if debug:
+			print('inst-to-dict: inst_keys: ', inst_keys)
+			print('inst-to-dict: d_sub: ', d_sub)
+		return flat_any(d) if flat else d
 	
 def cmd_to_dict(cmd:Union[str, list], ref:dict, delim:str=' --', d=None):
 	"""
@@ -305,15 +295,17 @@ def type_me(v, v_ref=None, is_cmd_item=False):
 	
 ### run things
 
-def run_cmds(cmd:Union[str, list], cwd:Union[str, Path]='.', _res=[]):
+def run_cmds(cmd:Union[str, list], cwd:Union[str, Path]='.', silent=False, _res=[]):
 	for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
 		try:
 			cmd_1 = [c.strip() for c in cmd_1.split(' ')]
-			print(f'Run: {cmd_1} at {cwd}')
 			_res = subprocess.run(cmd_1, cwd=str(cwd), capture_output=True, text=True)
-			print('stdout:', _res.stdout.replace("\n", " "), 'stderr:', _res.stderr.replace("\n", ";"))
+			if not silent:
+				print(f'Run: {cmd_1} at {cwd}')
+				print('stdout:', _res.stdout.replace("\n", " "), 'stderr:', _res.stderr.replace("\n", ";"))
 		except Exception as e:
-			print(cmd_1, e)
+			if not silent:
+				print(cmd_1, e)
 			return ('Fail', '')
 	return _res.stdout.rstrip('\n')
 
@@ -405,27 +397,35 @@ try:
 except: 
 	print('Metrix: No Torch')
 
+def torchify_tree(v: np.ndarray, v_ref: torch.Tensor):
+	leaves, tree_spec = optree.tree_flatten(v)
+	leaves_ref, _ = optree.tree_flatten(v_ref)
+	leaves = [torch.tensor(data=v, device=ref.device, dtype=ref.dtype) 
+		   	  if isinstance(ref, torch.Tensor) else v 
+			  for v, ref in zip(leaves, leaves_ref)]
+	return optree.tree_unflatten(treespec=tree_spec, leaves=leaves)
+
+def numpify_tree(v: torch.Tensor):
+	leaves, treespec = optree.tree_flatten(v)
+	leaves = [v.detach().cpu().numpy() if isinstance(v, torch.Tensor) else v for v in leaves]
+	return optree.tree_unflatten(treespec=treespec, leaves=leaves)
 
 class Sub:
-	p: type = None
-	option: str  = None
-	ignore: list = ['d',]
+	_p = None
+	ignore: list = ['ignore', 'd', '_p',]
 	
 	def __init__(ii, parent=None):
-		ii.p = parent
-	
+		ii._p = parent
+  
 	@property
 	def d(ii,):
-		return cls_to_dict(ii, sub_cls=True, flat=True, ignore=ii.ignore)
-
-class DummyOption:
-    pass
+		return inst_to_dict(ii, sub_cls=True, flat=True, prop=True, ignore=ii.ignore)
 
 class PyfigBase:
 
 	user: 				str 	= None
  
-	project:            str     = 'hwat'
+	project:            str     = ''
 	run_name:       	Path	= 'run.py'
 	exp_name:       	str		= 'demo'
 	exp_dir:        	Path	= ''
@@ -465,6 +465,10 @@ class PyfigBase:
   
 		n_fbv:          int     = property(lambda _: _.n_sv*3+_.n_pv*2)
 
+	class opt(Sub):
+		lr: 			float	= 0.001
+		name: 			str		= 'Adam'
+  
 	class sweep(Sub):
 		run_sweep:      bool    = False	
 		method: 		str		= 'grid'
@@ -477,44 +481,40 @@ class PyfigBase:
 		wb_mode: 		str		= 'disabled'
 		wb_sweep: 		bool	= False
   
-		entity:			str		= property(lambda _: _.p.project)
-		program: 		Path	= property(lambda _: Path( _.p.project_dir, _.p.run_name))
-		sweep_path_id:  str     = property(lambda _: f'{_.entity}/{_.p.project}/{_.p.exp_name}')
-		wb_type: 		str		= property(lambda _: _.wb_sweep*'sweeps' or _.p.sweep.run_sweep*f'groups' or 'runs')
-		run_url: 		str		= property(lambda _: f'www.wandb.ai/{_.entity}/{_.p.project}/{_.wb_type}/{_.p.exp_name}')
+		entity:			str		= property(lambda _: _._p.project)
+		program: 		Path	= property(lambda _: Path( _._p.project_dir, _._p.run_name))
+		sweep_path_id:  str     = property(lambda _: f'{_.entity}/{_._p.project}/{_._p.exp_name}')
+		wb_type: 		str		= property(lambda _: _.wb_sweep*'sweeps' or _._p.sweep.run_sweep*f'groups' or 'runs')
+		run_url: 		str		= property(lambda _: f'www.wandb.ai/{_.entity}/{_._p.project}/{_.wb_type}/{_._p.exp_name}')
   
-
 	class distribute(Sub):
 		head:			bool	= True 
 		dist_mode: 		str		= 'pyfig'  # accelerate
 		dist_id:		str		= ''
-		sync:			list	= ['grads',]
-		accumulate_step:int		= 5
+		sync_step:		int		= 5
 
 		gpu_id_cmd:		str		= 'nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'
-		gpu_id: 		str		= property(lambda _: ''.join(run_cmds(_.gpu_id_cmd)).split('.')[0])
+		gpu_id: 		str		= property(lambda _: ''.join(run_cmds(_.gpu_id_cmd, silent=True)).split('.')[0])
 		dist_id: 		str 	= property(lambda _: _.gpu_id + '-' + hostname.split('.')[0])
 
-	class resource(Sub, DummyOption):
+	class resource(Sub):
 		submit: 		bool	= False
-		
-		submit_cluster: Callable= None
+		cluster_submit: Callable= None
 		script:			Callable= None
 
 	class git(Sub):
 		branch:     str     = 'main'
 		remote:     str     = 'origin' 
-  
+
 		commit_id_cmd:	str 	= 'git log --pretty=format:%h -n 1'
-		commit_id:   	list	= property(lambda _: run_cmds(_.commit_id_cmd, cwd=_.p.project_dir))
-		# commit_cmd:		str 	= 'git commit -a -m "run"' # !NB no spaces in msg 
+		commit_id:   	list	= property(lambda _: run_cmds(_.commit_id_cmd, cwd=_._p.project_dir, silent=True))
+		# commit_cmd:	str     = 'git commit -a -m "run"' # !NB no spaces in msg 
 		# commit: 		list	= property(lambda _: run_cmds(_.commit_cmd, cwd=_.project_dir)) 
 		# pull_cmd:		str 	= ['git fetch --all', 'git reset --hard origin/main']
 		# pull:   		list	= property(lambda _: run_cmds(_.pull_cmd, cwd=_.project_dir))
   
-  
 	home:				Path	= Path().home()
-	dump:               str     = property(lambda _: 'dump' )
+	dump:               Path    = property(lambda _: Path('dump'))
 	dump_exp_dir: 		Path 	= property(lambda _: _.dump/'exp')
 	tmp_dir:            Path	= property(lambda _: _.dump/'tmp')
 	project_dir:        Path    = property(lambda _: _.home / 'projects' / _.project)
@@ -524,8 +524,64 @@ class PyfigBase:
 	debug: bool    = False
 	env_log_path = 'dump/tmp/env.log'
 	d_log_path = 'dump/tmp/d.log'
- 
-	ignore = ['sweep', 'd', 'cmd', 'sub_cls']
+
+	ignore: list = [
+		'ignore', 
+		'd', 'cmd', 'sub_cls', 
+		'sweep',
+		'commit', 'pull',
+	]
+
+	def __init__(ii, notebook:bool=False, sweep: dict=None, **init_arg):     
+		""" Steps
+		0- subclasses inherit from personal bases
+		1- initialised subclasses, because they don't have properties otherwise
+		"""
+
+		for sub_name, sub in ii.sub_cls.items():
+			setattr(ii, sub_name, sub(parent=ii))
+
+		c_init = flat_any(ii.d)
+		sys_arg = sys.argv[1:]
+		sys_arg = cmd_to_dict(sys_arg, c_init) if not notebook else {}  
+		init_arg = flat_any(init_arg) | (sweep or {})
+
+		ii.update_configuration(init_arg | sys_arg)
+
+		ii.setup_exp_dir(group_exp=ii.group_exp, force_new_id=False)
+
+		ii.debug_log([dict(os.environ.items()), ii.d,], [ii.env_log_path, ii.d_log_path])
+  
+		if not ii.resource.submit and ii.distribute.head:
+			run = wandb.init(
+				project     = ii.project, 
+				group		= ii.exp_name,
+				id          = ii.exp_id,
+				dir         = ii.exp_dir,
+				entity      = ii.wb.entity,  	
+				mode        = ii.wb.wb_mode,
+				config      = dict_to_wandb(ii.d),
+			)
+		
+		if ii.resource.submit:
+
+			run_or_sweep_d = ii.get_run_or_sweep_d()
+
+			for i, run_d in enumerate(run_or_sweep_d):
+				is_first_run = i == 0
+
+				group_exp = ii.group_exp or (is_first_run and ii.sweep.run_sweep)
+				ii.setup_exp_dir(group_exp= group_exp, force_new_id= True)
+				
+				base_d = inst_to_dict(ii, attr=True, sub_cls=True, flat=True, ignore=ii.ignore, debug=ii.debug)
+				run_d = base_d | run_d
+
+				if is_first_run:
+					ii.debug_log([dict(os.environ.items()), run_d], [ii.env_log_path, ii.d_log_path])
+				
+				ii.resource.cluster_submit(run_d)
+
+			sys.exit(ii.wb.run_url)
 
 	@property
 	def cmd(ii):
@@ -533,19 +589,14 @@ class PyfigBase:
 
 	@property
 	def d(ii):
-		return cls_to_dict(ii, sub_cls=True, prop=True, ignore=ii.ignore)
+		return inst_to_dict(ii, sub_cls=True, prop=True, attr=True, ignore=ii.ignore)
 
 	@property
 	def sub_cls(ii) -> dict:
-		return {k:v for k,v in ii.__dict__.items() if isinstance(v, Sub)}
-
-	def setup_sub_cls(ii,):
-		pyfig_base_d = PyfigBase.__dict__
-		sub_cls = {k:v for k,v in pyfig_base_d.items() if isinstance(v, type)}
-		for sub_name, sub in sub_cls.items():
-			sub_instance = sub(parent=ii)
-			[setattr(sub_instance, k, v) for k,v in cls_to_dict(sub_instance, prop=True)]
-			setattr(ii, sub_name, sub_instance)
+		inst_keys = [k for k in dir(ii) if not k.startswith('_') and not k in ii.ignore]
+		ii.log(inst_keys, path=ii.tmp_dir/'inst_keys.log')
+		d_init = {k:getattr(ii, k) for k in inst_keys}
+		return {k:v for k,v in d_init.items() if isinstance(v, type) or isinstance(v, Sub)}
 
 	def setup_exp_dir(ii, group_exp=False, force_new_id=False):
 		if ii.exp_dir and not force_new_id:
@@ -554,7 +605,7 @@ class PyfigBase:
 		exp_group_dir = Path(ii.dump_exp_dir, 'sweep'*ii.sweep.run_sweep, exp_name)
 		exp_group_dir = iterate_n_dir(exp_group_dir, group_exp=group_exp)
 		ii.exp_name = exp_group_dir.name
-		ii.exp_id = (~force_new_id)*ii.exp_id or gen_time_id(7)
+		ii.exp_id = (not force_new_id)*ii.exp_id or gen_time_id(7)
 		ii.exp_dir = exp_group_dir/ii.exp_id
 		[mkdir(ii.exp_dir/_dir) for _dir in ['cluster', 'exchange', 'wandb']]
   
@@ -575,11 +626,8 @@ class PyfigBase:
 		return [{k:v for k,v in zip(sweep_keys, v_set)} for v_set in sweep_vals]
 
 	def debug_log(ii, d_all:list, p_all: list):
-		if ii.debug:
-			d_all = d_all if isinstance(d_all, list) else [d_all]
-			p_all = p_all if isinstance(p_all, list) else [p_all]
-			for d, p in zip(d_all, p_all):
-				ii.log(d, create=True, path=p)
+		for d, p in zip(d_all, p_all):
+			ii.log(d, path=p)
 			
 	def partial(ii, f:Callable, args=None, **kw):
 		d = flat_any(args if args else ii.d)
@@ -588,20 +636,21 @@ class PyfigBase:
 		return f(**d)
 
 	def update_configuration(ii, merge: dict, sweep: dict=None):
-		merge = flat_any(merge)
+		merge = flat_any(merge) | dict(sweep=sweep)
 		for k,v in merge.items():
-			for cls in [ii,] + list(ii.sub_cls.values()):
-				ref = cls_to_dict(cls,)
+			for inst in [ii,] + list(ii.sub_cls.values()):
+				ref = inst_to_dict(inst, attr=True, ignore=ii.ignore)
 				v_ref = ref.get(k, None)
 				if not v_ref is None:
 					v = type_me(v, v_ref)
-					setattr(cls, k, copy(v))
+					setattr(inst, k, copy(v))
 					print(f'update {k}: {v_ref} --> {v}')
 	
-	def accumulate(ii, step: int, v_tr: dict):
+	def sync(ii, step: int, v_tr: dict):
+		v_sync = numpify_tree(v_tr)
 		try:
 			gc.disable()
-			v_path = (ii.exchange_dir / f'{step}_{ii.distribute._dist_id}').with_suffix('.pk')
+			v_path = (ii.exchange_dir / f'{step}_{ii.distribute.dist_id}').with_suffix('.pk')
 			v, treespec = optree.tree_flatten(deepcopy(v_tr))
 			dump(v_path, v)
 		except Exception as e:
@@ -659,6 +708,7 @@ class PyfigBase:
 		finally: # ALWAYS EXECUTED
 			v_mean_path.unlink()
 			gc.enable()
+			v_sync = torchify_tree(v_sync, v_tr)
 			return v_sync
 
 	@staticmethod
@@ -667,14 +717,13 @@ class PyfigBase:
 		info = pprint.pformat(info)
 		with open(path, 'w') as f:
 			f.writelines(info)
-      
+
 ### slurm things
 
 from simple_slurm import Slurm
 
-class niflheim_resource(Sub,):
-	p: PyfigBase 	= PyfigBase
-	env: str     	= 'lumi'
+class niflheim_resource(Sub):
+	env: str     	= ''
 	n_gpu: int 		= 1
 	
 	architecture:   str 	= 'cuda'
@@ -684,14 +733,10 @@ class niflheim_resource(Sub,):
 	hostname: 		str 	= os.environ['HOSTNAME'] # shell restriction unknown
 
 	pci_id_cmd:		str		= 'nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'
-	pci_id:			str		= property(lambda _: ''.join(run_cmds(_.pci_id_cmd)))
-
-	n_running_cmd:	str		= 'squeue -u amawi -t pending,running -h -r'
-	n_running:		int		= property(lambda _: len(run_cmds(_.n_running_cmd).split('\n')))	
-	running_max: 	int     = 20
+	pci_id:			str		= property(lambda _: ''.join(run_cmds(_.pci_id_cmd, silent=True)))
 
 	n_device_env:	str		= 'CUDA_VISIBLE_DEVICES'
-	n_device:       int     = property(lambda _: sum(c.isdigit() for c in os.environ.get(_.n_device_env)))
+	n_device:       int     = property(lambda _: sum(c.isdigit() for c in os.environ.get(_.n_device_env, 'ZERO')))
 
 	### Slurm Configuration ###
 	export			= 'ALL'
@@ -701,15 +746,16 @@ class niflheim_resource(Sub,):
 	partition       = 'sm3090'
 	time            = '0-01:00:00'  # D-HH:MM:SS
 
-	gres            = property(lambda _: 'gpu:RTX3090:' + str(_.p.n_gpu)//_.nifl_gpu_per_node)
+	gres            = property(lambda _: 'gpu:RTX3090:' + str(_.n_gpu))
 	ntasks          = property(lambda _: _.n_gpu)
-	job_name        = property(lambda _: _.p.exp_name)
-	output          = property(lambda _: _.p.cluster_dir/'o-%j.out')
-	error           = property(lambda _: _.p.cluster_dir/'e-%j.err')
+	job_name        = property(lambda _: _._p.exp_name)
+	output          = property(lambda _: _._p.cluster_dir/'o-%j.out')
+	error           = property(lambda _: _._p.cluster_dir/'e-%j.err')
  
-	def __init__(ii, parent=None):
-		super().__init__(parent)
-
+	# n_running_cmd:	str		= 'squeue -u amawi -t pending,running -h -r'
+	# n_running:		int		= property(lambda _: len(run_cmds(_.n_running_cmd, silent=True).split('\n')))	
+	# running_max: 	int     = 20
+ 
 	def script(ii, job: dict):
 
 		mod = ['module purge', 'module load foss', 'module load CUDA/11.7.0']
@@ -721,7 +767,7 @@ class niflheim_resource(Sub,):
  
 		for i in range(ii.n_gpu):
 			
-			device_log_path = ii.p.cluster_dir/(str(i)+"_device.log") # + ii.p.hostname.split('.')[0])
+			device_log_path = ii._p.cluster_dir/(str(i)+"_device.log") # + ii._p.hostname.split('.')[0])
 		
 			cmd = dict_to_cmd(job)
    
@@ -732,10 +778,22 @@ class niflheim_resource(Sub,):
 		body += ['wait',]
 		return '\n'.join(body)
 
-	def submit(ii, job):
+	def cluster_submit(ii, job):
 		sbatch = ii.script(job)
-		d_c = cls_to_dict(ii, prop=True, ignore=ii.ignore)
-		Slurm(**d_c).sbatch(sbatch)
+		slurm = Slurm(
+			export			= ii.export,
+			nodes           = ii.nodes        ,
+			mem_per_cpu     = ii.mem_per_cpu  ,
+			cpus_per_task   = ii.cpus_per_task,
+			partition       = ii.partition    ,
+			time            = ii.time         ,
+			gres            = ii.gres         ,
+			ntasks          = ii.ntasks       ,
+			job_name        = ii.job_name     ,
+			output          = ii.output       ,
+			error           = ii.error        ,
+		)
+		slurm.sbatch(sbatch)
 
 
 """ slurm docs
@@ -772,6 +830,67 @@ Information on partitons and their configuration:
 
 """
 
+# prefix components:
+draw_space =  '    '
+draw_branch = '│   '
+# pointers:
+draw_tee =    '├── '
+draw_last =   '└── '
+
+def recurse_tree(dir_path: Path, prefix: str=''):
+	"""A recursive generator, given a directory Path object
+	will yield a visual tree structure line by line
+	with each line prefixed by the same characters
+	"""    
+	contents = list(dir_path.iterdir())
+	# contents each get pointers that are ├── with a final └── :
+	pointers = [draw_tee] * (len(contents) - 1) + [draw_last]
+	for pointer, path in zip(pointers, contents):
+		yield prefix + pointer + path.name
+		if path.is_dir(): # extend the prefix and recurse:
+			extension = draw_branch if pointer == draw_tee else draw_space 
+			# i.e. space because last, └── , above so no more |
+			yield from recurse_tree(path, prefix=prefix+extension)
+	
+def tree(
+	dir_path: Path, 
+	level: int=4, 
+	limit_to_directories: bool=False,
+	length_limit: int=10
+):
+	"""Given a directory Path object print a visual tree structure"""
+	dir_path = Path(dir_path) # accept string coerceable to Path
+	files = 0
+	directories = 0
+	def inner(dir_path: Path, prefix: str='', level=-1):
+		nonlocal files, directories
+		if not level: 
+			return # 0, stop iterating
+		if limit_to_directories:
+			contents = [d for d in dir_path.iterdir() if d.is_dir()]
+		else: 
+			contents = list(dir_path.iterdir())
+		pointers = [draw_tee] * (len(contents) - 1) + [draw_last]
+		for pointer, path in zip(pointers, contents):
+			if path.is_dir():
+				yield prefix + pointer + path.name
+				directories += 1
+				extension = draw_branch if pointer == draw_tee else draw_space 
+				yield from inner(path, prefix=prefix+extension, level=level-1)
+			elif not limit_to_directories:
+				yield prefix + pointer + path.name
+				files += 1
+	print(dir_path.name)
+	iterator = inner(dir_path, level=level)
+	for line in islice(iterator, length_limit):
+		print(line)
+	if next(iterator, None):
+		print(f'... length_limit, {length_limit}, reached, counted:')
+	print(f'\n{directories} directories' + (f', {files} files' if files else ''))
+
+def draw_tree():
+	recurse_tree(Path.home() / 'pyscratch')
+ 
 # try:
 #     from flax.core.frozen_dict import FrozenDict
 #     from jax import random as rnd
