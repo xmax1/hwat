@@ -645,7 +645,22 @@ class PyfigBase:
 					v = type_me(v, v_ref)
 					setattr(inst, k, copy(v))
 					print(f'update {k}: {v_ref} --> {v}')
-	
+    
+	@staticmethod
+	def log(info: Union[dict,str], path='dump/tmp/log.tmp'):
+		mkdir(path)
+		info = pprint.pformat(info)
+		with open(path, 'w') as f:
+			f.writelines(info)
+
+	def to_torch(ii, device, dtype):
+		import torch
+		base_d = inst_to_dict(ii, attr=True, sub_cls=True, flat=True, ignore=ii.ignore, debug=ii.debug)
+		d = {k:v for k,v in base_d.items() if isinstance(v, (np.ndarray, np.generic, list))}
+		d = {k:torch.tensor(v, dtype=dtype, device=device, requires_grad=False) for k,v in d.items() if not isinstance(v[0], str)}
+		ii.debug_log([d,], [ii.tmp_dir/'to_torch.log'])
+		ii.update_configuration(d)
+
 	def sync(ii, step: int, v_tr: dict):
 		v_sync = numpify_tree(v_tr)
 		try:
@@ -710,13 +725,6 @@ class PyfigBase:
 			gc.enable()
 			v_sync = torchify_tree(v_sync, v_tr)
 			return v_sync
-
-	@staticmethod
-	def log(info: Union[dict,str], path='dump/tmp/log.tmp'):
-		mkdir(path)
-		info = pprint.pformat(info)
-		with open(path, 'w') as f:
-			f.writelines(info)
 
 ### slurm things
 
