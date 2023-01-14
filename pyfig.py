@@ -21,7 +21,7 @@ class Pyfig(PyfigBase):
 	log_state_step: 	int   	= 10
 	
 	class data(PyfigBase.data):
-		system: 	str			= None # overwrites base
+		system: 	str			= '' # overwrites base
 
 		charge:     int         = 0
 		spin:       int         = 0
@@ -76,7 +76,7 @@ class Pyfig(PyfigBase):
 	def __init__(ii, notebook:bool=False, sweep: dict=None, **init_arg) -> None:
 
 		super().__init__(notebook=notebook, sweep=sweep, **init_arg)
-  
+
 		if ii.data.system:
 			from dump.systems import systems
 			system = systems.get(ii.data.system, None)
@@ -86,7 +86,8 @@ class Pyfig(PyfigBase):
 			print('Loading system, currently overwritten by sys_arg so be careful not to double set')
 			ii.update_configuration(system, sweep=ii.sweep.d if ii.sweep.run_sweep else None)
 
-
+		ii.runfig() # docs:runfig
+  
 		"""  # Pyfig Docs
 		## Prerequisite
 		- wandb api key 
@@ -106,25 +107,33 @@ class Pyfig(PyfigBase):
 			or dictionaries model=dict(n_layer=2, n_hidden=10)
 			or a sweep configuration sweep=dict(parameters=...)
 
-		## Examples:
+		# example
 		- python run.py --submit --run_sweep --debug --n_gpu 8
 		- python run.py --submit --run_sweep
 
-		## Issues 
+		# issues 
+
+		## issue:sub_classes
 		- sub classes can NOT call each other
 		- properties can NOT recursively call each other
 		- no dictionaries (other than sweep) as configuration args
 		- if wandb fails try # settings  = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
 
-		### Accumulate
+		# docs
+		## docs:runfig
+		- prereq for 'runfig' complete transform
+		- needed to be this way round to ensure the system is initialised before running
+		- didn't put systems in base config bc want to generalise to other projects
+
+		## docs:accumulate
 		potential issues:
 		- loading / unloading too fast / slow? Crashes occasionally.
 				
-		# Wandb Docs
+		## docs:wandb
 		- entity is the team name
 
 
-		# Useful cmds
+		## docs:useful_cmd
 		_kill_all = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
 		_kill_all_cmd = 'ssh user@server "killall -9 -u user"'
 		_cancel_job_cmd = f'scancel {cluster.job_id}'

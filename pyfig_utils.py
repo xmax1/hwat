@@ -12,12 +12,27 @@ import pprint
 import inspect
 import numpy as np
 from copy import copy
+import torch 
 
 from utils import dict_to_cmd, cmd_to_dict, dict_to_wandb
 from utils import torchify_tree, numpify_tree
 from utils import mkdir, iterate_n_dir, gen_time_id, add_to_Path, dump, load
 from utils import get_cartesian_product, type_me, run_cmds, flat_any 
+from dump.systems import systems
 
+"""
+todo
+- single function for cmd calls
+
+docs:sub_classes-init
+Steps
+0- subclasses inherit from personal bases
+1- initialised subclasses, because they don't have properties otherwise
+
+## docs:submit
+- must change submit to False to prevent auto resubmitting
+
+"""
 this_dir = Path(__file__).parent
 hostname = os.environ['HOSTNAME']
 
@@ -50,6 +65,7 @@ class PyfigBase:
 	log_state_step: 	int   	= 10
 	
 	class data(Sub):
+
 		charge:     int         = 0
 		spin:       int         = 0
 		a:          np.ndarray  = np.array([[0.0, 0.0, 0.0],])
@@ -96,8 +112,8 @@ class PyfigBase:
 		entity:			str		= property(lambda _: _._p.project)
 		program: 		Path	= property(lambda _: Path( _._p.project_dir, _._p.run_name))
 		sweep_path_id:  str     = property(lambda _: f'{_.entity}/{_._p.project}/{_._p.exp_name}')
-		wb_type: 		str		= property(lambda _: _.wb_sweep*'sweeps' or _._p.sweep.run_sweep*f'groups' or 'runs')
-		run_url: 		str		= property(lambda _: f'www.wandb.ai/{_.entity}/{_._p.project}/{_.wb_type}/{_._p.exp_name}')
+		wb_type: 		str		= property(lambda _: _.wb_sweep*'sweeps' or 'groups') # _._p.group_exp*f'groups' or 'runs')
+		run_url: 		str		= property(lambda _: f'https://wandb.ai/{_.entity}/{_._p.project}/{_.wb_type}/{_._p.exp_name}/')
   
 	class distribute(Sub):
 		head:			bool	= True 
@@ -133,6 +149,8 @@ class PyfigBase:
 	cluster_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'cluster'))
 	exchange_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exchange'))
 	profile_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'tb'))
+	log_dir: 			Path    = property(lambda _: _.cluster_dir)
+
 
 	debug: bool    = False
 	env_log_path = 'dump/tmp/env.log'
@@ -146,26 +164,24 @@ class PyfigBase:
 	]
 
 	def __init__(ii, notebook:bool=False, sweep: dict=None, **init_arg):     
-		""" Steps
-		0- subclasses inherit from personal bases
-		1- initialised subclasses, because they don't have properties otherwise
-		"""
 
-		for sub_name, sub in ii.sub_cls.items():
+		for sub_name, sub in ii.sub_cls.items(): # docs:sub_classes-init
 			setattr(ii, sub_name, sub(parent=ii))
 
 		c_init = flat_any(ii.d)
 		sys_arg = sys.argv[1:]
 		sys_arg = cmd_to_dict(sys_arg, c_init) if not notebook else {}  
 		init_arg = flat_any(init_arg) | (sweep or {})
-
+   
 		ii.update_configuration(init_arg | sys_arg)
 
 		ii.setup_exp_dir(group_exp= ii.group_exp, force_new_id= False)
 
-		ii.debug_log([dict(os.environ.items()), ii.d,], [ii.env_log_path, ii.d_log_path])
+		ii.debug_log([dict(os.environ.items()), ii.d,], ['env.log', 'd.log'])
   
-		if not ii.resource.submit and ii.distribute.head:
+	def runfig(ii):
+
+		if (not ii.resource.submit) and ii.distribute.head:
 			ii.wb.run = wandb.init(
 				project     = ii.project, 
 				group		= ii.exp_name,
@@ -177,24 +193,25 @@ class PyfigBase:
 			)
 		
 		if ii.resource.submit:
+			ii.resource.submit = False # docs:submit
 
 			run_or_sweep_d = ii.get_run_or_sweep_d()
-
 			for i, run_d in enumerate(run_or_sweep_d):
-				is_first_run = i == 0
-				group_exp = ii.group_exp or (is_first_run and ii.sweep.run_sweep)
-				ii.setup_exp_dir(group_exp= group_exp, force_new_id= True)
+				ii.distribute.head = i == 0
+				group_exp = ii.group_exp or (ii.distribute.head and ii.sweep.run_sweep)
 				
+				ii.setup_exp_dir(group_exp= group_exp, force_new_id= True)
+				if ii.distribute.head:
+					ii.debug_log([dict(os.environ.items()), run_d], ['env_submit.log', 'd_submit.log'])
+     
 				base_d = inst_to_dict(ii, attr=True, sub_cls=True, flat=True, ignore=ii.ignore, debug=ii.debug)
 				run_d = base_d | run_d
 
-				if is_first_run:
-					ii.debug_log([dict(os.environ.items()), run_d], [ii.env_log_path, ii.d_log_path])
-				
 				ii.resource.cluster_submit(run_d)
 
-			sys.exit(ii.wb.run_url)
+			sys.exit(ii.wb.run_url + ii.exp_id*(not i))
 	
+	@staticmethod
 	def pr(d: dict):
 		pprint.pprint(d)
 
@@ -214,7 +231,11 @@ class PyfigBase:
 		return {k:v for k,v in d_init.items() if isinstance(v, type) or isinstance(v, Sub)}
 
 	def setup_exp_dir(ii, group_exp=False, force_new_id=False):
-		if ii.exp_dir and not force_new_id:
+
+		if ii.debug:
+			print('debug:setup_exp_dir:', ii.exp_dir, ii.distribute.head, ii.group_exp, force_new_id)
+
+		if Path(ii.exp_dir).exists() and not force_new_id:
 			return None
 		exp_name = ii.exp_name or 'junk'
 		exp_group_dir = Path(ii.dump_exp_dir, 'sweep'*ii.sweep.run_sweep, exp_name)
@@ -225,7 +246,6 @@ class PyfigBase:
 		[mkdir(ii.exp_dir/_dir) for _dir in ['cluster', 'exchange', 'wandb', 'profile']]
 	
 	def get_run_or_sweep_d(ii,):
-		ii.resource.submit = False
 		
 		if not ii.sweep.run_sweep:
 			""" single run
@@ -240,9 +260,10 @@ class PyfigBase:
 		print(f'### sweep over {sweep_keys} ({len(sweep_vals)} total) ###')
 		return [{k:v for k,v in zip(sweep_keys, v_set)} for v_set in sweep_vals]
 
-	def debug_log(ii, d_all:list, p_all: list):
-		for d, p in zip(d_all, p_all):
-			ii.log(d, path=p)
+	def debug_log(ii, d_all:list, name_all: list):
+		for d, name in zip(d_all, name_all):
+			ii.log(d, path=ii.log_dir/name)
+			ii.log(d, path=ii.tmp_dir/name)
 			
 	def partial(ii, f:Callable, args=None, **kw):
 		d = flat_any(args if args else ii.d)
@@ -262,7 +283,7 @@ class PyfigBase:
 					print(f'update {k}: {v_ref} --> {v}')
 	
 	@staticmethod
-	def log(info: dict|str, path='dump/tmp/log.tmp'):
+	def log(info: dict|str, path: Path):
 		mkdir(path)
 		info = pprint.pformat(info)
 		with open(path, 'w') as f:
@@ -274,7 +295,7 @@ class PyfigBase:
 			base_d = inst_to_dict(ii, attr=True, sub_cls=True, flat=True, ignore=ii.ignore, debug=ii.debug)
 			d = {k:v for k,v in base_d.items() if isinstance(v, (np.ndarray, np.generic, list))}
 			d = {k:torch.tensor(v, dtype=dtype, device=device, requires_grad=False) for k,v in d.items() if not isinstance(v[0], str)}
-		ii.debug_log([d,], [ii.tmp_dir/'to_torch.log'])
+		ii.debug_log([d,], ['to_torch.log',])
 		ii.update_configuration(d)
   
 	def debug_mode(on=False):
@@ -284,14 +305,15 @@ class PyfigBase:
 			os.environ['debug'] = ''
 
 	def sync(ii, step: int, v_tr: dict):
+		v_path = (ii.exchange_dir / f'{step}_{ii.distribute.dist_id}').with_suffix('.pk')
+		v_mean_path = add_to_Path(v_path, '-mean')
 		
 		try:
 			gc.disable()
-			v_path = (ii.exchange_dir / f'{step}_{ii.distribute.dist_id}').with_suffix('.pk')
-			
-			v_sync = numpify_tree(v_tr)
-			v, treespec = optree.tree_flatten(v_sync)
-			dump(v_path, v)
+
+			v_ref_leaves, treespec = optree.tree_flatten(v_tr)
+			v_sync_save = [v.detach().cpu().numpy() if isinstance(v, torch.Tensor) else v for v in v_ref_leaves]
+			dump(v_path, v_sync_save)
 
 		except Exception as e:
 			print(e)
@@ -299,19 +321,15 @@ class PyfigBase:
 			gc.enable()
 		
 		if ii.distribute.head:
-			### 1 wait for workers to dump ###
+
 			n_ready = 0
 			while n_ready < ii.resource.n_gpu:
 				k_path_all = list(ii.exchange_dir.glob(f'{step}_*'))
 				n_ready = len(k_path_all)
-				sleep(0.02)
 
-			### 2 collect arrays ###
-			leaves = []
-			for p in k_path_all:
-				leaves += [load(p)]
-		
-			### 3 mean arrays ###
+			for i, p in enumerate(k_path_all):
+				leaves = [load(p),] if i==0   else [*leaves, load(p)]
+    
 			v_mean = [np.stack(l).mean(axis=0) for l in zip(*leaves)]
 
 			try:
@@ -321,32 +339,35 @@ class PyfigBase:
 			except Exception as e:
 				print(e)
 			finally:
-				for p in k_path_all:
-					p.unlink()
+				sleep(0.01)
+				[p.unlink() for p in k_path_all]
 				gc.enable()
 
-		v_mean_path = add_to_Path(v_path, '-mean')
 		while v_path.exists():
 			sleep(0.02)
 		sleep(0.02)
-		
+  
+		gc.disable()
 		try:
-			gc.disable()
-			v_sync = load(v_mean_path)  # Speed: Only load sync vars
-			v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync)
+			v_sync_leaves = load(v_mean_path)  # Speed: Only load sync vars
+			leaves = [torch.tensor(data=v, device=ref.device, dtype=ref.dtype) 
+				if isinstance(ref, torch.Tensor) else v 
+				for v, ref in zip(v_sync_leaves, v_ref_leaves)]
+			v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync_leaves)
+			
 		except Exception as e:
-			print(e)
-			gc.enable()
 			v_sync = v_tr
+			print(e)
 		finally: # ALWAYS EXECUTED
 			v_mean_path.unlink()
 			gc.enable()
-			v_sync = torchify_tree(v_sync, v_tr)
-			return v_sync
+		return v_sync
 
 ### slurm things
 
 class niflheim_resource(Sub):
+	_p: PyfigBase = None
+ 
 	env: str     	= ''
 	n_gpu: int 		= 1
 
@@ -402,14 +423,16 @@ class niflheim_resource(Sub):
 		mod = ['module purge', 'module load foss', 'module load CUDA/11.7.0']
 		env = ['source ~/.bashrc', f'conda activate {ii.env}',]
 		export = ['export $SLURM_JOB_ID',]
-		debug = ['echo $SLURM_JOB_GPUS', 'echo $SLURM_JOB_NODELIST', 'nvidia-smi']
+		debug = ['echo all_gpus:$SLURM_JOB_GPUS', 'echo nodelist:$SLURM_JOB_NODELIST', 'nvidia-smi']
 		srun_cmd = 'srun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label '
 		body = mod + env + debug
  
 		for i in range(ii.n_gpu):
 			
 			device_log_path = ii._p.cluster_dir/(str(i)+"_device.log") # + ii._p.hostname.split('.')[0])
-		
+
+			job.update(dict(head= i==0))
+   
 			cmd = dict_to_cmd(job)
    
 			cmd = f'python -u {job["run_name"]} {cmd}'
