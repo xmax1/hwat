@@ -64,7 +64,7 @@ def run(c: Pyfig):
 	_dummy = torch.randn((1,))
 	dtype = _dummy.dtype
 	device = 'cuda' if torch.cuda.is_available() else 'cpu'
-	c.to_torch(device=device, dtype=dtype)
+	c.to(to='torch', device=device, dtype=dtype)
 	model: nn.Module = c.partial(Ansatz_fb).to(device).to(dtype)
 
 	### train step ###
@@ -115,7 +115,7 @@ def run(c: Pyfig):
 		model.requires_grad_(False)
 		
 		with torch.no_grad():
-			r, acc, deltar = sample_b(model, r, deltar, n_corr=c.data.n_corr)  # ❗needs testing 
+			r, acc, deltar = sample_b(model, r, deltar, n_corr=c.data.n_corr) 
 			r = keep_around_points(r, center_points, l=5.) if step < 50 else r
 
 		v_tr = train_step(model, r)
@@ -127,7 +127,7 @@ def run(c: Pyfig):
 				params = [p for p in model.parameters()]
 
 				v_tr |= dict(acc=acc, r=r, deltar=deltar, grads=grads, params=params)
-				
+
 				v_sync = c.sync(step, v_tr)
 
 				deltar = v_sync['deltar']

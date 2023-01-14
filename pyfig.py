@@ -1,17 +1,9 @@
-import sys
-from typing import Callable
 from pathlib import Path
 import numpy as np
-import os
-from pathlib import Path
 
-import wandb
+from pyfig_utils import PyfigBase, Sub, niflheim_resource
 
-from utils import run_cmds, inst_to_dict
-from utils import PyfigBase, Sub, niflheim_resource, hostname
-
-from user_secret import user
-
+from dump.user_secret import user
 
 class Pyfig(PyfigBase):
 
@@ -76,15 +68,8 @@ class Pyfig(PyfigBase):
 		n_gpu: 			int 	= 1
 
 	class wb(PyfigBase.wb):
+		wb_mode = 'online'
 		print('loading wandb from base class')
-
-	home:				Path	= Path().home()
-	dump:               Path    = property(lambda _: Path('dump') )
-	dump_exp_dir: 		Path 	= property(lambda _: _.dump/'exp')
-	tmp_dir:            Path	= property(lambda _: _.dump/'tmp')
-	project_dir:        Path    = property(lambda _: _.home / 'projects' / _.project)
-	cluster_dir: 		Path	= property(lambda _: Path(_.exp_dir, 'cluster'))
-	exchange_dir: 		Path	= property(lambda _: Path(_.exp_dir, 'exchange'))
 
 	def __init__(ii, notebook:bool=False, sweep: dict=None, **init_arg) -> None:
 		super().__init__(notebook=notebook, sweep=sweep, **init_arg)
@@ -130,4 +115,5 @@ class Pyfig(PyfigBase):
 		_kill_all_cmd = 'ssh user@server "killall -9 -u user"'
 		_cancel_job_cmd = f'scancel {cluster.job_id}'
 
+		
 		"""

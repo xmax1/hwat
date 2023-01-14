@@ -21,7 +21,7 @@ from utils import type_me
 from utils import add_to_Path, flat_any
 from utils import load, dump, cls_to_dict, dict_to_cmd
 
-import user_secret
+import dump.user_secret as user_secret
 
 import gc
 

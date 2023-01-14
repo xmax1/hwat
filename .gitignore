@@ -1,6 +1,6 @@
 
 # user details
-proj_secrets.py
+user_secret.py
 
 # junk
 *.idea
