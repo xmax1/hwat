@@ -235,6 +235,40 @@ def compute_ke_b(wf: nn.Module, r: torch.Tensor, ke_method='jvp', elements=False
 	return -0.5 * e_jvp.sum(-1)
 
 
+def dep_ke_comp(
+    model: nn.Module, 
+    r: torch.Tensor,
+    ke_method='vjp', 
+    elements=False
+):
+	dtype, device = r.dtype, r.device
+	n_b, n_e, n_dim = r.shape
+	n_jvp = n_e * n_dim
+	ones = torch.ones((n_b,), device=device, dtype=dtype)
+	r_flat = r.reshape(n_b, n_jvp)
+	r_flat = r_flat.requires_grad_(True).contiguous()
+ 
+	def grad_fn(_r: torch.Tensor):
+		lp: torch.Tensor = model(_r)
+		g = torch.autograd.grad(lp.sum(), _r, create_graph=True)[0]
+		return g
+
+	def grad_grad_fn(_r: torch.Tensor):
+		g = grad_fn(_r)
+		ggs = [torch.autograd.grad(g[:, i], _r, grad_outputs=ones, retain_graph=True)[0] for i in range(n_jvp)]
+		ggs = torch.stack(ggs, dim=-1)
+		return torch.diagonal(ggs, dim1=1, dim2=2)
+	
+	g = grad_fn(r_flat)
+	gg = grad_grad_fn(r_flat)
+
+	if elements:
+		return g, gg
+
+	e_jvp = gg + g**2
+	return -0.5 * e_jvp.sum(-1)
+	
+
 ### sampling ###
 def keep_around_points(r, points, l=1.):
 	""" points = center of box each particle kept inside. """
