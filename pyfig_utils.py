@@ -114,8 +114,8 @@ class PyfigBase:
 		entity:			str		= property(lambda _: _._p.project)
 		program: 		Path	= property(lambda _: Path( _._p.project_dir, _._p.run_name))
 		sweep_path_id:  str     = property(lambda _: f'{_.entity}/{_._p.project}/{_._p.exp_name}')
-		wb_type: 		str		= property(lambda _: _.wb_sweep*'sweeps' or 'groups') # _._p.group_exp*f'groups' or 'runs')
-		run_url: 		str		= property(lambda _: f'https://wandb.ai/{_.entity}/{_._p.project}/{_.wb_type}/{_._p.exp_name}/')
+		wb_type: 		str		= property(lambda _: _.wb_sweep*'sweeps' or _._p.sweep.run_sweep*f'groups/{_._p.exp_name}' or 'runs') # _._p.group_exp*f'groups' or 'runs')
+		run_url: 		str		= property(lambda _: f'https://wandb.ai/{_.entity}/{_._p.project}/{_.wb_type}/')
   
 	class distribute(Sub):
 		head:			bool	= True 
@@ -351,7 +351,7 @@ class PyfigBase:
 		gc.disable()
 		try:
 			v_sync_leaves = load(v_mean_path)  # Speed: Only load sync vars
-			v_sync_leaves = [torch.tensor(data=v, device=ref.device, dtype=ref.dtype) 
+			v_sync_leaves = [torch.tensor(data=v, device=ref.device, dtype=ref.dtype, requires_grad=False) 
 				if isinstance(ref, torch.Tensor) else v 
 				for v, ref in zip(v_sync_leaves, v_ref_leaves)]
 			v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync_leaves)

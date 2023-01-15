@@ -42,7 +42,11 @@ def run(c: Pyfig):
 	model: nn.Module = c.partial(Ansatz_fb).to(device).to(dtype)
 
 	if c.model.compile_ts:
-		from utils import run_cmds
+		model_og = deepcopy(model)
+		### docs:compile_ts
+		# - model(r) before does nothing
+		# - model = torch.jit.script(model, r.clone()) !!! r.clone() required - reason unknown
+
 		# PYTORCH_JIT=0  # disable jit
 		# run_cmds('export PYTORCH_NVFUSER_DISABLE=fallback')
 		# run_cmds(['PYTORCH_NVFUSER_DISABLE_FALLBACK=1', 'export PYTORCH_NVFUSER_DISABLE_FALLBACK'], silent=False)
@@ -50,10 +54,9 @@ def run(c: Pyfig):
 		# is because you have allreduce_post_accumulation=False, allreduce_post_accumulation_fp16=False
 		# Torchscript/NVFuser currently works with the above two flags set to true. 
 		# Setting the above two to true will also increase performance orthogonally.
-		os.environ['PYTORCH_NVFUSER_DISABLE_FALLBACK'] = '1'
-		model_og = deepcopy(model)
-		model(r)
-		model = torch.jit.script(model, r, )
+		# os.environ['PYTORCH_NVFUSER_DISABLE_FALLBACK'] = '1'
+		model = torch.jit.script(model, r.clone())
+
 		print(type(model))
 		# raise NotImplementedError
 
@@ -77,22 +80,7 @@ def run(c: Pyfig):
 		pass
  
 	### train step ###
-	def train_step(model, r: torch.Tensor):
-
-		ke = compute_ke_b(model, r, ke_method=c.model.ke_method)
-		
-		with torch.no_grad():
-			pe = compute_pe_b(r, c.data.a, c.data.a_z)
-			e = pe + ke
-			e_mean_dist = torch.mean(torch.abs(torch.median(e) - e))
-			e_clip = torch.clip(e, min=e-5*e_mean_dist, max=e+5*e_mean_dist)
-
-		model.zero_grad()
-		loss = ((e_clip - e_clip.mean())*model(r)).mean()
-		loss.backward()
-
-		return dict(ke=ke, pe=pe, e=e, loss=loss)
-
+	
 	print(f"""exp/actual | 
 		cps    : {(c.data.n_e, 3)}/{center_points.shape}
 		r      : {(c.resource.n_device, c.data.n_b, c.data.n_e, 3)}/{r.shape}
@@ -103,40 +91,54 @@ def run(c: Pyfig):
 	import wandb
 	from hwat import keep_around_points, sample_b
 	from utils import compute_metrix
-	
+
 	opt = torch.optim.RAdam(model.parameters(), lr=0.001)
 
 	for step in range(1, c.n_step+1):
-     
-		opt.step()
+		
+		opt.zero_grad(set_to_none=True)
+		for p in model.parameters():
+			p.requires_grad = False
 
 		r, acc, deltar = sample_b(model, r, deltar, n_corr=c.data.n_corr) 
 		r = keep_around_points(r, center_points, l=5.) if step < 50 else r
-
-		v_tr = train_step(model, r)
-
-		if not (step % c.log_metric_step):
-
-			with torch.no_grad():
-				grads = [p.grad for p in model.parameters()]
-				params = [p for p in model.parameters()]
-
-				v_tr |= dict(acc=acc, r=r, deltar=deltar, grads=grads, params=params)
-
-				if c.resource.n_gpu > 1:
-					v_tr = c.sync(step, v_tr)
-					deltar = v_tr['deltar']
-
-				model.zero_grad()
-				for p, g in zip(model.parameters(), v_tr['grads']):
-					p.grad += g
-
-				if c.distribute.head:
-					metrix = compute_metrix(v_tr)
-					wandb.log(metrix, step=step)
   
-		if not (step-1) and c.distribute.head:
+		ke = compute_ke_b(model, r, ke_method=c.model.ke_method)
+		pe = compute_pe_b(r, c.data.a, c.data.a_z)
+		
+		e = pe + ke
+		e_mean_dist = torch.mean(torch.abs(torch.median(e) - e))
+		e_clip = torch.clip(e, min=e-5*e_mean_dist, max=e+5*e_mean_dist)
 
+		for p in model.parameters():
+			p.requires_grad = True
+		loss: torch.Tensor = ((e_clip - e_clip.mean())*model(r))
+		loss.mean().backward()
+		
+		with torch.no_grad():
+			params = [p.detach() for p in model.parameters()]
+			grads = [p.grad.detach() for p in model.parameters()]
+
+			v_tr = dict(acc=acc, r=r, deltar=deltar, e=e, pe=pe, ke=ke, grads=grads, params=params)
+
+			if not (step % c.log_metric_step):
+				with torch.no_grad():
+
+					if c.resource.n_gpu > 1:
+						v_tr = c.sync(step, v_tr)
+						deltar = v_tr['deltar']
+
+					if c.distribute.head:
+						metrix = compute_metrix(v_tr)
+						wandb.log(metrix, step=step)
+		
+			for p, g in zip(model.parameters(), v_tr['grads']):
+				p.grad += g
+		
+		opt.step()
+
+		if not (step-1) and c.distribute.head and False:
+			
 			def gen_profile(wait=1, warmup=1, active=1, repeat=1):
 				# https://wandb.ai/wandb/trace/reports/Using-the-PyTorch-Profiler-with-W-B--Vmlldzo5MDE3NjU
 				print('profiling')
@@ -153,7 +155,8 @@ def run(c: Pyfig):
 				with profiler:
 					for _ in range((wait + warmup + active) * repeat):
 						model_pr()
-						sample_pr()
+						if not c.model.compile_ts: # https://github.com/pytorch/pytorch/issues/76791
+							sample_pr()
 						ke_pr()
 						profiler.step()
 

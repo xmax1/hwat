@@ -208,6 +208,7 @@ def compute_ke_b(
     ke_method='vjp', 
     elements=False
 ):
+
 	dtype, device = r.dtype, r.device
 	n_b, n_e, n_dim = r.shape
 	n_jvp = n_e * n_dim
@@ -216,24 +217,19 @@ def compute_ke_b(
 	r_flat = r_flat.requires_grad_(True).contiguous()
 	eyes = torch.eye(n_jvp, dtype=dtype, device=device)[None].repeat((n_b, 1, 1))
  
+	
 	# model_fn, params = make_functional(model, disable_autograd_tracking=True)
-	model_fn, params, buffers = make_functional_with_buffers(model, disable_autograd_tracking=True)
+	# model_fn, params, buffers = make_functional_with_buffers(model)  # RuntimeError: you can only change requires_grad flags of leaf variables
+	# for p in model.parameters():
+	# 	p.requires_grad = False
+	model_fn, params, buffers = make_functional_with_buffers(model, disable_autograd_tracking=True)  # can do it this way if requires grad is False
 	model_rv = lambda _r: vmap(model_fn, in_dims=(None, None, 0))(params, buffers, _r).sum()
-
-	# print('r_flat-in: ', r_flat.shape)
-	# lp = model_rv(r)
-	# print(lp.shape)
-	# lp = model_rv(r_flat)
-	# print(lp.shape)
-	# lp = model_rv(r).sum()
-	# print(lp.shape)
-	# lp = model_rv(r_flat).sum()
-	# print(lp.shape)
 
 	def ke_grad_grad_method():
 		def grad_fn(_r: torch.Tensor):
-			lp = model(_r).sum()
-			return torch.autograd.grad(lp, _r, create_graph=True)[0]
+			lp: torch.Tensor = model(_r)
+			g = torch.autograd.grad(lp.sum(), _r, create_graph=True)[0]
+			return g
 
 		def grad_grad_fn(_r: torch.Tensor):
 			g = grad_fn(_r)
@@ -303,8 +299,6 @@ def init_r(n_b, n_e, center_points: torch.Tensor, std=0.1):
 	# sub_r = [center_points + torch.randn((n_b,n_e,3), device=device, dtype=dtype)*std for i in range(n_device)]
 	# return torch.stack(sub_r, dim=0) if len(sub_r)>1 else sub_r[0][None, ...]
 
-from copy import deepcopy
-
 def sample_b(
     model: nn.Module, 
     r_0: torch.Tensor, 
@@ -316,28 +310,30 @@ def sample_b(
 
 	deltar_1 = torch.clip(deltar_0 + 0.01*torch.randn([1,], device=device, dtype=dtype), min=0.005, max=0.5)
 
-	with torch.no_grad():
-		r_0 = r_0.detach()
-		lp = model(r_0)
-		lp = model(r_0)
-		p_0 = torch.exp(lp)**2
+	p_0 = torch.exp(model(r_0))**2
 
 	acc = []
 	for deltar in [deltar_0, deltar_1]:
 		acc_tmp = 0.
+
 		for sam_step in torch.arange(1, n_corr+1):
 			with torch.no_grad():
-				r_1 = r_0 #+ torch.randn_like(r_0)*deltar
-				log_psi = model(r_1)
-				p_1 = torch.exp(log_psi)**2
 
+				r_1 = r_0 + torch.randn_like(r_0)*deltar
+				log_psi = model(r_1)
+    
+				p_1 = torch.exp(log_psi)**2
 				p_mask = (p_1/p_0) > torch.rand_like(p_1)
-				
 				p_0 = torch.where(p_mask, p_1, p_0)
+    
 				r_0 = torch.where(p_mask[..., None, None], r_1, r_0)
+
 				acc_tmp += p_mask.to(dtype).mean().item()
+    
+			del log_psi
 			del r_1
 			del p_1
+
 		acc += [acc_tmp/sam_step]
 
 	mask = ((0.5-acc[0])**2 - (0.5-acc[1])**2) < 0.
