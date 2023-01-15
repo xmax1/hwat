@@ -31,6 +31,8 @@ Steps
 
 ## docs:submit
 - must change submit to False to prevent auto resubmitting
+- 
+
 
 """
 this_dir = Path(__file__).parent
@@ -208,12 +210,17 @@ class PyfigBase:
 				run_d = base_d | run_d
 
 				ii.resource.cluster_submit(run_d)
-
+			ii.pr(ii._paths)
 			sys.exit(ii.wb.run_url + ii.exp_id*(not i))
 	
 	@staticmethod
 	def pr(d: dict):
 		pprint.pprint(d)
+
+	@property
+	def _paths(ii):
+		path_filter = lambda item: any([p in item[0] for p in ['path', 'dir']])
+		return dict(filter(path_filter, ii.d.items()))
 
 	@property
 	def cmd(ii):
@@ -416,10 +423,16 @@ class niflheim_resource(Sub):
 
 		mod = ['module purge', 'module load foss', 'module load CUDA/11.7.0']
 		env = ['source ~/.bashrc', f'conda activate {ii.env}',]
-		export = ['export $SLURM_JOB_ID',]
+		export = [
+		'export $SLURM_JOB_ID',
+		'export MKL_NUM_THREADS=1',
+		'export NUMEXPR_NUM_THREADS=1',
+		'export OMP_NUM_THREADS=1',
+		'export OPENBLAS_NUM_THREADS=1',
+		]
 		debug = ['echo all_gpus:$SLURM_JOB_GPUS', 'echo nodelist:$SLURM_JOB_NODELIST', 'nvidia-smi']
 		srun_cmd = 'srun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label '
-		body = mod + env + debug
+		body = mod + env + debug + export
  
 		for i in range(ii.n_gpu):
 			

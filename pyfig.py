@@ -38,10 +38,16 @@ class Pyfig(PyfigBase):
 		n_d:        int         = property(lambda _: _.n_e - _.n_u)
 
 	class model(PyfigBase.model):
+		compile_ts: 	bool	= False
+		compile_func:	bool	= False
+		optimise_ts:	bool	= False
+		optimise_aot:	bool 	= False
 		with_sign:      bool    = False
+		functional: 	bool	= True
+
 		terms_s_emb:    list    = ['ra', 'ra_len']
 		terms_p_emb:    list    = ['rr', 'rr_len']
-		ke_method:      str     = 'vjp'
+		ke_method:      str     = 'grad_grad'
 		n_sv:           int     = 32
 		n_pv:           int     = 16
 		n_fb:           int     = 2
@@ -89,6 +95,9 @@ class Pyfig(PyfigBase):
 		ii.runfig() # docs:runfig
   
 		"""  # Pyfig Docs
+		- todo
+		- try to compile the sampler and see where fails
+
 		## Prerequisite
 		- wandb api key 
 		- change secrets file
@@ -131,6 +140,16 @@ class Pyfig(PyfigBase):
 				
 		## docs:wandb
 		- entity is the team name
+
+		## docs:torchscript
+		- unsupported
+			- https://pytorch.org/docs/stable/jit_unsupported.html 
+			- Functions which construct tensors from non-tensor inputs do not support the requires_grad argument, except for torch.tensor. (ie torch.ones)
+
+		
+		### docs:compile-torchscript-model
+		# - Final[torch.Tensor] not valid type
+		# - register_buffer way to include tensor constants
 
 
 		## docs:useful_cmd

@@ -204,8 +204,8 @@ def type_me(v, v_ref=None, is_cmd_item=False):
 
 ### run things
 
-def run_cmds(cmd:Union[str, list], cwd:str | Path='.', silent=False, _res=[]):
-	for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]): 
+def run_cmds(cmd: str|list, cwd:str | Path='.', silent=False, _res=[]):
+	for cmd_1 in (cmd if isinstance(cmd, list) else [cmd,]): 
 		try:
 			cmd_1 = [c.strip() for c in cmd_1.split(' ')]
 			_res = subprocess.run(cmd_1, cwd=str(cwd), capture_output=True, text=True)
