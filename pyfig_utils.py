@@ -95,8 +95,12 @@ class PyfigBase:
 		n_fbv:          int     = property(lambda _: _.n_sv*3+_.n_pv*2)
 
 	class opt(Sub):
-		lr: 			float	= 0.001
-		name: 			str		= 'Adam'
+		name: 			str		= 'RAdam'
+		lr:  			float 	= 0.15,
+		betas:			list	= [0.9, 0.999],
+		eps: 			float 	= 1e-4,
+		weight_decay: 	float 	= 0.0,
+		hessian_power: 	float 	= 1.0,
   
 	class sweep(Sub):
 		run_sweep:      bool    = False	

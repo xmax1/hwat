@@ -91,18 +91,21 @@ def run(c: Pyfig):
 	from hwat import keep_around_points, sample_b
 	from utils import compute_metrix
 
-	# opt = torch.optim.RAdam(model.parameters(), lr=0.001)
+	def get_opt(c: Pyfig):
+		if c.opt.name == 'RAdam':
+			return torch.optim.RAdam(model.parameters(), lr=0.001)
 
-	import torch_optimizer as torch_opt
+		if c.opt.name == 'Adahessian':
+			import torch_optimizer  # pip install torch_optimizer
+			return torch_optimizer.Adahessian(
+						model.parameters(),
+						lr 		= c.opt.lr
+                        betas= c.opt.betas,
+						eps= c.opt.eps,
+						weight_decay= c.opt.weight_decay,
+      					hessian_power= c.opt.hessian_power)
 
-	opt = torch_opt.Adahessian(
-		model.parameters(),
-		lr= 0.15,
-		betas= (0.9, 0.999),
-		eps= 1e-4,
-		weight_decay= 0.0,
-		hessian_power= 1.0,
-	)
+	opt = get_opt(c.opt.name)
 
 	for step in range(1, c.n_step+1):
 		
@@ -123,7 +126,7 @@ def run(c: Pyfig):
 		for p in model.parameters():
 			p.requires_grad = True
 		loss: torch.Tensor = ((e_clip - e_clip.mean())*model(r))
-		loss.mean().backward(create_graph=True)
+		loss.mean().backward(create_graph= c.opt.name in ('Adahessian',))
 		
 		with torch.no_grad():
 			params = [p.detach() for p in model.parameters()]
