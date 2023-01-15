@@ -421,14 +421,18 @@ class niflheim_resource(Sub):
 		if job['head']:
 			print(ii.slurm)
 
-		mod = ['module purge', 'module load foss', 'module load CUDA/11.7.0']
+		mod = [
+			'module purge', 
+			# 'module load foss', 
+   			# 'module load CUDA/11.7.0'
+		]
 		env = ['source ~/.bashrc', f'conda activate {ii.env}',]
 		export = [
 		'export $SLURM_JOB_ID',
-		'export MKL_NUM_THREADS=1',
-		'export NUMEXPR_NUM_THREADS=1',
-		'export OMP_NUM_THREADS=1',
-		'export OPENBLAS_NUM_THREADS=1',
+		# 'export MKL_NUM_THREADS=1',
+		# 'export NUMEXPR_NUM_THREADS=1',
+		# 'export OMP_NUM_THREADS=1',
+		# 'export OPENBLAS_NUM_THREADS=1',
 		]
 		debug = ['echo all_gpus:$SLURM_JOB_GPUS', 'echo nodelist:$SLURM_JOB_NODELIST', 'nvidia-smi']
 		srun_cmd = 'srun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label '

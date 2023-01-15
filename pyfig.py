@@ -146,11 +146,16 @@ class Pyfig(PyfigBase):
 			- https://pytorch.org/docs/stable/jit_unsupported.html 
 			- Functions which construct tensors from non-tensor inputs do not support the requires_grad argument, except for torch.tensor. (ie torch.ones)
 
+		## docs:profiler
+		1- --> wandb --> Artifacts --> files --> trace
+		https://wandb.ai/wandb/trace/reports/Using-the-PyTorch-Profiler-with-W-B--Vmlldzo5MDE3NjU
+		2- tensorboard --logdir=c.profile_dir
+		browser: http://localhost:6006/pytorch_profiler
+		https://pytorch.org/tutorials/intermediate/tensorboard_profiler_tutorial.html
 		
 		### docs:compile-torchscript-model
 		# - Final[torch.Tensor] not valid type
 		# - register_buffer way to include tensor constants
-
 
 		## docs:useful_cmd
 		_kill_all = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'

@@ -220,15 +220,15 @@ def compute_ke_b(
 	model_fn, params, buffers = make_functional_with_buffers(model, disable_autograd_tracking=True)
 	model_rv = lambda _r: vmap(model_fn, in_dims=(None, None, 0))(params, buffers, _r).sum()
 
-	print('r_flat-in: ', r_flat.shape)
-	lp = model_rv(r)
-	print(lp.shape)
-	lp = model_rv(r_flat)
-	print(lp.shape)
-	lp = model_rv(r).sum()
-	print(lp.shape)
-	lp = model_rv(r_flat).sum()
-	print(lp.shape)
+	# print('r_flat-in: ', r_flat.shape)
+	# lp = model_rv(r)
+	# print(lp.shape)
+	# lp = model_rv(r_flat)
+	# print(lp.shape)
+	# lp = model_rv(r).sum()
+	# print(lp.shape)
+	# lp = model_rv(r_flat).sum()
+	# print(lp.shape)
 
 	def ke_grad_grad_method():
 		def grad_fn(_r: torch.Tensor):
@@ -245,14 +245,14 @@ def compute_ke_b(
 		return g, gg
 
 	def ke_vjp_method():
-		print('r_flat-vjp: ', r_flat.shape)
+		# print('r_flat-vjp: ', r_flat.shape)
 		grad_fn = functorch.grad(model_rv)
 		g, fn = functorch.vjp(grad_fn, r_flat)
 		gg = torch.stack([fn(eyes[..., i])[0][:, i] for i in range(n_jvp)], dim=-1)
 		return g, gg
 
 	def ke_jvp_method():
-		print('r_flat-vjp: ', r_flat.shape, 'eyes-vjp: ', eyes.shape)
+		# print('r_flat-vjp: ', r_flat.shape, 'eyes-vjp: ', eyes.shape)
 		grad_fn = grad(model_rv)
 		jvp_all = [functorch.jvp(grad_fn, (r_flat,), (eyes[:, i],)) for i in range(n_jvp)]  # grad out, jvp
 		g = torch.stack([x[:, i] for i, (x, _) in enumerate(jvp_all)], dim=-1)
@@ -303,35 +303,42 @@ def init_r(n_b, n_e, center_points: torch.Tensor, std=0.1):
 	# sub_r = [center_points + torch.randn((n_b,n_e,3), device=device, dtype=dtype)*std for i in range(n_device)]
 	# return torch.stack(sub_r, dim=0) if len(sub_r)>1 else sub_r[0][None, ...]
 
-	
-def move(r:torch.Tensor, deltar:torch.Tensor) -> torch.Tensor:
-	return r + torch.randn_like(r)*deltar
-
 from copy import deepcopy
 
-def sample_b(model: nn.Module, r_0: torch.Tensor, deltar_0: torch.Tensor, n_corr=10):
+def sample_b(
+    model: nn.Module, 
+    r_0: torch.Tensor, 
+    deltar_0: torch.Tensor, 
+    n_corr: int=10
+):
 	""" metropolis hastings sampling with automated step size adjustment """
 	device, dtype = r_0.device, r_0.dtype
 
 	deltar_1 = torch.clip(deltar_0 + 0.01*torch.randn([1,], device=device, dtype=dtype), min=0.005, max=0.5)
 
-	lp = model(r_0)
-	p_0 = torch.exp(lp)**2
+	with torch.no_grad():
+		r_0 = r_0.detach()
+		lp = model(r_0)
+		lp = model(r_0)
+		p_0 = torch.exp(lp)**2
 
 	acc = []
 	for deltar in [deltar_0, deltar_1]:
-		for _ in torch.arange(n_corr):
+		acc_tmp = 0.
+		for sam_step in torch.arange(1, n_corr+1):
+			with torch.no_grad():
+				r_1 = r_0 #+ torch.randn_like(r_0)*deltar
+				log_psi = model(r_1)
+				p_1 = torch.exp(log_psi)**2
 
-			r_1 = move(r_0, deltar)
-			log_psi = model(r_1)
-			p_1 = torch.exp(log_psi)**2
-
-			p_mask = (p_1/p_0) > torch.rand_like(p_1)
-			
-			p_0 = torch.where(p_mask, p_1, p_0)
-			r_0 = torch.where(p_mask[..., None, None], r_1, r_0)
-
-		acc += [p_mask.type_as(r_0).mean()]
+				p_mask = (p_1/p_0) > torch.rand_like(p_1)
+				
+				p_0 = torch.where(p_mask, p_1, p_0)
+				r_0 = torch.where(p_mask[..., None, None], r_1, r_0)
+				acc_tmp += p_mask.to(dtype).mean().item()
+			del r_1
+			del p_1
+		acc += [acc_tmp/sam_step]
 
 	mask = ((0.5-acc[0])**2 - (0.5-acc[1])**2) < 0.
 	deltar = mask*deltar_0 + ~mask*deltar_1

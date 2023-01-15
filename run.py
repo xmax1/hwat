@@ -53,7 +53,7 @@ def run(c: Pyfig):
 		os.environ['PYTORCH_NVFUSER_DISABLE_FALLBACK'] = '1'
 		model_og = deepcopy(model)
 		model(r)
-		model = torch.jit.script(model, r)
+		model = torch.jit.script(model, r, )
 		print(type(model))
 		# raise NotImplementedError
 
@@ -109,11 +109,9 @@ def run(c: Pyfig):
 	for step in range(1, c.n_step+1):
      
 		opt.step()
-		model.zero_grad()
-		
-		with torch.no_grad():
-			r, acc, deltar = sample_b(model, r, deltar, n_corr=c.data.n_corr) 
-			r = keep_around_points(r, center_points, l=5.) if step < 50 else r
+
+		r, acc, deltar = sample_b(model, r, deltar, n_corr=c.data.n_corr) 
+		r = keep_around_points(r, center_points, l=5.) if step < 50 else r
 
 		v_tr = train_step(model, r)
 
@@ -139,29 +137,40 @@ def run(c: Pyfig):
   
 		if not (step-1) and c.distribute.head:
 
-			def gen_profile(wait=1, warmup=1, active=3, repeat=2):
+			def gen_profile(wait=1, warmup=1, active=1, repeat=1):
+				# https://wandb.ai/wandb/trace/reports/Using-the-PyTorch-Profiler-with-W-B--Vmlldzo5MDE3NjU
 				print('profiling')
 				model_tmp = deepcopy(model)
 				model_pr = lambda : model_tmp(r)
 				sample_pr = lambda : sample_b(model_tmp, r, deltar, n_corr=c.data.n_corr) 
 				ke_pr = lambda : compute_ke_b(model_tmp, r, ke_method=c.model.ke_method)
 
-				with torch.profiler.profile(
+				profiler = torch.profiler.profile(
 					schedule=torch.profiler.schedule(wait=wait, warmup=warmup, active=active, repeat=repeat),
 					on_trace_ready=torch.profiler.tensorboard_trace_handler(c.profile_dir),
-					record_shapes=True, profile_memory=True, with_stack=True
-				) as prof:
-
+					profile_memory=True, with_stack=True, with_modules=True, use_cuda=True
+				)
+				with profiler:
 					for _ in range((wait + warmup + active) * repeat):
 						model_pr()
 						sample_pr()
 						ke_pr()
-						prof.step()
+						profiler.step()
 
 				profile_art = wandb.Artifact(f"trace", type="profile")
 				for p in c.profile_dir.iterdir():
-					profile_art.add_file(p)
+					profile_art.add_file(p, "trace.pt.trace.json")
+					break
 				profile_art.save()
+				profiler.export_stacks(c.profile_dir/'profiler_stacks.txt', 'self_cuda_time_total')
+				"""
+				# docs:profiler
+				1- --> wandb --> Artifacts --> files --> trace
+				https://wandb.ai/wandb/trace/reports/Using-the-PyTorch-Profiler-with-W-B--Vmlldzo5MDE3NjU
+				2- tensorboard --logdir=c.profile_dir
+				browser: http://localhost:6006/pytorch_profiler
+				https://pytorch.org/tutorials/intermediate/tensorboard_profiler_tutorial.html
+				"""
 				print('profile end.')
 
 			gen_profile()
