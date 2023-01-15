@@ -82,7 +82,7 @@ def run(c: Pyfig):
     model: nn.Module = c.partial(Ansatz_fb).to(device).to(dtype)
 
     ### train step ###
-    from hwat import compute_ke_b, compute_pe_b
+    from hwat import compute_ke_b, compute_pe_b, dep_ke_comp
     from hwat import init_r, get_center_points
 
     center_points = get_center_points(c.data.n_e, c.data.a)
@@ -112,7 +112,7 @@ def run(c: Pyfig):
         params=model.parameters(),
         max_constraint_value=0.05,
         cg_iters=50,
-        max_backtracks=15,
+        max_backtracks=5,
         backtrack_ratio=0.8,
         hvp_reg_coeff=1e-05,
         accept_violation=False
@@ -121,24 +121,28 @@ def run(c: Pyfig):
 
     for step in range(1, c.n_step+1):
         print('################################ STEP', step, '###########################################')
-        model.zero_grad()
-        # model.requires_grad_(False)
-        with torch.no_grad():
-            r, acc, deltar = sample_b(model, r, deltar, n_corr=c.data.n_corr)  # ❗needs testing 
-            r = keep_around_points(r, center_points, l=5.) if step < 50 else r
-            pe = compute_pe_b(r, c.data.a, c.data.a_z)
 
-        def obj_fn(): # remove r and pe
-            ke = compute_ke_b(model, r, ke_method=c.model.ke_method) # should this not also be without grad?
-            with torch.no_grad():
-                e = pe + ke
-                e_mean_dist = torch.mean(torch.abs(torch.median(e) - e))
-                e_clip = torch.clip(e, min=e-5*e_mean_dist, max=e+5*e_mean_dist)
+        model.zero_grad()
+        for p in model.parameters():
+            p.requires_grad = False
+
+        r, acc, deltar = sample_b(model, r, deltar, n_corr=c.data.n_corr) 
+        r = keep_around_points(r, center_points, l=5.) if step < 50 else r
+
+        def obj_fn(): 
+            ke = dep_ke_comp(model, r, ke_method=c.model.ke_method)
+            pe = compute_pe_b(r, c.data.a, c.data.a_z)
+            
+            e = pe + ke
+            e_mean_dist = torch.mean(torch.abs(torch.median(e) - e))
+            e_clip = torch.clip(e, min=e-5*e_mean_dist, max=e+5*e_mean_dist)
+        
+            for p in model.parameters():
+                p.requires_grad = True
             loss = ((e_clip - e_clip.mean())*model(r)).mean()
             v_tr = dict(ke=ke, pe=pe, e=e, loss=loss)
             return v_tr
-        
-        model.requires_grad_(True)
+    
         v_tr = obj_fn()
         loss = v_tr['loss']
         loss.backward()
@@ -146,31 +150,19 @@ def run(c: Pyfig):
         obj_fn_loss = lambda: obj_fn()['loss']
         opt.step(f_loss=obj_fn_loss)
 
-    
-        model.requires_grad_(False)
+        with torch.no_grad():
+            params = [p.detach() for p in model.parameters()]
+            grads = [p.grad.detach() for p in model.parameters()]
 
-        if not (step % c.log_metric_step):
+            v_tr |= dict(acc=acc, r=r, deltar=deltar, grads=grads, params=params)
 
-            print(f'energy: {v_tr["e"].mean().item():.4f} | step: {step}')
+            if not (step % c.log_metric_step):
 
-            with torch.no_grad():
-                grads = [p.grad for p in model.parameters()]
-                params = [p for p in model.parameters()]
-
-                v_tr |= dict(acc=acc, r=r, deltar=deltar, grads=grads, params=params)
-
-                if c.resource.n_gpu > 1:
-                    v_tr = c.sync(step, v_tr)
-                    deltar = v_tr['deltar']
-
-                model.zero_grad()
-                for p, g in zip(model.parameters(), v_tr['grads']):
-                    p.grad += g
-
-                if c.distribute.head:
-                    metrix = compute_metrix(v_tr)
-                    wandb.log(metrix, step=step)
-
+                    if c.distribute.head:
+                        metrix = compute_metrix(v_tr)
+                        wandb.log(metrix, step=step)
+        
+        print(f'Total energy: {v_tr["e"].mean().item():.4f}')
 
         
 if __name__ == "__main__":

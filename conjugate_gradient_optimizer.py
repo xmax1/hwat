@@ -81,9 +81,14 @@ def _conjugate_gradient(f_Ax, b, cg_iters, residual_tol=1e-10):
     Returns:
         torch.Tensor: Solution x* for equation Ax = b.
     """
-    p = b.clone()
-    r = b.clone()
+    #p = b.clone()
+    #r = b.clone()
+    #x = torch.zeros_like(b)
+    #rdotr = torch.dot(r, r)
+
     x = torch.zeros_like(b)
+    r = f_Ax(x) - b
+    p = -r.clone()
     rdotr = torch.dot(r, r)
 
     print(f'First rdotr {rdotr}')
@@ -92,10 +97,10 @@ def _conjugate_gradient(f_Ax, b, cg_iters, residual_tol=1e-10):
         z = f_Ax(p) # Ap 
         v = rdotr / torch.dot(p, z) # alpha
         x += v * p # x = x + alpha * p
-        r -= v * z # r = r - alpha * Ap
+        r += v * z # r = r - alpha * Ap
         newrdotr = torch.dot(r, r)
         mu = newrdotr / rdotr # beta
-        p = r + mu * p # p = r + beta * p
+        p = -r + mu * p # p = r + beta * p
 
         rdotr = newrdotr
         if rdotr < residual_tol:
@@ -161,7 +166,7 @@ class ConjugateGradientOptimizer(Optimizer):
                                              self._hvp_reg_coeff) # replace with f_loss instead of f_constraint
 
         # Compute step direction
-        step_dir = _conjugate_gradient(f_Ax, flat_loss_grads, self._cg_iters)
+        step_dir = _conjugate_gradient(f_Ax, -flat_loss_grads, self._cg_iters)
 
         # Replace nan with 0.
         step_dir[step_dir.ne(step_dir)] = 0.
@@ -179,7 +184,7 @@ class ConjugateGradientOptimizer(Optimizer):
             print(f'HESSIAN NOT POSITIVE DEFINITE! step_size is nan')
             step_size = 0.1
         
-        step_size = 0.2
+        step_size = 0.1
         descent_step = step_size * step_dir
         
         # Check if descent direction makes any sense
@@ -188,8 +193,8 @@ class ConjugateGradientOptimizer(Optimizer):
         if f_grad_dot_descent_step > 0:
             print('CONJUGATE DIRECTION IS FAULTY! f_grad_dot_descent_step is positive')
             # choose steepest descent direction instead
-            #descent_step = -1*flat_loss_grads*step_size
-            #f_grad_dot_descent_step = torch.dot(flat_loss_grads, descent_step)
+            # descent_step = -1*flat_loss_grads*step_size
+            # f_grad_dot_descent_step = torch.dot(flat_loss_grads, descent_step)
             # print(f'f_grad_dot_descent_step NEW: {f_grad_dot_descent_step}')
 
         # Update parameters using backtracking line search
@@ -263,7 +268,7 @@ class ConjugateGradientOptimizer(Optimizer):
 
             # Use Armijo condition to check if we are making sufficient progress.
             # But Armijo condition assumes f_grad_dot_descent_step is negative.
-            if loss <= loss_before - 0.01 * ratio * torch.abs(f_grad_dot_descent_step):
+            if loss <= loss_before+0.01:#  + 0.01 * ratio * torch.abs(f_grad_dot_descent_step):
                 print(f'Line search successful with ratio {ratio}')
                 # print average abs value of descent_step where descent_step is a list of tensors
                 print(f'Average abs value of descent_step: {torch.mean(torch.abs(torch.cat([torch.flatten(step) for step in descent_step])))}')
