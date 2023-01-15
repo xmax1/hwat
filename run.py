@@ -55,10 +55,9 @@ def run(c: Pyfig):
 		# Torchscript/NVFuser currently works with the above two flags set to true. 
 		# Setting the above two to true will also increase performance orthogonally.
 		# os.environ['PYTORCH_NVFUSER_DISABLE_FALLBACK'] = '1'
+		# model(r)
 		model = torch.jit.script(model, r.clone())
-
-		print(type(model))
-		# raise NotImplementedError
+		# print(torch.autograd.gradcheck(func_jit, X, raise_exception=True, check_undefined_grad=True, check_batched_grad=True, check_backward_ad=True))
 
 	if c.model.compile_func:
 		pass
@@ -92,11 +91,22 @@ def run(c: Pyfig):
 	from hwat import keep_around_points, sample_b
 	from utils import compute_metrix
 
-	opt = torch.optim.RAdam(model.parameters(), lr=0.001)
+	# opt = torch.optim.RAdam(model.parameters(), lr=0.001)
+
+	import torch_optimizer as torch_opt
+
+	opt = torch_opt.Adahessian(
+		model.parameters(),
+		lr= 0.15,
+		betas= (0.9, 0.999),
+		eps= 1e-4,
+		weight_decay= 0.0,
+		hessian_power= 1.0,
+	)
 
 	for step in range(1, c.n_step+1):
 		
-		opt.zero_grad(set_to_none=True)
+		opt.zero_grad()
 		for p in model.parameters():
 			p.requires_grad = False
 
@@ -113,7 +123,7 @@ def run(c: Pyfig):
 		for p in model.parameters():
 			p.requires_grad = True
 		loss: torch.Tensor = ((e_clip - e_clip.mean())*model(r))
-		loss.mean().backward()
+		loss.mean().backward(create_graph=True)
 		
 		with torch.no_grad():
 			params = [p.detach() for p in model.parameters()]
@@ -137,7 +147,7 @@ def run(c: Pyfig):
 		
 		opt.step()
 
-		if not (step-1) and c.distribute.head and False:
+		if not (step-1) and c.distribute.head and c.profile:
 			
 			def gen_profile(wait=1, warmup=1, active=1, repeat=1):
 				# https://wandb.ai/wandb/trace/reports/Using-the-PyTorch-Profiler-with-W-B--Vmlldzo5MDE3NjU
@@ -150,15 +160,24 @@ def run(c: Pyfig):
 				profiler = torch.profiler.profile(
 					schedule=torch.profiler.schedule(wait=wait, warmup=warmup, active=active, repeat=repeat),
 					on_trace_ready=torch.profiler.tensorboard_trace_handler(c.profile_dir),
-					profile_memory=True, with_stack=True, with_modules=True, use_cuda=True
+					profile_memory=True, with_stack=True, with_modules=True
 				)
 				with profiler:
+					times = dict(t_model=0.0, t_sample=0.0, t_ke=0.0)
+					import time
 					for _ in range((wait + warmup + active) * repeat):
+						t0 = time.time()
 						model_pr()
-						if not c.model.compile_ts: # https://github.com/pytorch/pytorch/issues/76791
-							sample_pr()
+						times['t_model'] += time.time() - t0
+						t0 = time.time()
+						sample_pr()
+						times['t_sample'] += time.time() - t0
+						t0 = time.time()
 						ke_pr()
+						times['t_ke'] += time.time() - t0
 						profiler.step()
+				for k,v in times.items():
+					c.wb.run.summary[k] = v
 
 				profile_art = wandb.Artifact(f"trace", type="profile")
 				for p in c.profile_dir.iterdir():
@@ -167,6 +186,7 @@ def run(c: Pyfig):
 				profile_art.save()
 				profiler.export_stacks(c.profile_dir/'profiler_stacks.txt', 'self_cuda_time_total')
 				"""
+				# if not c.model.compile_ts: # https://github.com/pytorch/pytorch/issues/76791
 				# docs:profiler
 				1- --> wandb --> Artifacts --> files --> trace
 				https://wandb.ai/wandb/trace/reports/Using-the-PyTorch-Profiler-with-W-B--Vmlldzo5MDE3NjU

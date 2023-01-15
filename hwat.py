@@ -197,6 +197,38 @@ def compute_pe_b(r, a=None, a_z=None):
 	return (pe_rr - pe_ra + pe_aa).squeeze()  
 
 
+def dep_ke_comp(
+    model: nn.Module, 
+    r: torch.Tensor,
+    ke_method='vjp', 
+    elements=False
+):
+	dtype, device = r.dtype, r.device
+	n_b, n_e, n_dim = r.shape
+	n_jvp = n_e * n_dim
+	ones = torch.ones((n_b,), device=device, dtype=dtype)
+	r_flat = r.reshape(n_b, n_jvp)
+	r_flat = r_flat.requires_grad_(True).contiguous()
+ 
+	def grad_fn(_r: torch.Tensor):
+		lp: torch.Tensor = model(_r)
+		g = torch.autograd.grad(lp.sum(), _r, create_graph=True)[0]
+		return g
+
+	def grad_grad_fn(_r: torch.Tensor):
+		g = grad_fn(_r)
+		ggs = [torch.autograd.grad(g[:, i], _r, grad_outputs=ones, retain_graph=True)[0] for i in range(n_jvp)]
+		ggs = torch.stack(ggs, dim=-1)
+		return torch.diagonal(ggs, dim1=1, dim2=2)
+	
+	g = grad_fn(r_flat)
+	gg = grad_grad_fn(r_flat)
+
+	if elements:
+		return g, gg
+
+	e_jvp = gg + g**2
+	return -0.5 * e_jvp.sum(-1)
 
 # create functional model 
 from functorch import make_functional, make_functional_with_buffers, vmap
@@ -208,7 +240,6 @@ def compute_ke_b(
     ke_method='vjp', 
     elements=False
 ):
-
 	dtype, device = r.dtype, r.device
 	n_b, n_e, n_dim = r.shape
 	n_jvp = n_e * n_dim
@@ -217,12 +248,13 @@ def compute_ke_b(
 	r_flat = r_flat.requires_grad_(True).contiguous()
 	eyes = torch.eye(n_jvp, dtype=dtype, device=device)[None].repeat((n_b, 1, 1))
  
-	
-	# model_fn, params = make_functional(model, disable_autograd_tracking=True)
-	# model_fn, params, buffers = make_functional_with_buffers(model)  # RuntimeError: you can only change requires_grad flags of leaf variables
+	# model_fn, params, buffers = make_functional_with_buffers(model)  
 	# for p in model.parameters():
-	# 	p.requires_grad = False
-	model_fn, params, buffers = make_functional_with_buffers(model, disable_autograd_tracking=True)  # can do it this way if requires grad is False
+		# p.grad = None # can do it this way if requires grad is False
+		# p.requires_grad = False # can do it this way if requires grad is False but # RuntimeError: you can only change requires_grad flags of leaf variables
+	# model_fn, params, buffers = make_functional_with_buffers(model, disable_autograd_tracking=True)  
+
+	model_fn, params, buffers = make_functional_with_buffers(model)  
 	model_rv = lambda _r: vmap(model_fn, in_dims=(None, None, 0))(params, buffers, _r).sum()
 
 	def ke_grad_grad_method():
@@ -250,11 +282,9 @@ def compute_ke_b(
 	def ke_jvp_method():
 		# print('r_flat-vjp: ', r_flat.shape, 'eyes-vjp: ', eyes.shape)
 		grad_fn = grad(model_rv)
-		jvp_all = [functorch.jvp(grad_fn, (r_flat,), (eyes[:, i],)) for i in range(n_jvp)]  # grad out, jvp
+		jvp_all = [functorch.jvp(grad_fn, (r_flat,), (eyes[:, i],)) for i in range(n_jvp)]  # (grad out, jvp)
 		g = torch.stack([x[:, i] for i, (x, _) in enumerate(jvp_all)], dim=-1)
 		gg = torch.stack([x[:, i] for i, (_, x) in enumerate(jvp_all)], dim=-1)
-		# e_jvp = torch.stack([a[:, i]**2 + b[:, i] for i, (a,b) in enumerate(jvp_all)]).sum(0)
-		# e_jvp = torch.stack([a[:, i]**2 + b[:, i] for i, (a,b) in enumerate(jvp_all)]).sum(0)
 		return g, gg
 
 	ke_function = dict(
@@ -319,7 +349,7 @@ def sample_b(
 		for sam_step in torch.arange(1, n_corr+1):
 			with torch.no_grad():
 
-				r_1 = r_0 + torch.randn_like(r_0)*deltar
+				r_1 = r_0 # + torch.randn_like(r_0)*deltar
 				log_psi = model(r_1)
     
 				p_1 = torch.exp(log_psi)**2

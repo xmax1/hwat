@@ -12,7 +12,8 @@ class Pyfig(PyfigBase):
 	run_name:       	Path	= 'run.py'
  
 	exp_name:       	str		= 'demo'
-	group_exp: 			bool	= False
+	group_exp: 			bool	= False	
+	profile: 			bool 	= True
 	
 	seed:           	int   	= 808017424 # grr
 	dtype:          	str   	= 'float32'
@@ -94,6 +95,10 @@ class Pyfig(PyfigBase):
 
 		ii.runfig() # docs:runfig
   
+
+
+
+
 		"""  # Pyfig Docs
 		- todo
 		- try to compile the sampler and see where fails
