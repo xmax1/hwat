@@ -6,7 +6,7 @@ import os
 import gc
 from simple_slurm import Slurm
 import sys
-from typing import Callable
+from typing import Callable, Tuple
 import wandb
 import pprint
 import inspect
@@ -15,11 +15,11 @@ from copy import copy
 import torch 
 
 from utils import dict_to_cmd, cmd_to_dict, dict_to_wandb
-from utils import torchify_tree, numpify_tree
 from utils import mkdir, iterate_n_dir, gen_time_id, add_to_Path, dump, load
 from utils import get_cartesian_product, type_me, run_cmds, flat_any 
 from dump.systems import systems
 
+from torch import nn
 """
 todo
 - single function for cmd calls
@@ -46,8 +46,8 @@ class Sub:
 		ii._p = parent
   
 	@property
-	def d(ii,):
-		return inst_to_dict(ii, sub_cls=True, flat=True, prop=True, ignore=ii.ignore)
+	def d(ii):
+		return inst_to_dict(ii, sub_cls=True, prop=True, attr=True, ignore=ii.ignore)
 
 class PyfigBase:
 
@@ -67,7 +67,7 @@ class PyfigBase:
 	log_state_step: 	int   	= 10
 	
 	class data(Sub):
-
+		system: str = ''
 		charge:     int         = 0
 		spin:       int         = 0
 		a:          np.ndarray  = np.array([[0.0, 0.0, 0.0],])
@@ -95,15 +95,14 @@ class PyfigBase:
 		n_fbv:          int     = property(lambda _: _.n_sv*3+_.n_pv*2)
 
 	class opt(Sub):
-		name: 			str		= 'RAdam'
-		lr:  			float 	= 0.15,
-		betas:			list	= [0.9, 0.999],
-		eps: 			float 	= 1e-4,
-		weight_decay: 	float 	= 0.0,
-		hessian_power: 	float 	= 1.0,
+		opt_name: 		str		= 'RAdam'
+		lr:  			float 	= 0.01
+		betas:			list	= [0.9, 0.999]
+		eps: 			float 	= 1e-4
+		weight_decay: 	float 	= 0.0
+		hessian_power: 	float 	= 1.
   
-	class sweep(Sub):
-		run_sweep:      bool    = False	
+	class sweep(Sub):	
 		method: 		str		= 'grid'
 		parameters: 	dict 	= 	dict(
 			n_b  = dict(values=[16, 32, 64]),
@@ -118,23 +117,27 @@ class PyfigBase:
 		entity:			str		= property(lambda _: _._p.project)
 		program: 		Path	= property(lambda _: Path( _._p.project_dir, _._p.run_name))
 		sweep_path_id:  str     = property(lambda _: f'{_.entity}/{_._p.project}/{_._p.exp_name}')
-		wb_type: 		str		= property(lambda _: _.wb_sweep*'sweeps' or _._p.sweep.run_sweep*f'groups/{_._p.exp_name}' or 'runs') # _._p.group_exp*f'groups' or 'runs')
-		run_url: 		str		= property(lambda _: f'https://wandb.ai/{_.entity}/{_._p.project}/{_.wb_type}/')
+		wb_type: 		str		= property(lambda _: _.wb_sweep*'sweeps' or f'runs/{_._p.exp_id}') # _._p.group_exp*f'groups' or 'runs') # or _._p.run_sweep*f'groups/{_._p.exp_name}'
+		run_url: 		str		= property(lambda _: f'https://wandb.ai/{_.entity}/{_._p.project}/{_.wb_type}')
   
 	class distribute(Sub):
-		head:			bool	= True 
+		dist_method: 	str		= 'accelerate'
+		head:			bool	= True
+		rank: 			bool 	= property(lambda _: os.environ.get('RANK', '')=='0')  #  or _.head no work bc same input to all script fix
 		dist_mode: 		str		= 'pyfig'  # accelerate
 		dist_id:		str		= ''
 		sync_step:		int		= 5
 
-		_gpu_id_cmd:		str		= 'nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'
+		_gpu_id_cmd:		str	= 'nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'
 		gpu_id: 		str		= property(lambda _: ''.join(run_cmds(_._gpu_id_cmd, silent=True)).split('.')[0])
 		dist_id: 		str 	= property(lambda _: _.gpu_id + '-' + hostname.split('.')[0])
+		backward: 		Callable = None
 
 	class resource(Sub):
 		submit: 		bool	= False
 		cluster_submit: Callable= None
 		script:			Callable= None
+		device_log_path:Callable= None
 
 	class git(Sub):
 		branch:     str     = 'main'
@@ -157,8 +160,9 @@ class PyfigBase:
 	profile_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'profile'))
 	log_dir: 			Path    = property(lambda _: _.cluster_dir)
 
-
-	debug: bool    = False
+	run_sweep:      bool    = False
+	group_exp: 		bool	= False	or run_sweep
+	debug: 			bool    = False
 	env_log_path = 'dump/tmp/env.log'
 	d_log_path = 'dump/tmp/d.log'
 
@@ -167,55 +171,92 @@ class PyfigBase:
 		'd', 'cmd', 'sub_cls', 
 		'sweep',
 		'commit', 'pull',
+		'backward',
 	]
 
-	def __init__(ii, notebook:bool=False, sweep: dict=None, **init_arg):     
+	def __init__(ii, notebook:bool=False, sweep: dict=None, init_arg: dict=None, post_init_arg: dict=None, **other_arg):     
 
 		for sub_name, sub in ii.sub_cls.items(): # docs:sub_classes-init
 			setattr(ii, sub_name, sub(parent=ii))
+   
+		for k,v in (sweep or {}).items():
+			setattr(ii.sweep, k, v)
 
 		c_init = flat_any(ii.d)
 		sys_arg = sys.argv[1:]
 		sys_arg = cmd_to_dict(sys_arg, c_init) if not notebook else {}  
-		init_arg = flat_any(init_arg) | (sweep or {})
-   
-		ii.update_configuration(init_arg | sys_arg)
+		ii.update_configuration(flat_any(init_arg) | flat_any(other_arg) | sys_arg)
 
-		ii.setup_exp_dir(group_exp= ii.group_exp, force_new_id= False)
+		ii.debug_log([sys_arg, dict(os.environ.items()), ii.d], ['sys_arg.log', 'env_run.log', 'd.log'])
 
-		ii.debug_log([dict(os.environ.items()), ii.d,], ['env.log', 'd.log'])
+	def __post_init__(ii, **post_init_arg):
+		""" application specific initialisations """
+		ii.update_configuration(flat_any(post_init_arg))
+
+	def setup_distribute(
+		ii, 
+    	model: nn.Module, 
+    	opt, 
+     	tr_loader=None, 
+      	scheduler=None
+	) -> tuple:
+    # ) -> tuple[nn.Module, torch.optim.Optimizer] \
+ 	# 		| tuple[nn.Module, torch.optim.Optimizer, torch.utils.data.Dataloader] \
+    #     	| tuple[nn.Module, torch.optim.Optimizer, torch.utils.data.Dataloader, Any]:  # dict[str, int] # from typing import Final
+		from accelerate import Accelerator
+		from torch.utils.data import DataLoader
+		dist = Accelerator()
+		model, opt, tr_loader, scheduler = \
+     		dist.prepare(model, opt, tr_loader, scheduler)
+		def backward(loss: torch.Tensor, sync: dict): 
+			dist.backward(loss)
+
+		ii.distribute.backward = backward
   
+		return [model, opt] + (tr_loader or []) + (scheduler or [])
+
 	def runfig(ii):
 
-		if (not ii.resource.submit) and ii.distribute.head:
+		if (not ii.resource.submit) and ii.distribute.rank:
+
+			ii.setup_exp_dir(group_exp= ii.group_exp, force_new_id= False)
+
+			ii.debug_log([ii.d,], ['wb_d.log',])
 			ii.wb.run = wandb.init(
 				project     = ii.project, 
 				group		= ii.exp_name,
-				id          = ii.exp_id,
+				name 		= ii.exp_id,
 				dir         = ii.exp_dir,
 				entity      = ii.wb.entity,  	
 				mode        = ii.wb.wb_mode,
 				config      = dict_to_wandb(ii.d),
+				
 			)
 		
 		if ii.resource.submit:
 			ii.resource.submit = False # docs:submit
-
+   
 			run_or_sweep_d = ii.get_run_or_sweep_d()
+
 			for i, run_d in enumerate(run_or_sweep_d):
-				ii.distribute.head = i == 0
-				group_exp = ii.group_exp or (ii.distribute.head and ii.sweep.run_sweep)
-				
+
+				if ii.run_sweep:
+					group_exp = not i==0
+				else:
+					group_exp = ii.group_exp
+
 				ii.setup_exp_dir(group_exp= group_exp, force_new_id= True)
-				if ii.distribute.head:
-					ii.debug_log([dict(os.environ.items()), run_d], ['env_submit.log', 'd_submit.log'])
-     
+
 				base_d = inst_to_dict(ii, attr=True, sub_cls=True, flat=True, ignore=ii.ignore, debug=ii.debug)
 				run_d = base_d | run_d
+    
+				ii.debug_log([dict(os.environ.items()), run_d], ['env_submit.log', 'd_submit.log'])
 
 				ii.resource.cluster_submit(run_d)
-			ii.pr(ii._paths)
-			sys.exit(ii.wb.run_url + ii.exp_id*(not i))
+				print(ii.wb.run_url)
+			
+			ii.pr(ii._debug_paths)
+			sys.exit()
 	
 	@staticmethod
 	def pr(d: dict):
@@ -227,6 +268,10 @@ class PyfigBase:
 		return dict(filter(path_filter, ii.d.items()))
 
 	@property
+	def _debug_paths(ii):
+		return dict(device_log_path=ii.resource.device_log_path(rank=0))
+
+	@property
 	def cmd(ii):
 		return dict_to_cmd(ii.d)
 
@@ -236,7 +281,7 @@ class PyfigBase:
 
 	@property
 	def sub_cls(ii) -> dict:
-		inst_keys = [k for k in dir(ii) if not k.startswith('_') and not k in ii.ignore]
+		inst_keys = [k for k in dir(ii) if not k.startswith('_') and not k in ii.ignore] + ['sweep',]
 		ii.log(inst_keys, path=ii.tmp_dir/'inst_keys.log')
 		d_init = {k:getattr(ii, k) for k in inst_keys}
 		return {k:v for k,v in d_init.items() if isinstance(v, type) or isinstance(v, Sub)}
@@ -246,24 +291,28 @@ class PyfigBase:
 		if ii.debug:
 			print('debug:setup_exp_dir:', ii.exp_dir, ii.distribute.head, ii.group_exp, force_new_id)
 
-		if Path(ii.exp_dir).exists() and not force_new_id:
+		if Path(ii.exp_dir).is_dir() and not force_new_id:
 			return None
+
 		exp_name = ii.exp_name or 'junk'
-		exp_group_dir = Path(ii.dump_exp_dir, 'sweep'*ii.sweep.run_sweep, exp_name)
+		exp_group_dir = Path(ii.dump_exp_dir, 'sweep'*ii.run_sweep, exp_name)
 		exp_group_dir = iterate_n_dir(exp_group_dir, group_exp=group_exp)
 		ii.exp_name = exp_group_dir.name
-		ii.exp_id = (not force_new_id)*ii.exp_id or (ii.exp_id+'-'+gen_time_id(7) if ii.exp_id else gen_time_id(7))
+		if force_new_id or not ii.exp_id:
+			ii.exp_id = gen_time_id(7)
 		ii.exp_dir = exp_group_dir/ii.exp_id
+		print('exp_dir: ', ii.exp_dir)
 		[mkdir(ii.exp_dir/_dir) for _dir in ['cluster', 'exchange', 'wandb', 'profile']]
 	
 	def get_run_or_sweep_d(ii,):
 		
-		if not ii.sweep.run_sweep:
+		if not ii.run_sweep:
 			""" single run
 			takes configuration from base in submit loop
 			"""
 			return [dict(),] 
 
+		ii.pr(ii.sweep.d)
 		d = ii.sweep.d
 		sweep_keys = list(d['parameters'].keys())
 		sweep_vals = [v['values'] for v in d['parameters'].values()]
@@ -273,7 +322,8 @@ class PyfigBase:
 
 	def debug_log(ii, d_all:list, name_all: list):
 		for d, name in zip(d_all, name_all):
-			ii.log(d, path=ii.log_dir/name)
+			if Path(ii.exp_dir).is_dir():
+				ii.log(d, path=ii.log_dir/name)
 			ii.log(d, path=ii.tmp_dir/name)
 			
 	def partial(ii, f:Callable, args=None, **kw):
@@ -282,9 +332,10 @@ class PyfigBase:
 		d = {k:v for k,v in d.items() if k in d_k} | kw
 		return f(**d)
 
-	def update_configuration(ii, merge: dict, sweep: dict=None):
-		merge = flat_any(merge) | dict(sweep=sweep)
+	def update_configuration(ii, merge: dict):
+		merge = flat_any(merge)
 		for k,v in merge.items():
+			k_update = False
 			for inst in [ii,] + list(ii.sub_cls.values()):
 				ref = inst_to_dict(inst, attr=True, ignore=ii.ignore)
 				v_ref = ref.get(k, None)
@@ -292,6 +343,10 @@ class PyfigBase:
 					v = type_me(v, v_ref)
 					setattr(inst, k, copy(v))
 					print(f'update {k}: {v_ref} --> {v}')
+					k_update = True
+			if not k_update:
+				print(f'{k} not updated: {v} {type(v)}')
+
 	
 	@staticmethod
 	def log(info: dict|str, path: Path):
@@ -378,6 +433,7 @@ class niflheim_resource(Sub):
 
 	architecture:   str 	= 'cuda'
 	nifl_gpu_per_node: int  = property(lambda _: 10)
+	device_log_path: str 	= '' 
 
 	job_id: 		str  	= property(lambda _: os.environ.get('SLURM_JOBID', 'No SLURM_JOBID available.'))  # slurm only
 
@@ -394,21 +450,66 @@ class niflheim_resource(Sub):
 	# mem				= 'MaxMemPerNode'
 	cpus_per_task   = 8				# 1 task 1 gpu 8 cpus per task 
 	partition       = 'sm3090'
-	time            = '0-00:20:00'  # D-HH:MM:SS
+	time            = '0-04:00:00'  # D-HH:MM:SS
 
 	gres            = property(lambda _: 'gpu:RTX3090:' + (str(_.n_gpu) if int(_.nodes) == 1 else '10'))
 	ntasks          = property(lambda _: _.n_gpu)
 	job_name        = property(lambda _: _._p.exp_name)
 	output          = property(lambda _: _._p.cluster_dir/'o-%j.out')
 	error           = property(lambda _: _._p.cluster_dir/'e-%j.err')
- 
-	slurm: Slurm = None
+
 	# n_running_cmd:	str		= 'squeue -u amawi -t pending,running -h -r'
 	# n_running:		int		= property(lambda _: len(run_cmds(_.n_running_cmd, silent=True).split('\n')))	
 	# running_max: 	int     = 20
 
-	def script(ii, job: dict):
-		ii.slurm = Slurm(
+	def cluster_submit(ii, job: dict):
+		
+		if job['head']:
+			print(ii.script)
+
+		mod = [
+			'module purge', 
+			# 'module load foss', 
+   			# 'module load CUDA/11.7.0'
+		]
+		env = ['source ~/.bashrc', f'conda activate {ii.env}',]
+		export = [
+		# 'export $SLURM_JOB_ID',
+		# 'export MKL_NUM_THREADS=1',
+		# 'export NUMEXPR_NUM_THREADS=1',
+		# 'export OMP_NUM_THREADS=1',
+		# 'export OPENBLAS_NUM_THREADS=1',
+		]
+		debug = ['echo all_gpus:$SLURM_JOB_GPUS', 'echo nodelist:$SLURM_JOB_NODELIST', 'nvidia-smi']
+		body = mod + env + debug + export
+
+		if ii._p.distribute.dist_method == 'accelerate':
+			# c_dist = lo_ve(path='c_dist.yaml')
+			c_dist = 'c_dist.yaml'
+			launch_cmd = f'accelerate launch --config_file {c_dist} '
+			cmd = dict_to_cmd(job, sep='=')
+			cmd = f' {job["run_name"]} \n {cmd} '  # \n is important 
+			body += [f'{launch_cmd} {cmd} \n 1> {ii.device_log_path(rank=0)} 2>&1 ']
+
+		elif ii._p.distribute.dist_method == 'pyfig':
+			launch_cmd = 'srun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label '
+			for i in range(ii.n_gpu):
+				job.update(dict(head= i==0))
+				cmd = dict_to_cmd(job)
+				cmd = f'python -u {job["run_name"]} {cmd}'
+				body += [f'{launch_cmd} {cmd} 1> {ii.device_log_path(rank=i)} 2>&1 & ']
+			body += ['wait',]
+  
+
+		body = '\n'.join(body)
+		slurm = ii.script
+		ii._p.log([body,], ii._p.cluster_dir/'sbatch.log')
+		job_id = slurm.sbatch(body, verbose=True)
+		print('slurm out: ', job_id)
+  
+	@property
+	def script(ii,):
+		return Slurm(
 			export			= ii.export,
 			nodes           = ii.nodes        ,
 			# mem_per_cpu     = ii.mem_per_cpu  ,
@@ -422,45 +523,11 @@ class niflheim_resource(Sub):
 			output          = ii.output       ,
 			error           = ii.error        ,
 		)
-		if job['head']:
-			print(ii.slurm)
 
-		mod = [
-			'module purge', 
-			# 'module load foss', 
-   			# 'module load CUDA/11.7.0'
-		]
-		env = ['source ~/.bashrc', f'conda activate {ii.env}',]
-		export = [
-		'export $SLURM_JOB_ID',
-		# 'export MKL_NUM_THREADS=1',
-		# 'export NUMEXPR_NUM_THREADS=1',
-		# 'export OMP_NUM_THREADS=1',
-		# 'export OPENBLAS_NUM_THREADS=1',
-		]
-		debug = ['echo all_gpus:$SLURM_JOB_GPUS', 'echo nodelist:$SLURM_JOB_NODELIST', 'nvidia-smi']
-		srun_cmd = 'srun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label '
-		body = mod + env + debug + export
- 
-		for i in range(ii.n_gpu):
-			
-			device_log_path = ii._p.cluster_dir/(str(i)+"_device.log") # + ii._p.hostname.split('.')[0])
+	def device_log_path(ii, rank=0):
+		return ii._p.cluster_dir/(str(rank)+"_device.log") # + ii._p.hostname.split('.')[0])
 
-			job.update(dict(head= i==0))
-   
-			cmd = dict_to_cmd(job)
-   
-			cmd = f'python -u {job["run_name"]} {cmd}'
-				
-			body += [f'{srun_cmd} {cmd} 1> {device_log_path} 2>&1 & ']
-   
-		body += ['wait',]
-		return '\n'.join(body)
 
-	def cluster_submit(ii, job):
-		sbatch = ii.script(job)
-		ii._p.log([sbatch,], ii._p.tmp_dir/'sbatch.log')
-		ii.slurm.sbatch(sbatch)
 
 """ slurm docs
 sinfo -p cluster
@@ -497,6 +564,46 @@ Information on partitons and their configuration:
 """
 
 # utils things we might move 
+
+import pickle as pk
+import yaml
+import json
+from functools import partial
+
+def lo_ve(path:Path, data=None):
+	""" loads anything you want (add other interfaces as needed) 
+
+	1- str -> pathlib.Path
+	2- get suffix (filetype)
+	3- from filetype, decide encoding eg 'w' or 'wb'
+	4- if data is present, decide to save
+	5- from filetype, encoding, save or load, get or dump the data 
+	"""
+	file_interface_all = dict(
+		pk = dict(
+			rb = pk.load,
+			wb = partial(pk.dump, protocol=pk.HIGHEST_PROTOCOL),
+		),
+		yaml = dict(
+			r = yaml.load,
+			w = yaml.dump,
+		),
+		json = dict(
+			r = json.load,
+			w = json.dump,
+		),
+	)    
+	path = Path(path)
+	if not path.suffix:
+		path = path.with_suffix('.pk')
+	file_type = path.suffix[1:]
+	mode = 'r' if data is None else 'w'
+	mode += 'b' if file_type in ['pk',] else ''
+	interface = file_interface_all[file_type][mode]
+	with open(path, mode) as f:
+		data = interface(data, f) if not data is None else interface(f)
+	return data
+
 
 def inst_to_dict(
 	inst, 

@@ -123,11 +123,11 @@ def add_to_Path(path: Path, string: str | Path):
 
 ### convert things
 
-def dict_to_cmd(d: dict):
+def dict_to_cmd(d: dict, sep=' '):
 	items = d.items()
 	items = ((k, (v.tolist() if isinstance(v, np.ndarray) else v)) for (k,v) in items)
 	items = ((str(k).replace(" ", ""), str(v).replace(" ", "")) for (k,v) in items)
-	return ' '.join([f'--{k} {v}' for k,v in items if v])
+	return ' '.join([f'--{k}{sep}{v}' for k,v in items if v])
 
 def cmd_to_dict(cmd:Union[str, list], ref:dict, delim:str=' --', d=None):
 	"""
@@ -181,7 +181,7 @@ def type_me(v, v_ref=None, is_cmd_item=False):
 		type_ref = type(v_ref)
 		if isinstance(v, str):
 			v = v.strip('\'\"')
-		
+
 		if isinstance(v, (np.ndarray, np.generic)):
 			if isinstance(v.flatten()[0], str):
 				return v.tolist()
