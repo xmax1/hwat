@@ -56,7 +56,6 @@ class PyfigBase:
 	project:            str     = ''
 	run_name:       	Path	= 'run.py'
 	exp_name:       	str		= 'demo'
-	exp_dir:        	Path	= ''
 	exp_id: 			str		= ''
 	group_exp: 			bool	= False
 	
@@ -151,10 +150,13 @@ class PyfigBase:
 		# pull:   		list	= property(lambda _: run_cmds(_.pull_cmd, cwd=_.project_dir))
   
 	home:				Path	= Path().home()
-	dump:               Path    = property(lambda _: Path('dump'))
-	dump_exp_dir: 		Path 	= property(lambda _: _.dump/'exp')
-	tmp_dir:            Path	= property(lambda _: _.dump/'tmp')
 	project_dir:        Path    = property(lambda _: _.home / 'projects' / _.project)
+ 
+	dump:               Path    = property(lambda _: Path('dump'))
+	# dump_exp_dir: 		Path 	= property(lambda _: Path(_.dump,'exp'))
+	tmp_dir:            Path	= property(lambda _: Path(_.dump,'tmp'))
+	exp_dir:        	Path	= property(lambda _: Path(_.dump_exp_dir, _.exp_name, _.exp_id))
+	dump_exp_dir:        	Path	= property(lambda _: Path(_.dump, 'exp'))
 	cluster_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'cluster'))
 	exchange_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exchange'))
 	profile_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'profile'))
@@ -174,7 +176,12 @@ class PyfigBase:
 		'backward',
 	]
 
-	def __init__(ii, notebook:bool=False, sweep: dict=None, init_arg: dict=None, post_init_arg: dict=None, **other_arg):     
+	def __init__(ii, 
+        notebook:bool=False,  # removes sys_arg for notebooks
+        sweep: dict=None,  # special properties for config update so is separated
+        init_arg: dict|str|Path=None,  # args specificall  
+        post_init_arg: dict=None, 
+        **other_arg):     
 
 		for sub_name, sub in ii.sub_cls.items(): # docs:sub_classes-init
 			setattr(ii, sub_name, sub(parent=ii))
@@ -192,28 +199,6 @@ class PyfigBase:
 	def __post_init__(ii, **post_init_arg):
 		""" application specific initialisations """
 		ii.update_configuration(flat_any(post_init_arg))
-
-	def setup_distribute(
-		ii, 
-    	model: nn.Module, 
-    	opt, 
-     	tr_loader=None, 
-      	scheduler=None
-	) -> tuple:
-    # ) -> tuple[nn.Module, torch.optim.Optimizer] \
- 	# 		| tuple[nn.Module, torch.optim.Optimizer, torch.utils.data.Dataloader] \
-    #     	| tuple[nn.Module, torch.optim.Optimizer, torch.utils.data.Dataloader, Any]:  # dict[str, int] # from typing import Final
-		from accelerate import Accelerator
-		from torch.utils.data import DataLoader
-		dist = Accelerator()
-		model, opt, tr_loader, scheduler = \
-     		dist.prepare(model, opt, tr_loader, scheduler)
-		def backward(loss: torch.Tensor, sync: dict): 
-			dist.backward(loss)
-
-		ii.distribute.backward = backward
-  
-		return [model, opt] + (tr_loader or []) + (scheduler or [])
 
 	def runfig(ii):
 
@@ -287,22 +272,21 @@ class PyfigBase:
 		return {k:v for k,v in d_init.items() if isinstance(v, type) or isinstance(v, Sub)}
 
 	def setup_exp_dir(ii, group_exp=False, force_new_id=False):
-
+		
 		if ii.debug:
 			print('debug:setup_exp_dir:', ii.exp_dir, ii.distribute.head, ii.group_exp, force_new_id)
 
-		if Path(ii.exp_dir).is_dir() and not force_new_id:
-			return None
-
-		exp_name = ii.exp_name or 'junk'
-		exp_group_dir = Path(ii.dump_exp_dir, 'sweep'*ii.run_sweep, exp_name)
-		exp_group_dir = iterate_n_dir(exp_group_dir, group_exp=group_exp)
-		ii.exp_name = exp_group_dir.name
-		if force_new_id or not ii.exp_id:
+		if (not ii.exp_id) or force_new_id:
 			ii.exp_id = gen_time_id(7)
-		ii.exp_dir = exp_group_dir/ii.exp_id
-		print('exp_dir: ', ii.exp_dir)
-		[mkdir(ii.exp_dir/_dir) for _dir in ['cluster', 'exchange', 'wandb', 'profile']]
+
+			exp_name = ii.exp_name or 'junk'
+			sweep_dir = 'sweep'*ii.run_sweep
+			exp_group_dir = Path(ii.dump_exp_dir, sweep_dir, exp_name)
+			exp_group_dir = iterate_n_dir(exp_group_dir, group_exp=group_exp) # does not append -{i} if group allowed
+			ii.exp_name = exp_group_dir.name
+
+			print('exp_dir: ', ii.exp_dir)  # is property
+			[mkdir(ii.exp_dir/_dir) for _dir in ['cluster', 'exchange', 'wandb', 'profile']]
 	
 	def get_run_or_sweep_d(ii,):
 		
@@ -363,9 +347,64 @@ class PyfigBase:
 			d = {k:torch.tensor(v, dtype=dtype, device=device, requires_grad=False) for k,v in d.items() if not isinstance(v[0], str)}
 		ii.debug_log([d,], ['to_torch.log',])
 		ii.update_configuration(d)
+
+
+class distribute_accelerate(Sub):
+	
+	def __init__(ii, parent=None):
+		super().__init__(parent)
+		global Accelerator
+		global DataLoader
+
+		from accelerate import Accelerator
+		from torch.utils.data import DataLoader
+
+	def setup_distribute(
+		ii, 
+    	model: nn.Module, 
+    	opt, 
+     	tr_loader=None, 
+      	scheduler=None
+	) -> tuple:
+		ii.dist = Accelerator()
+		model, opt, tr_loader, scheduler = \
+     		ii.dist.prepare(model, opt, tr_loader, scheduler)
+		
+		return [model, opt] + (tr_loader or []) + (scheduler or [])
+
+	def backward(ii, loss: torch.Tensor, sync: dict): 
+		ii.dist.backward(loss)
+  
+class distribute_pyfig(Sub):
+	_p: PyfigBase
+ 
+	def __init__(ii, parent=None):
+		super().__init__(parent)
+		global Accelerator
+		global DataLoader
+
+		from accelerate import Accelerator
+		from torch.utils.data import DataLoader
+
+	def setup_distribute(
+		ii, 
+    	model: nn.Module, 
+    	opt, 
+     	tr_loader=None, 
+      	scheduler=None
+	) -> tuple:
+		ii.dist = Accelerator()
+		model, opt, tr_loader, scheduler = \
+     		ii.dist.prepare(model, opt, tr_loader, scheduler)
+		
+		return [model, opt] + (tr_loader or []) + (scheduler or [])
+
+	def backward(ii, loss: torch.Tensor, sync: dict):
+		
+		loss.backward()
   
 	def sync(ii, step: int, v_tr: dict):
-		v_path = (ii.exchange_dir / f'{step}_{ii.distribute.dist_id}').with_suffix('.pk')
+		v_path = (ii._p.exchange_dir / f'{step}_{ii._p.distribute.dist_id}').with_suffix('.pk')
 		v_mean_path = add_to_Path(v_path, '-mean')
 		
 		try:
@@ -497,7 +536,7 @@ class niflheim_resource(Sub):
 				job.update(dict(head= i==0))
 				cmd = dict_to_cmd(job)
 				cmd = f'python -u {job["run_name"]} {cmd}'
-				body += [f'{launch_cmd} {cmd} 1> {ii.device_log_path(rank=i)} 2>&1 & ']
+				body += [f'{launch_cmd} {cmd} \n 1> {ii.device_log_path(rank=i)} 2>&1 & ']
 			body += ['wait',]
   
 
