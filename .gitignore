@@ -27,6 +27,7 @@ logs/
 wandb/
 exp/
 dep_dump/
+profile/
 
 # machine utilities
 *powershell*
