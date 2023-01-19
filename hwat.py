@@ -240,10 +240,12 @@ def compute_ke_b(
 	dtype, device = r.dtype, r.device
 	n_b, n_e, n_dim = r.shape
 	n_jvp = n_e * n_dim
+
 	ones = torch.ones((n_b,), device=device, dtype=dtype)
+	eyes = torch.eye(n_jvp, dtype=dtype, device=device)[None].repeat((n_b, 1, 1))
+
 	r_flat = r.reshape(n_b, n_jvp)
 	r_flat = r_flat.requires_grad_(True).contiguous()
-	eyes = torch.eye(n_jvp, dtype=dtype, device=device)[None].repeat((n_b, 1, 1))
 
 	params = [p.data for p in model.parameters()]
 	model_rv = lambda _r: model_rv(params, _r)
@@ -259,19 +261,18 @@ def compute_ke_b(
 			ggs = [torch.autograd.grad(g[:, i], _r, grad_outputs=ones, retain_graph=True)[0] for i in range(n_jvp)]
 			ggs = torch.stack(ggs, dim=-1)
 			return torch.diagonal(ggs, dim1=1, dim2=2)
+
 		g = grad_fn(r_flat)
 		gg = grad_grad_fn(r_flat)
 		return g, gg
 
 	def ke_vjp_method():
-		# print('r_flat-vjp: ', r_flat.shape)
 		grad_fn = functorch.grad(model_rv)
 		g, fn = functorch.vjp(grad_fn, r_flat)
 		gg = torch.stack([fn(eyes[..., i])[0][:, i] for i in range(n_jvp)], dim=-1)
 		return g, gg
 
 	def ke_jvp_method():
-		# print('r_flat-vjp: ', r_flat.shape, 'eyes-vjp: ', eyes.shape)
 		grad_fn = functorch.grad(model_rv)
 		jvp_all = [functorch.jvp(grad_fn, (r_flat,), (eyes[:, i],)) for i in range(n_jvp)]  # (grad out, jvp)
 		g = torch.stack([x[:, i] for i, (x, _) in enumerate(jvp_all)], dim=-1)
@@ -320,45 +321,53 @@ def init_r(n_b, n_e, center_points: torch.Tensor, std=0.1):
 	# sub_r = [center_points + torch.randn((n_b,n_e,3), device=device, dtype=dtype)*std for i in range(n_device)]
 	# return torch.stack(sub_r, dim=0) if len(sub_r)>1 else sub_r[0][None, ...]
 
+def is_a_bigger(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+	""" given a condition a > b returns 1 if true and 0 if not """
+	v = a - b
+	true = (torch.sign(v)-1.) / -2.
+	false = (true-1.) * -1.
+	return true, false
+
+from utils import check
+
 def sample_b(
     model: nn.Module, 
     r_0: torch.Tensor, 
-    deltar_0: torch.Tensor, 
+    deltar: torch.Tensor, 
     n_corr: int=10
 ):
 	""" metropolis hastings sampling with automated step size adjustment """
 	device, dtype = r_0.device, r_0.dtype
 
-	deltar_1 = torch.clip(deltar_0 + 0.01*torch.randn([1,], device=device, dtype=dtype), min=0.005, max=0.5)
-
 	p_0 = torch.exp(model(r_0))**2
+ 
+	deltar_1 = torch.clip(deltar + 0.01*torch.randn((1,), device=device, dtype=dtype, layout=torch.strided), min=0.005, max=0.5)
+	acc = torch.tensor([0.], dtype=dtype, device=device)
+	acc_all = torch.tensor([0.], dtype=dtype, device=device)
+ 
+	for dr_test in [deltar, deltar_1]:
+		for _ in torch.arange(1, n_corr+1):
 
-	acc = []
-	for deltar in [deltar_0, deltar_1]:
-		acc_tmp = 0.
-
-		for sam_step in torch.arange(1, n_corr+1):
 			with torch.no_grad():
 
-				r_1 = r_0 + torch.randn_like(r_0)*deltar
-				log_psi = model(r_1)
-    
-				p_1 = torch.exp(log_psi)**2
-				p_mask = (p_1/p_0) > torch.rand_like(p_1)
+				r_1 = r_0 + torch.randn_like(r_0, device=device, dtype=dtype, layout=torch.strided)*dr_test
+				p_1 = torch.exp(model(r_1))**2
 				
-				p_0 = torch.where(p_mask, p_1, p_0)
-				r_0 = torch.where(p_mask[..., None, None], r_1, r_0)
+				mask_yes, mask_no = is_a_bigger(p_1/p_0, torch.rand_like(p_1, device=device, dtype=dtype, layout=torch.strided))
 
-				acc_tmp += p_mask.to(dtype).mean().item()
-    
-			del log_psi
+				p_0 = mask_yes*p_1 + mask_no*p_0
+				r_0 = mask_yes.unsqueeze(-1).unsqueeze(-1)*r_1 + mask_no.unsqueeze(-1).unsqueeze(-1)*r_0
+
+				acc_test = torch.mean(mask_yes, dim=0, keepdim=True) # docs:torch:knowledge keepdim requires dim=int|tuple[int]
+
 			del r_1
 			del p_1
-			del p_mask
+			del mask_yes
+			del mask_no
 
-		acc += [acc_tmp/sam_step]
-
-	mask = ((0.5-acc[0])**2 - (0.5-acc[1])**2) < 0.
-	deltar = mask*deltar_0 + ~mask*deltar_1
-
-	return r_0, (acc[0]+acc[1])/2., deltar
+		acc_all = acc_all + acc_test
+		mask_yes, mask_no = is_a_bigger(torch.absolute(0.5-acc_test), torch.absolute(0.5-acc))
+		acc = mask_no*acc + mask_yes*acc_test
+		deltar = mask_no*dr_test + mask_yes*deltar
+ 
+	return r_0, acc_all/2., deltar

@@ -11,7 +11,7 @@ import wandb
 import pprint
 import inspect
 import numpy as np
-from copy import copy
+from copy import copy, deepcopy
 import torch 
 
 from utils import dict_to_cmd, cmd_to_dict, dict_to_wandb
@@ -20,21 +20,7 @@ from utils import get_cartesian_product, type_me, run_cmds, flat_any
 from dump.systems import systems
 
 from torch import nn
-"""
-todo
-- single function for cmd calls
 
-docs:sub_classes-init
-Steps
-0- subclasses inherit from personal bases
-1- initialised subclasses, because they don't have properties otherwise
-
-## docs:submit
-- must change submit to False to prevent auto resubmitting
-- 
-
-
-"""
 this_dir = Path(__file__).parent
 hostname = os.environ['HOSTNAME']
 
@@ -55,7 +41,7 @@ class PyfigBase:
  
 	project:            str     = ''
 	run_name:       	Path	= 'run.py'
-	exp_name:       	str		= 'demo'
+	exp_name:       	str		= '' # default is demo
 	exp_id: 			str		= ''
 	group_exp: 			bool	= False
 	
@@ -104,7 +90,7 @@ class PyfigBase:
 	class sweep(Sub):	
 		method: 		str		= 'grid'
 		parameters: 	dict 	= 	dict(
-			n_b  = dict(values=[16, 32, 64]),
+			n_b  = dict(values=[16,]),
 		)
   
 	class wb(Sub):
@@ -112,17 +98,19 @@ class PyfigBase:
 		job_type:		str		= 'debug'		
 		wb_mode: 		str		= 'disabled'
 		wb_sweep: 		bool	= False
+		_wb_agent: 		bool	= False
+		sweep_id: 		str 	= ''
   
 		entity:			str		= property(lambda _: _._p.project)
 		program: 		Path	= property(lambda _: Path( _._p.project_dir, _._p.run_name))
-		sweep_path_id:  str     = property(lambda _: f'{_.entity}/{_._p.project}/{_._p.exp_name}')
-		wb_type: 		str		= property(lambda _: _.wb_sweep*'sweeps' or f'runs/{_._p.exp_id}') # _._p.group_exp*f'groups' or 'runs') # or _._p.run_sweep*f'groups/{_._p.exp_name}'
+		sweep_path_id:  str     = property(lambda _: f'{_.entity}/{_._p.project}/{_.sweep_id}')
+		wb_type: 		str		= property(lambda _: _.wb_sweep*f'sweeps/{_.sweep_id}' or f'runs/{_._p.exp_id}') # _._p.group_exp*f'groups' or 'runs') # or _._p.run_sweep*f'groups/{_._p.exp_name}'
 		run_url: 		str		= property(lambda _: f'https://wandb.ai/{_.entity}/{_._p.project}/{_.wb_type}')
   
 	class distribute(Sub):
 		dist_method: 	str		= 'accelerate'
 		head:			bool	= True
-		rank: 			bool 	= property(lambda _: os.environ.get('RANK', '')=='0')  #  or _.head no work bc same input to all script fix
+		rank: 			bool 	= property(lambda _: os.environ.get('RANK', '0'))  #  or _.head no work bc same input to all script fix
 		dist_mode: 		str		= 'pyfig'  # accelerate
 		dist_id:		str		= ''
 		sync_step:		int		= 5
@@ -180,68 +168,80 @@ class PyfigBase:
         notebook:bool=False,  # removes sys_arg for notebooks
         sweep: dict=None,  # special properties for config update so is separated
         init_arg: dict|str|Path=None,  # args specificall  
-        post_init_arg: dict=None, 
+        post_init_arg: dict=None,
         **other_arg):     
 
 		for sub_name, sub in ii.sub_cls.items(): # docs:sub_classes-init
 			setattr(ii, sub_name, sub(parent=ii))
-   
+
 		for k,v in (sweep or {}).items():
 			setattr(ii.sweep, k, v)
 
 		c_init = flat_any(ii.d)
 		sys_arg = sys.argv[1:]
-		sys_arg = cmd_to_dict(sys_arg, c_init) if not notebook else {}  
-		ii.update_configuration(flat_any(init_arg) | flat_any(other_arg) | sys_arg)
+		sys_arg = cmd_to_dict(sys_arg, c_init) # if not notebook else {}
 
-		ii.debug_log([sys_arg, dict(os.environ.items()), ii.d], ['sys_arg.log', 'env_run.log', 'd.log'])
+		update = flat_any(init_arg) | flat_any(other_arg) | sys_arg
+		ii.update_configuration(update)
 
+		ii.debug_log([sys_arg, dict(os.environ.items()), ii.d], ['log_sys_arg.log', 'log_env_run.log', 'log_d.log'])
+		
 	def __post_init__(ii, **post_init_arg):
 		""" application specific initialisations """
 		ii.update_configuration(flat_any(post_init_arg))
 
 	def runfig(ii):
 
-		if (not ii.resource.submit) and ii.distribute.rank:
+		ii.debug_log([ii.d,], ['runfig.log',])
+  
+		if not ii.resource.submit:
+			if ii.distribute.head and int(ii.distribute.rank)==0:
 
-			ii.setup_exp_dir(group_exp= ii.group_exp, force_new_id= False)
+				ii.setup_exp_dir(group_exp= ii.group_exp, force_new_id= False)
 
-			ii.debug_log([ii.d,], ['wb_d.log',])
-			ii.wb.run = wandb.init(
-				project     = ii.project, 
-				group		= ii.exp_name,
-				name 		= ii.exp_id,
-				dir         = ii.exp_dir,
-				entity      = ii.wb.entity,  	
-				mode        = ii.wb.wb_mode,
-				config      = dict_to_wandb(ii.d),
-				
-			)
-		
-		if ii.resource.submit:
+				if ii.wb.sweep_id:
+					wandb.init()
+					ii.debug_log([ii.d,], ['log_agent_arg.log',])
+					from run import run
+					wandb.agent(ii.wb.sweep_id, function=run, project=ii.project, entity=ii.wb.entity, count=1)
+					# https://docs.wandb.ai/guides/sweeps/local-controller
+					print('After Agent')
+    
+				else:
+					ii.wb.run = wandb.init(
+						project     = ii.project, 
+						group		= ii.exp_name,
+						dir         = ii.exp_dir,
+						entity      = ii.wb.entity,  	
+						mode        = ii.wb.wb_mode,
+						config      = dict_to_wandb(ii.d),
+						id			= ii.exp_id
+					)
+    
+		elif ii.resource.submit:
 			ii.resource.submit = False # docs:submit
    
 			run_or_sweep_d = ii.get_run_or_sweep_d()
 
 			for i, run_d in enumerate(run_or_sweep_d):
 
-				if ii.run_sweep:
+				if ii.run_sweep or ii.wb.wb_sweep:
 					group_exp = not i==0
 				else:
 					group_exp = ii.group_exp
 
 				ii.setup_exp_dir(group_exp= group_exp, force_new_id= True)
-
-				base_d = inst_to_dict(ii, attr=True, sub_cls=True, flat=True, ignore=ii.ignore, debug=ii.debug)
+				base_d = inst_to_dict(ii, attr=True, sub_cls=True, flat=True, ignore=ii.ignore+['sweep', 'resource'], debug=ii.debug)
 				run_d = base_d | run_d
-    
+
 				ii.debug_log([dict(os.environ.items()), run_d], ['env_submit.log', 'd_submit.log'])
 
 				ii.resource.cluster_submit(run_d)
+
 				print(ii.wb.run_url)
 			
 			ii.pr(ii._debug_paths)
-			sys.exit()
+			sys.exit('Exiting from submit.')
 	
 	@staticmethod
 	def pr(d: dict):
@@ -274,7 +274,7 @@ class PyfigBase:
 	def setup_exp_dir(ii, group_exp=False, force_new_id=False):
 		
 		if ii.debug:
-			print('debug:setup_exp_dir:', ii.exp_dir, ii.distribute.head, ii.group_exp, force_new_id)
+			print('debug:setup_exp_dir:', ii.exp_id, ii.distribute.head, ii.group_exp, force_new_id)
 
 		if (not ii.exp_id) or force_new_id:
 			ii.exp_id = gen_time_id(7)
@@ -290,11 +290,51 @@ class PyfigBase:
 	
 	def get_run_or_sweep_d(ii,):
 		
-		if not ii.run_sweep:
+		if not (ii.run_sweep or ii.wb.wb_sweep):
 			""" single run
 			takes configuration from base in submit loop
 			"""
 			return [dict(),] 
+    
+		if ii.wb.wb_sweep:
+			param = ii.sweep.parameters
+			sweep_keys = list(param.keys())
+
+			n_sweep = 0
+			for k, k_d in param.items():
+				v = k_d.get('values', [])
+				n_sweep += len(v)
+    
+			# n_sweep = len(get_cartesian_product(*(v for v in param))
+			base_c = inst_to_dict(ii, sub_cls=True, attr=True, flat=True, ignore=ii.ignore+['sweep', 'head', 'exp_id'] + sweep_keys)
+			base_cmd = dict_to_cmd(base_c, sep='=')
+			base_sc = dict((k, dict(value=v)) for k,v in base_c.items())
+   
+			sweep_c = dict(
+				# command 	= ['python', '-u', '${program}', f'{base_c}', '--exp_id=${exp_id}', '${args}'],
+				program 	= str(Path(ii.run_name).absolute()),
+				method  	= ii.sweep.method,
+				parameters  = base_sc|param,
+			)
+
+			os.environ['WANDB_PROJECT'] = 'hwat'
+			os.environ['WANDB_ENTITY'] = 'hwat'
+
+			pprint.pprint(sweep_c)
+
+			ii.wb.sweep_id = wandb.sweep(
+				sweep_c, 
+				project = ii.project,
+				entity  = ii.wb.entity
+			)
+			api = wandb.Api()
+			sweep = api.sweep(str(ii.wb.sweep_path_id))
+			n_sweep_exp = sweep.expected_run_count
+			print(f"EXPECTED RUN COUNT = {n_sweep_exp}")
+			print(f"EXPECTED RUN COUNT = {n_sweep}")
+			print(ii.project, ii.wb.entity, Path(ii.run_name).absolute())
+
+			return [dict() for _ in range(n_sweep)]
 
 		ii.pr(ii.sweep.d)
 		d = ii.sweep.d
@@ -419,7 +459,7 @@ class distribute_pyfig(Sub):
 		finally:
 			gc.enable()
 		
-		if ii.distribute.head:
+		if ii._p.distribute.head:
 
 			n_ready = 0
 			while n_ready < ii.resource.n_gpu:
@@ -487,9 +527,9 @@ class niflheim_resource(Sub):
 	nodes           = '1' 			# (MIN-MAX) 
 	# mem_per_cpu     = 1024
 	# mem				= 'MaxMemPerNode'
-	cpus_per_task   = 8				# 1 task 1 gpu 8 cpus per task 
+	cpus_per_gpu   = 8				# 1 task 1 gpu 8 cpus per task 
 	partition       = 'sm3090'
-	time            = '0-04:00:00'  # D-HH:MM:SS
+	time            = '0-00:10:00'  # D-HH:MM:SS
 
 	gres            = property(lambda _: 'gpu:RTX3090:' + (str(_.n_gpu) if int(_.nodes) == 1 else '10'))
 	ntasks          = property(lambda _: _.n_gpu)
@@ -503,44 +543,85 @@ class niflheim_resource(Sub):
 
 	def cluster_submit(ii, job: dict):
 		
+		class _body:
+			lines = []
+			def __iadd__(ii, l):
+				ii.lines += [l]
+			def __repr__(self) -> str:
+				pass
+			def __str__(ii) -> str:
+				return '\n'.join(ii.lines)
+
+		try:
+			_body += 'x'
+			print(_body)
+		except Exception as e:
+			print(e)
+      
 		if job['head']:
 			print(ii.script)
-
-		mod = [
+		body = []
+		body += [
 			'module purge', 
-			# 'module load foss', 
-   			# 'module load CUDA/11.7.0'
+			'module load foss', 
+   			# 'module load CUDA/11.7.0',
+   			# 'module load OpenMPI',
 		]
-		env = ['source ~/.bashrc', f'conda activate {ii.env}',]
-		export = [
+		# body += [f'source ~/.bashrc', ]
+		# body += [f'conda activate {ii.env}',]
+		# body += [
 		# 'export $SLURM_JOB_ID',
 		# 'export MKL_NUM_THREADS=1',
 		# 'export NUMEXPR_NUM_THREADS=1',
-		# 'export OMP_NUM_THREADS=1',
+		# 'export OMP_NUM_THREADS=8',
 		# 'export OPENBLAS_NUM_THREADS=1',
-		]
-		debug = ['echo all_gpus:$SLURM_JOB_GPUS', 'echo nodelist:$SLURM_JOB_NODELIST', 'nvidia-smi']
-		body = mod + env + debug + export
+		# ]
+		body += ['echo all_gpus-${SLURM_JOB_GPUS}', 'echo nodelist-${SLURM_JOB_NODELIST}', 'nvidia-smi']
+		
+		port = np.random.randint(29500, 64000)
+		# body += ['export ']
+		body += ['echo api-${WANDB_API_KEY}']
+		body += ['echo project-${WANDB_PROJECT}']
+		body += ['echo entity-${WANDB_ENTITY}']
+		# body += ['curl -s --head  --request GET https://wandb.ai/site']
+		body += [f'export exp_id="{job["exp_id"]}"', 'echo exp_id-${exp_id}']
+		body += ['echo ${PWD}']
+		body += ['echo ${CWD}']
+		body += ['echo ${SLURM_EXPORT_ENV}']
+		body += ['scontrol show config']
+		body += ['srun --mpi=list']
+		body += [f'export WANDB_DIR="{ii._p.exp_dir}"']
+		body += ['printenv']
+		# body += [f'ping api.wandb.ai']
 
-		if ii._p.distribute.dist_method == 'accelerate':
+		if ii._p.wb.wb_sweep:
+				# server local https://github.com/wandb/wandb/issues/4586
+				# body += [f'wandb agent --count 1 {ii._p.wb.sweep_path_id}']
+			# launch_cmd = 'srun --gpus=1 --ntasks=1 --exclusive --label  '
+			launch_cmd = ''
+			body += [f'{launch_cmd} python -u {ii._p.run_name} {dict_to_cmd(job)} 1> {ii.device_log_path(rank=0)} 2>&1 &']
+				# srun --nodes=1 --mpi=cray_shasta --gpus=1 --cpus-per-task=8 --ntasks=1 -vvvvv --label --exclusive bash -c &
+   
+		elif ii._p.distribute.dist_method == 'accelerate':
 			# c_dist = lo_ve(path='c_dist.yaml')
 			c_dist = 'c_dist.yaml'
-			launch_cmd = f'accelerate launch --config_file {c_dist} '
-			cmd = dict_to_cmd(job, sep='=')
-			cmd = f' {job["run_name"]} \n {cmd} '  # \n is important 
-			body += [f'{launch_cmd} {cmd} \n 1> {ii.device_log_path(rank=0)} 2>&1 ']
-
+			launch_cmd = f'accelerate launch --config_file {c_dist} --main_process_port {port}'
+			cmd = dict_to_cmd(job)
+			body += [f'{launch_cmd} {job["run_name"]} \ {cmd} '] # \ 1> {ii.device_log_path(rank=0)} 2>&1 ']  # \n 
+   
+			# backslash must come between run.py and cmd
 		elif ii._p.distribute.dist_method == 'pyfig':
-			launch_cmd = 'srun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label '
+			launch_cmd = 'srun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label  '
 			for i in range(ii.n_gpu):
 				job.update(dict(head= i==0))
 				cmd = dict_to_cmd(job)
 				cmd = f'python -u {job["run_name"]} {cmd}'
-				body += [f'{launch_cmd} {cmd} \n 1> {ii.device_log_path(rank=i)} 2>&1 & ']
-			body += ['wait',]
-  
-
+				body += [f'{launch_cmd} {cmd} 1> {ii.device_log_path(rank=i)} 2>&1 & ']
+		
+		body += ['wait',]
 		body = '\n'.join(body)
+		if ii._p.debug:
+			print(body)
 		slurm = ii.script
 		ii._p.log([body,], ii._p.cluster_dir/'sbatch.log')
 		job_id = slurm.sbatch(body, verbose=True)
@@ -549,11 +630,12 @@ class niflheim_resource(Sub):
 	@property
 	def script(ii,):
 		return Slurm(
-			export			= ii.export,
+			# export			= ii.export,
 			nodes           = ii.nodes        ,
 			# mem_per_cpu     = ii.mem_per_cpu  ,
 			# mem     		= ii.mem  ,
-			cpus_per_task   = ii.cpus_per_task,
+			# srun_debug		= '5',
+			cpus_per_gpu   	= ii.cpus_per_gpu,
 			partition       = ii.partition,
 			time            = ii.time         ,
 			gres            = ii.gres         ,
@@ -561,6 +643,8 @@ class niflheim_resource(Sub):
 			job_name        = ii.job_name     ,
 			output          = ii.output       ,
 			error           = ii.error        ,
+			# cores_per_socket="2",
+			# sockets_per_node="4"
 		)
 
 	def device_log_path(ii, rank=0):

@@ -58,7 +58,7 @@ class Pyfig(PyfigBase):
   
 	class opt(PyfigBase.opt):
 		opt_name: 		str		= 'RAdam'
-		lr:  			float 	= 0.001
+		lr:  			float 	= 0.0001
 		betas:			list	= [0.9, 0.999]
 		eps: 			float 	= 1e-4
 		weight_decay: 	float 	= 0.0
@@ -67,7 +67,7 @@ class Pyfig(PyfigBase):
 	class sweep(PyfigBase.sweep):
 		method: 		str		= 'grid'
 		parameters: 	dict 	= 	dict(
-			n_b  = dict(values=[16, 32, 64]),
+			n_b  = dict(values=[16,]),
 		)
 
 	class distribute(PyfigBase.distribute):
@@ -76,7 +76,7 @@ class Pyfig(PyfigBase):
 
 	class resource(niflheim_resource):
 		submit:    		bool	= False
-		env: 			str     = 'lumi'
+		env: 			str     = 'zen'
 		n_gpu: 			int 	= 1
 
 	class wb(PyfigBase.wb):
@@ -92,8 +92,7 @@ class Pyfig(PyfigBase):
 		super().__post_init__(**system)
   
 		ii.runfig() # docs:runfig
-  
-  
+
 		"""  
 		# pyfig
 		## pyfig:todo
@@ -309,4 +308,26 @@ The following arguments are only useful when use_fdsp is passed or Fully Sharded
 --fsdp_backward_prefetch_policy (str) — FSDP’s backward prefetch policy.
 --fsdp_state_dict_type (str) — FSDP’s state dict type.
 
+"""
+
+""" docs:slurm
+
+Computer architecture
+The parts of a modern computer we need to understand to apply to running jobs are listed here. (Note: This is way oversimplified and intended to give a basic overview for the purposes of understanding how to request resources from Slurm, there are a lot of resources out there to dig deeper into computer architecture.)
+
+Board
+A physical motherboard which contains one or more of each of Socket, Memory bus and PCI bus.
+Socket
+A physical socket on a motherboard which accepts a physical CPU part.
+CPU
+A physical part that is plugged into a socket.
+Core
+A physical CPU core, one of many possible cores, that are part of a CPU.
+HyperThread
+A virtual CPU thread, associated with a specific Core. This can be enabled or disabled on a system. SCG typically disabled hyperthreading.
+Memory Bus
+A communication bus between system memory and a Socket/CPU.
+PCI Bus
+A communication bus between a Socket/CPU and I/O controllers (disks, networking, graphics,...) in the server.
+Slurm complicates this, however, by using the terms core and cpu interchangeably depending on the context and Slurm command. --cpus-per-taks= for example is actually specifying the number of cores per task.
 """

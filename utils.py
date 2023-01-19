@@ -12,6 +12,7 @@ from itertools import islice, product
 from pathlib import Path
 from time import sleep, time
 from typing import Any, Iterable, Union
+import pprint
 
 import numpy as np
 import optree
@@ -73,6 +74,10 @@ def collect_stats(k, v, new_d, p='tr', suf='', sep='/', sep_long='-'):
 	return new_d
 
 ### count things
+
+def check(d: dict):
+	pprint.pprint({k:type(v) for k,v in d.items()})
+	pprint.pprint({k:getattr(v, 'shape') for k,v in d.items() if hasattr(v, 'shape')})
 
 def get_cartesian_product(*args):
 	""" Cartesian product is the ordered set of all combinations of n sets """
