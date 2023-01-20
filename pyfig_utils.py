@@ -1,6 +1,7 @@
 from pathlib import Path
 from itertools import islice
 from time import sleep
+from typing import TypedDict
 import optree
 import os
 import gc
@@ -13,6 +14,8 @@ import inspect
 import numpy as np
 from copy import copy, deepcopy
 import torch 
+from functools import partial 
+
 
 from utils import dict_to_cmd, cmd_to_dict, dict_to_wandb
 from utils import mkdir, iterate_n_dir, gen_time_id, add_to_Path, dump, load
@@ -35,6 +38,14 @@ class Sub:
 	def d(ii):
 		return inst_to_dict(ii, sub_cls=True, prop=True, attr=True, ignore=ii.ignore)
 
+class Param(Sub): # docs:todo all wb sweep structure
+    name:   str = None
+    values: list = None
+    domain: tuple = None
+    dtype: type = None
+    log: bool = False
+step_size: float|int = None
+
 class PyfigBase:
 
 	user: 				str 	= None
@@ -44,10 +55,12 @@ class PyfigBase:
 	exp_name:       	str		= '' # default is demo
 	exp_id: 			str		= ''
 	group_exp: 			bool	= False
+	mode: 				str		= 'opt_hypam:train:evaluate'
 	
 	seed:           	int   	= 808017424 # grr
 	dtype:          	str   	= 'float32'
 	n_step:         	int   	= 10000
+	n_step_eval:        int   	= 5000
 	log_metric_step:	int   	= 10
 	log_state_step: 	int   	= 10
 	
@@ -87,11 +100,13 @@ class PyfigBase:
 		weight_decay: 	float 	= 0.0
 		hessian_power: 	float 	= 1.
   
-	class sweep(Sub):	
-		method: 		str		= 'grid'
-		parameters: 	dict 	= 	dict(
-			n_b  = dict(values=[16,]),
-		)
+	class sweep(Sub):
+		sweep_name: 	str				= None
+		sweep_method: 	str				= None # name of the alg
+		opt_hypam: 		str				= None   
+		parameters: 	dict[Param]		= None
+		# sweep_method: 	str 			= property(fget=partial(getattr, __name='_method'), fset=lambda _, v:(setattr(_, '_method', v))) # property(fget, fset, fdel, doc)
+
   
 	class wb(Sub):
 		run = None
@@ -167,7 +182,7 @@ class PyfigBase:
 	def __init__(ii, 
         notebook:bool=False,  # removes sys_arg for notebooks
         sweep: dict=None,  # special properties for config update so is separated
-        init_arg: dict|str|Path=None,  # args specificall  
+        init_d: dict|str|Path=None,  # args specificall  
         post_init_arg: dict=None,
         **other_arg):     
 
@@ -178,10 +193,9 @@ class PyfigBase:
 			setattr(ii.sweep, k, v)
 
 		c_init = flat_any(ii.d)
-		sys_arg = sys.argv[1:]
-		sys_arg = cmd_to_dict(sys_arg, c_init) # if not notebook else {}
+		sys_arg = cmd_to_dict(sys.argv[1:], c_init) if not notebook else {}
 
-		update = flat_any(init_arg) | flat_any(other_arg) | sys_arg
+		update = flat_any(init_d or {}) | flat_any(other_arg or {}) | sys_arg
 		ii.update_configuration(update)
 
 		ii.debug_log([sys_arg, dict(os.environ.items()), ii.d], ['log_sys_arg.log', 'log_env_run.log', 'log_d.log'])
@@ -202,8 +216,8 @@ class PyfigBase:
 				if ii.wb.sweep_id:
 					wandb.init()
 					ii.debug_log([ii.d,], ['log_agent_arg.log',])
-					from run import run
-					wandb.agent(ii.wb.sweep_id, function=run, project=ii.project, entity=ii.wb.entity, count=1)
+					# from run import run
+					# wandb.agent(ii.wb.sweep_id, function=run, project=ii.project, entity=ii.wb.entity, count=1)
 					# https://docs.wandb.ai/guides/sweeps/local-controller
 					print('After Agent')
     
@@ -242,7 +256,7 @@ class PyfigBase:
 			
 			ii.pr(ii._debug_paths)
 			sys.exit('Exiting from submit.')
-	
+
 	@staticmethod
 	def pr(d: dict):
 		pprint.pprint(d)
@@ -310,29 +324,34 @@ class PyfigBase:
 			base_cmd = dict_to_cmd(base_c, sep='=')
 			base_sc = dict((k, dict(value=v)) for k,v in base_c.items())
    
-			sweep_c = dict(
-				# command 	= ['python', '-u', '${program}', f'{base_c}', '--exp_id=${exp_id}', '${args}'],
-				program 	= str(Path(ii.run_name).absolute()),
-				method  	= ii.sweep.method,
-				parameters  = base_sc|param,
-			)
+			if ii.wb.op_sweep:
+				c.hypam_opt
+       
+			else:
+				sweep_c = dict(
+					command 	= ['python', '-u', '${program}', f'{base_c}', '${args}', '--exp_id=${exp_id}', ],
+					program 	= str(Path(ii.run_name).absolute()),
+					method  	= ii.sweep.method,
+					parameters  = base_sc|param,
+					controller  = dict(type='local'),
+				)
 
-			os.environ['WANDB_PROJECT'] = 'hwat'
-			os.environ['WANDB_ENTITY'] = 'hwat'
+				os.environ['WANDB_PROJECT'] = 'hwat'
+				os.environ['WANDB_ENTITY'] = 'hwat'
 
-			pprint.pprint(sweep_c)
+				pprint.pprint(sweep_c)
 
-			ii.wb.sweep_id = wandb.sweep(
-				sweep_c, 
-				project = ii.project,
-				entity  = ii.wb.entity
-			)
-			api = wandb.Api()
-			sweep = api.sweep(str(ii.wb.sweep_path_id))
-			n_sweep_exp = sweep.expected_run_count
-			print(f"EXPECTED RUN COUNT = {n_sweep_exp}")
-			print(f"EXPECTED RUN COUNT = {n_sweep}")
-			print(ii.project, ii.wb.entity, Path(ii.run_name).absolute())
+				ii.wb.sweep_id = wandb.sweep(
+					sweep_c, 
+					project = ii.project,
+					entity  = ii.wb.entity
+				)
+				api = wandb.Api()
+				sweep = api.sweep(str(ii.wb.sweep_path_id))
+				n_sweep_exp = sweep.expected_run_count
+				print(f"EXPECTED RUN COUNT = {n_sweep_exp}")
+				print(f"EXPECTED RUN COUNT = {n_sweep}")
+				print(ii.project, ii.wb.entity, Path(ii.run_name).absolute())
 
 			return [dict() for _ in range(n_sweep)]
 
@@ -595,22 +614,27 @@ class niflheim_resource(Sub):
 		# body += [f'ping api.wandb.ai']
 
 		if ii._p.wb.wb_sweep:
+			print('\n wb sweep')
 				# server local https://github.com/wandb/wandb/issues/4586
-				# body += [f'wandb agent --count 1 {ii._p.wb.sweep_path_id}']
 			# launch_cmd = 'srun --gpus=1 --ntasks=1 --exclusive --label  '
 			launch_cmd = ''
-			body += [f'{launch_cmd} python -u {ii._p.run_name} {dict_to_cmd(job)} 1> {ii.device_log_path(rank=0)} 2>&1 &']
+			body += [f'wandb controller {ii._p.wb.sweep_id}'] # {ii._p.wb.sweep_path_id}
+			body += [f'wandb agent {ii._p.wb.sweep_id} 1> {ii.device_log_path(rank=0)} 2>&1 ']
+			# body += [f'{launch_cmd} python -u {ii._p.run_name} {dict_to_cmd(job)} 1> {ii.device_log_path(rank=0)} 2>&1 & ']
 				# srun --nodes=1 --mpi=cray_shasta --gpus=1 --cpus-per-task=8 --ntasks=1 -vvvvv --label --exclusive bash -c &
+			body += ['wait',]
    
 		elif ii._p.distribute.dist_method == 'accelerate':
+			print('\n accelerate distribution')
 			# c_dist = lo_ve(path='c_dist.yaml')
 			c_dist = 'c_dist.yaml'
 			launch_cmd = f'accelerate launch --config_file {c_dist} --main_process_port {port}'
 			cmd = dict_to_cmd(job)
-			body += [f'{launch_cmd} {job["run_name"]} \ {cmd} '] # \ 1> {ii.device_log_path(rank=0)} 2>&1 ']  # \n 
+			body += [f'{launch_cmd} {job["run_name"]} \ {cmd} 1> {ii.device_log_path(rank=0)} 2>&1 '] # \  ']  # \n 
    
 			# backslash must come between run.py and cmd
 		elif ii._p.distribute.dist_method == 'pyfig':
+			print('\n pyfig distribution')
 			launch_cmd = 'srun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label  '
 			for i in range(ii.n_gpu):
 				job.update(dict(head= i==0))
@@ -618,7 +642,9 @@ class niflheim_resource(Sub):
 				cmd = f'python -u {job["run_name"]} {cmd}'
 				body += [f'{launch_cmd} {cmd} 1> {ii.device_log_path(rank=i)} 2>&1 & ']
 		
-		body += ['wait',]
+			body += ['wait',]
+   
+		body += ['echo End']
 		body = '\n'.join(body)
 		if ii._p.debug:
 			print(body)
@@ -630,21 +656,16 @@ class niflheim_resource(Sub):
 	@property
 	def script(ii,):
 		return Slurm(
-			# export			= ii.export,
-			nodes           = ii.nodes        ,
-			# mem_per_cpu     = ii.mem_per_cpu  ,
-			# mem     		= ii.mem  ,
-			# srun_debug		= '5',
-			cpus_per_gpu   	= ii.cpus_per_gpu,
+			export			= ii.export,
 			partition       = ii.partition,
+			nodes           = ii.nodes,
+			cpus_per_gpu   	= ii.cpus_per_gpu,
 			time            = ii.time         ,
 			gres            = ii.gres         ,
 			ntasks          = ii.ntasks       ,
 			job_name        = ii.job_name     ,
 			output          = ii.output       ,
 			error           = ii.error        ,
-			# cores_per_socket="2",
-			# sockets_per_node="4"
 		)
 
 	def device_log_path(ii, rank=0):
@@ -723,13 +744,17 @@ def lo_ve(path:Path, data=None):
 	mode = 'r' if data is None else 'w'
 	mode += 'b' if file_type in ['pk',] else ''
 	interface = file_interface_all[file_type][mode]
+
+	if 'r' in mode and not path.exists():
+		return print('path: ', str(path), 'n\'existe pas- returning None')
+
 	with open(path, mode) as f:
 		data = interface(data, f) if not data is None else interface(f)
 	return data
 
 
 def inst_to_dict(
-	inst, 
+	inst: PyfigBase, 
 	attr=False,
 	sub_cls=False, 
 	prop=False,
@@ -737,29 +762,33 @@ def inst_to_dict(
 	flat:bool=False,
 	debug:bool=False
 ) -> dict:
-		inst_keys = [k for k in dir(inst) if not k.startswith('_') and not k in ignore]
-		
+
+		inst_keys = [k for k in dir(inst) if not k.startswith('_') and not k in ignore] # docs:python:cls-inst:q? could dirs --> vars? 
+		if debug:
+			print('inst-to-dict: inst_keys: ', inst_keys)
+
 		d_cls = {k:getattr(inst.__class__, k) for k in inst_keys}
 		d_ins = {k:getattr(inst, k) for k in inst_keys}
 		
 		d_callable = {k:v for k,v in d_ins.items() if callable(v) and not isinstance(v, Sub)}
 		d_prop = {k:v for k,v in d_ins.items() if isinstance(d_cls[k], property)}
+		property_has_setter = lambda v: getattr(v, 'fset') is not None
+		d_prop_w_setter = {k:v for k,v in d_prop.items() if property_has_setter(d_cls[k])}
 		
 		d_sub = {}
 		for k,v in d_ins.items():
 			if isinstance(v, Sub):
 				d_sub[k] = inst_to_dict(v, attr=attr, sub_cls=sub_cls, prop=prop, ignore=ignore)
-		
-		d_attr = {k:v for k,v in d_ins.items() if not k in (d_callable | d_prop | d_sub).keys()}
+	
+		d_attr = {k:v for k,v in d_ins.items() if not k in (d_callable | d_prop | d_sub).keys()} | d_prop_w_setter
 		
 		d = dict()
 		[d.setdefault(k, v) for k,v in d_sub.items() if sub_cls]
 		[d.setdefault(k, v) for k,v in d_attr.items() if attr]
 		[d.setdefault(k, v) for k,v in d_prop.items() if prop]
 		if debug:
-			print('inst-to-dict: inst_keys: ', inst_keys)
 			print('inst-to-dict: d_sub: ', d_sub)
-		return flat_any(d) if flat else d
+		return flat_any(d) if flat else d # docs:python:flat:q? parameter to flat dict in levels?
 
 # prefix components:
 draw_space =  '    '

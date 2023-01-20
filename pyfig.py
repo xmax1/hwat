@@ -11,13 +11,15 @@ class Pyfig(PyfigBase):
 	user: 				str 	= user
 	project:            str     = 'hwat'
 	run_name:       	Path	= 'run.py'
+	mode: 				str 	= 'opt_hypam:train:evaluate'
  
 	exp_name:       	str		= 'demo'
-	profile: 			bool 	= True
+	profile: 			bool 	= False
 	
 	seed:           	int   	= 808017424 # grr
 	dtype:          	str   	= 'float32'
 	n_step:         	int   	= 10000
+	n_step_eval:        int   	= 10000
 	log_metric_step:	int   	= 10
 	log_state_step: 	int   	= 10
 	
@@ -69,9 +71,9 @@ class Pyfig(PyfigBase):
 		parameters: 	dict 	= 	dict(
 			n_b  = dict(values=[16,]),
 		)
-
+		
 	class distribute(PyfigBase.distribute):
-		dist_mode: 		str		= 'pyfig'  # options: accelerate
+		dist_mode: 		str		= 'accelerate'  # options: accelerate
 		sync_step:		int		= 5		
 
 	class resource(niflheim_resource):
@@ -85,12 +87,15 @@ class Pyfig(PyfigBase):
 
 	def __init__(ii, notebook:bool=False, sweep: dict=None, init_arg: dict=None, **other_arg) -> None:
 
+		print('initialising')
 		super().__init__(notebook=notebook, init_arg=init_arg, **other_arg)
 
 		system = systems.get(ii.data.system, {})
 
+		print('initialising system')
 		super().__post_init__(**system)
   
+		print('running')
 		ii.runfig() # docs:runfig
 
 		"""  
