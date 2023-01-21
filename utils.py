@@ -128,11 +128,22 @@ def add_to_Path(path: Path, string: str | Path):
 
 ### convert things
 
-def dict_to_cmd(d: dict, sep=' '):
+def dict_to_cmd(d: dict, sep=' ', exclude_false=False, exclude_none=True):
+	if d.get('debug', False):
+		pprint.pprint(d)
+
 	items = d.items()
-	items = ((k, (v.tolist() if isinstance(v, np.ndarray) else v)) for (k,v) in items)
-	items = ((str(k).replace(" ", ""), str(v).replace(" ", "")) for (k,v) in items)
-	return ' '.join([f'--{k}{sep}{v}' for k,v in items if v])
+	items = [(k, (v.tolist() if isinstance(v, np.ndarray) else v)) for (k,v) in items]
+	items = [(str(k).replace(" ", ""), str(v).replace(" ", "")) for (k,v) in items]
+
+	if exclude_false:
+		items = [(k, v) for (k,v) in items if not (d[k] is False)]
+	if exclude_none:
+		items = [(k, v) for (k,v) in items if not (d[k] is None)]
+	if d.get('debug', False):
+		pprint.pprint(list(items))
+
+	return ' '.join([(f'--{k}' if v is True else f'--{k + sep + v}') for k,v in items if v])
 
 def cmd_to_dict(cmd:Union[str, list], ref:dict, delim:str=' --', d=None):
 	"""
@@ -253,11 +264,11 @@ def flat_list(lst):
 			items += [v]
 	return items
 
-def flat_dict(d:dict):
-	items = []
+def flat_dict(d:dict, items:list[tuple]=None):
+	items = items or []
 	for k,v in d.items():
 		if isinstance(v, dict):
-			items.extend(flat_dict(v).items())
+			items.extend(flat_dict(v, items=items).items())
 		else:
 			items.append((k, v))
 	return dict(items)

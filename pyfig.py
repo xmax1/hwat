@@ -1,7 +1,7 @@
 from pathlib import Path
 import numpy as np
 
-from pyfig_utils import PyfigBase, Param, niflheim_resource
+from pyfig_utils import PyfigBase, Param, niflheim_resource, Sub, dict_to_cmd
 
 from dump.systems import systems
 from dump.user_secret import user
@@ -9,17 +9,25 @@ from dump.user_secret import user
 class Pyfig(PyfigBase):
 
 	user: 				str 	= user
+ 
 	project:            str     = 'hwat'
 	run_name:       	Path	= 'run.py'
-	mode: 				str 	= 'opt_hypam:train:evaluate'
- 
-	exp_name:       	str		= 'demo'
-	profile: 			bool 	= False
+	exp_name:       	str		= '' # default is demo
+	exp_id: 			str		= ''
+	group_exp: 			bool	= False
+
+	multimode: 			str		= 'train:evaluate' # 'max_mem:profile:opt_hypam:train:evaluate'
+	mode: 				str		= ''
+	debug: 				bool    = False
+	run_sweep:      	bool    = False
 	
 	seed:           	int   	= 808017424 # grr
 	dtype:          	str   	= 'float32'
-	n_step:         	int   	= 1000
-	n_step_eval:        int   	= 1000
+
+	n_step:         	int   	= 5000
+	n_eval_step:        int   	= 1000
+	n_pre_step:    		int   	= 500
+
 	log_metric_step:	int   	= 10
 	log_state_step: 	int   	= 10
 	
@@ -33,6 +41,7 @@ class Pyfig(PyfigBase):
 
 		n_b:        int         = 512
 		n_corr:     int         = 20
+		n_equil_step:	int		= 100
 		acc_target: int         = 0.5
 
 		n_equil_step:int        = property(lambda _: 1e6//_.n_corr)
@@ -61,6 +70,7 @@ class Pyfig(PyfigBase):
 	class opt(PyfigBase.opt):
 		opt_name: 		str		= 'RAdam'
 		lr:  			float 	= 0.0001
+		max_lr:			float 	= 0.01
 		betas:			list	= [0.9, 0.999]
 		eps: 			float 	= 1e-4
 		weight_decay: 	float 	= 0.0
@@ -71,21 +81,11 @@ class Pyfig(PyfigBase):
 		parameters: 	dict 	= dict(
 			lr= Param(domain=(0.01,0.0001), log=True)
 		)
-		
+
 	class distribute(PyfigBase.distribute):
-		dist_mode: 		str		= 'accelerate'  # options: accelerate
-		sync_step:		int		= 5
-		c_compute_environment = 'LOCAL_MACHINE',
-		c_distributed_type =  'MULTI_GPU',
-		c_num_processes =  property(lambda _: str(_._p.resource.n_gpu))
-		c_num_machines =  property(lambda _: str(_._p.resource.n_node)),
-		c_machine_rank =  '0',
-		c_use_cpu =  'false',
-		c_same_network =  'true',
-		c_main_process_port =  'null'
+		dist_method = 'pyfig'
 
 	class resource(niflheim_resource):
-		submit:    		bool	= False
 		env: 			str     = 'zen'
 		n_gpu: 			int 	= 1
 
@@ -104,8 +104,7 @@ class Pyfig(PyfigBase):
 		# super().__post_init__(**system)
 		ii.update(system)
   
-		print('running')
-		ii.runfig() # docs:runfig
+		ii.pf_submit() # docs:runfig
 
 		"""  
 		# pyfig
@@ -118,7 +117,7 @@ class Pyfig(PyfigBase):
 		
 		if c.load.load_exp_dir:
 			
-
+		
 		## pyfig:def
 		- machine rank = global relative id of machine/process ??
 
@@ -148,12 +147,16 @@ class Pyfig(PyfigBase):
 		- properties can NOT recursively call each other
 		- no dictionaries (other than sweep) as configuration args
 		- if wandb fails try # settings  = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+		- ! at initialisation, sub_cls cannot be used for operations because they are not initialised and therefore 
+		- do not have access to d (dictionary property). This means the callable filter needs to happen *first
 
 		## pyfig:prereq
 		- wandb api key 
 		- change secrets file
 
 		# docs
+		## docs:python
+		- hasattr includes class attr not just instance attr
 		## docs:distribute:accelerator
 		- accelerate config before running anything to configure environment
 		- config file/params 

@@ -14,7 +14,10 @@ import numpy as np
 from copy import copy, deepcopy
 import torch 
 from functools import partial 
-
+import pickle as pk
+import yaml
+import json
+from functools import partial
 
 from utils import dict_to_cmd, cmd_to_dict, dict_to_wandb
 from utils import mkdir, iterate_n_dir, gen_time_id, add_to_Path, dump, load
@@ -28,25 +31,26 @@ hostname = os.environ['HOSTNAME']
 
 class Sub:
 	_p = None
-	ignore: list = ['_p',]
-	
+	_sub_ins_tag = '_p'
+	ignore = ['d', 'ignore']
+
 	def __init__(ii, parent=None):
 		ii._p: PyfigBase
 		ii._p: PyfigBase = parent
-		ii.ignore += ii._p.ignore
+		ii.init_sub_cls()
   
+	def init_sub_cls(ii,) -> dict:
+		sub_cls = ins_to_dict(ii, sub_cls=True)
+		for sub_k, sub_v in sub_cls.items():
+			sub_ins = sub_v(parent=ii)
+			setattr(ii, sub_k, sub_ins)
+
 	@property
 	def d(ii):
-		return inst_to_dict(ii, sub_cls=True, prop=True, attr=True, ignore=ii.ignore)
+		return ins_to_dict(ii, sub_ins=True, prop=True, attr=True, ignore=ii.ignore)
 
-class Config:
-    pass
-
-class Static:
-    pass
-
-class Param(Sub, Static): 
-    # docs:todo all wb sweep structure
+class Param(Sub): 
+	# docs:todo all wb sweep structure
 	values: list = None
 	domain: tuple = None
 	dtype: type = None
@@ -58,47 +62,43 @@ class Param(Sub, Static):
 		for k,v in kw.items():
 			setattr(ii, k, v)
 
-	# @property
-	# def d(ii):
-	# 	return inst_to_dict(ii, attr=True, sub_cls=True, prop=True, ignore=ii.ignore)
-		# return dict((k,v) for k,v in vars(ii).items() if (not isinstance(v, property)) and (not callable(v)))
-
 class PyfigBase:
 
 	user: 				str 	= None
  
 	project:            str     = ''
-	run_name:       	Path	= 'run.py'
+	run_name:       	Path	= ''
 	exp_name:       	str		= '' # default is demo
 	exp_id: 			str		= ''
 	group_exp: 			bool	= False
 
-	multimode: 			str		= 'train:evaluate' # 'max_mem:profile:opt_hypam:train:evaluate'
+	multimode: 			str		= '' # 'max_mem:profile:opt_hypam:train:evaluate'
 	mode: 				str		= ''
 	debug: 				bool    = False
 	run_sweep:      	bool    = False
 	
-	seed:           	int   	= 808017424 # grr
-	dtype:          	str   	= 'float32'
+	seed:           	int   	= 0
+	dtype:          	str   	= ''
 
-	n_step:         	int   	= 5000
-	n_step_eval:        int   	= 1000
-	n_pretrain_step:    int   	= 500
+	n_step:         	int   	= 0
+	n_step_eval:        int   	= 0
+	n_pre_step:    		int   	= 0
 
-	log_metric_step:	int   	= 10
-	log_state_step: 	int   	= 10
+	log_metric_step:	int   	= 0
+	log_state_step: 	int   	= 0
 	
 	class data(Sub):
-		system: str = ''
+		system: 	str = ''
+		n_b:        int         = 0
+
 		charge:     int         = 0
 		spin:       int         = 0
 		a:          np.ndarray  = np.array([[0.0, 0.0, 0.0],])
 		a_z:        np.ndarray  = np.array([4.,])
 
-		n_b:        int         = 256
-		n_corr:     int         = 20
-		n_equil:    int         = 10000
-		acc_target: int         = 0.5
+		n_corr:     int         = 0
+		n_equil_step:		int	= 0
+		acc_target: int         = 0
 
 		n_e:        int         = property(lambda _: int(sum(_.a_z)))
 		n_u:        int         = property(lambda _: (_.spin + _.n_e)//2)
@@ -126,15 +126,15 @@ class PyfigBase:
   
 	class sweep(Sub):
 		storage: 		Path = property(lambda _: 'sqlite:///' + str(_._p.exp_dir / 'hypam_opt.db'))
-		sweep_name: 	str				= None
-		sweep_method: 	str				= None # name of the alg 
-		parameters: 	dict[Param]		= None
-		n_trials: 		int				= 100
+		sweep_name: 	str				= '' 
+		sweep_method: 	str				= '' # wb name of alg: grid,bayes, ... 
+		parameters: 	dict[Param]		= {}
+		n_trials: 		int				= 10
   
 	class wb(Sub):
 		run = None
-		job_type:		str		= 'debug'		
-		wb_mode: 		str		= 'disabled'
+		job_type:		str		= ''		
+		wb_mode: 		str		= ''
 		wb_sweep: 		bool	= False
 		_wb_agent: 		bool	= False
 		sweep_id: 		str 	= ''
@@ -146,19 +146,108 @@ class PyfigBase:
 		run_url: 		str		= property(lambda _: f'https://wandb.ai/{_.entity}/{_._p.project}/{_.wb_type}')
   
 	class distribute(Sub):
-		dist: 			Any		= None
-		dist_method: 	str		= 'accelerate'
 		head:			bool	= True
-		rank: 			bool 	= property(lambda _: os.environ.get('RANK', '0'))  #  or _.head no work bc same input to all script fix
-		dist_mode: 		str		= 'pyfig'  # accelerate
-		dist_id:		str		= ''
+		dist_method: 	str		= 'pyfig'  # options: accelerate
 		sync_step:		int		= 5
-
+  
+		_srun_cmd: 		str		= 'srun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label '
 		_gpu_id_cmd:		str	= 'nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'
+
+		_launch_cmd:	str  	= property(lambda _: f'{_._srun_cmd} python -u {_._p.run_name} ')
+		rank: 			bool 	= property(lambda _: os.environ.get('RANK', '0'))
 		gpu_id: 		str		= property(lambda _: ''.join(run_cmds(_._gpu_id_cmd, silent=True)).split('.')[0])
 		dist_id: 		str 	= property(lambda _: _.gpu_id + '-' + hostname.split('.')[0])
-		backward: 		Callable = None
 
+		class dist_c(Sub):
+			pass
+
+		def __init__(ii, parent=None):
+			super().__init__(parent)
+
+			def debug_sync(v_d: dict, step: int):
+				if ((step/ii.sync_step)==1) and ii._p.debug:
+					[print(k, v.shape) for k,v in v_d.items()]
+				v_sync = ii.sync(v_d, step)
+				if ((step/ii.sync_step)==1) and ii._p.debug:
+					[print(k, v.shape) for k,v in v_sync.items()]
+				return v_sync
+				
+			ii.sync = debug_sync
+
+		def sync(ii, step: int, v_d: dict) -> dict:
+			v_path = (ii._p.exchange_dir / f'{step}_{ii._p.distribute.dist_id}').with_suffix('.pk')
+			v_mean_path = add_to_Path(v_path, '-mean')
+			
+			try:
+				gc.disable()
+
+				v_ref_leaves, treespec = optree.tree_flatten(v_d)
+				v_sync_save = [v.detach().cpu().numpy() if isinstance(v, torch.Tensor) else v for v in v_ref_leaves]
+				dump(v_path, v_sync_save)
+
+			except Exception as e:
+				print(e)
+			finally:
+				gc.enable()
+			
+			if ii._p.distribute.head:
+
+				n_ready = 0
+				while n_ready < ii._p.resource.n_gpu:
+					k_path_all = list(ii._p.exchange_dir.glob(f'{step}_*'))
+					n_ready = len(k_path_all)
+
+				for i, p in enumerate(k_path_all):
+					leaves = [load(p),] if i==0   else [*leaves, load(p)]
+
+				v_mean = [np.stack(l).mean(axis=0) for l in zip(*leaves)]
+
+				try:
+					gc.disable()
+					for p in k_path_all:
+						dump(add_to_Path(p, '-mean'), v_mean)
+				except Exception as e:
+					print(e)
+				finally:
+					sleep(0.01)
+					[p.unlink() for p in k_path_all]
+					gc.enable()
+
+			while v_path.exists():
+				sleep(0.02)
+			sleep(0.02)
+
+			gc.disable()
+			try:
+				v_sync_leaves = load(v_mean_path)  # Speed: Only load sync vars
+				v_sync_leaves = [torch.tensor(data=v, device=ref.device, dtype=ref.dtype, requires_grad=False) 
+					if isinstance(ref, torch.Tensor) else v 
+					for v, ref in zip(v_sync_leaves, v_ref_leaves)]
+				v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync_leaves)
+				
+			except Exception as e:
+				v_sync = v_d
+				print(e)
+			finally: # ALWAYS EXECUTED
+				v_mean_path.unlink()
+				gc.enable()
+			return v_sync
+
+		def backward(ii, loss: torch.Tensor):
+			loss.backward()
+
+		def set_device(ii, device=None):
+			device = 'cuda' if torch.cuda.is_available() else 'cpu'
+			ii._p.update({k:v.to(device) for k,v in flat_any(ii._p.d).items() if isinstance(v, torch.Tensor)})
+			return device
+
+		def set_seed(ii, seed=None):
+			print('setting seed w torch manually ' )
+			torch.random.manual_seed(seed or ii._p.seed)
+
+		def prepare(ii, *arg, **kw):
+			return list(arg) + list(kw.values())
+ 
 	class resource(Sub):
 		submit: 		bool	= False
 		cluster_submit: Callable= None
@@ -167,20 +256,19 @@ class PyfigBase:
 
 	home:				Path	= Path().home()
 	project_dir:        Path    = property(lambda _: _.home / 'projects' / _.project)
-	dump_dir:               Path    = property(lambda _: Path('dump'))
+	dump_dir:           Path    = property(lambda _: Path('dump'))
 	tmp_dir:            Path	= property(lambda _: Path(_.dump_dir,'tmp'))
 	exp_dir:        	Path	= property(lambda _: Path(_.dump_exp_dir, _.exp_name, _.exp_id))
-	dump_exp_dir:        	Path	= property(lambda _: Path(_.dump_dir, 'exp'))
+	dump_exp_dir:       Path	= property(lambda _: Path(_.dump_dir, 'exp'))
 	cluster_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'cluster'))
 	exchange_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exchange'))
 	profile_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'profile'))
 	exp_data_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exp_data'))
 	log_dir: 			Path    = property(lambda _: _.cluster_dir)
 
-	ignore_f = ['commit', 'pull', 'backward']
-	ignore_cls = ['Static']
-	ignore: list = ['ignore', 'd', 'cmd', 'sub_cls',] + ignore_f
-	_sub_cls: list[Sub] = None
+	_ignore_f = ['commit', 'pull', 'backward']
+	ignore: list = ['ignore', 'd', 'cmd', 'sub_ins',] + _ignore_f
+	_sub_ins_tag: str = '_p'
 
 	def __init__(ii, 
 		notebook:bool=False,  # removes sys_arg for notebooks
@@ -189,13 +277,14 @@ class PyfigBase:
 		post_init_arg: dict={},
 		**other_arg):     
 
-		ii._init_sub_cls()
+		ii.init_sub_cls()
 
 		for k,v in (sweep or {}).items():
 			setattr(ii.sweep, k, v)
 
 		if not notebook:
-			sys_arg = cmd_to_dict(sys.argv[1:], ii._get_d_with(attr=True, sub_cls=True, flat=True, ignore=ii.ignore+['sweep'])) 
+			ref_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore+['sweep',])
+			sys_arg = cmd_to_dict(sys.argv[1:], ref_d)
 
 		update = flat_any((c_init or {})) | flat_any((other_arg or {})) | (sys_arg or {})
 		ii.update(update)
@@ -206,38 +295,44 @@ class PyfigBase:
 		""" application specific initialisations """
 		ii.update((post_init_arg or {}) | other_arg)
 
+	def start(ii, update: dict=None):
 
-	def runfig(ii):
+		ii.update((update or {}))
 
-		ii.debug_log([ii.d,], ['runfig.log',])
-  
-		if not ii.resource.submit:
-			if ii.distribute.head and int(ii.distribute.rank)==0:
+		if ii.distribute.head and int(ii.distribute.rank)==0:
+			print('running')
+			assert ii.resource.submit == False
 
-				ii.setup_exp_dir(group_exp= ii.group_exp, force_new_id= False)
+			ii.setup_exp_dir(group_exp= ii.group_exp, force_new_id= False)
 
-				if ii.wb.sweep_id:
-					wandb.init()
-					ii.debug_log([ii.d,], ['log_agent_arg.log',])
-					# from run import run
-					# wandb.agent(ii.wb.sweep_id, function=run, project=ii.project, entity=ii.wb.entity, count=1)
-					# https://docs.wandb.ai/guides/sweeps/local-controller
-					print('After Agent')
-	
-				else:
-					ii.wb.run = wandb.init(
-						project     = ii.project, 
-						group		= ii.exp_name,
-						dir         = ii.exp_data_dir,
-						entity      = ii.wb.entity,  	
-						mode        = ii.wb.wb_mode,
-						config      = dict_to_wandb(ii.d),
-						id			= ii.exp_id+str(len(list(ii.exp_data_dir.iterdir())))
-					)
-	
-		elif ii.resource.submit:
+			if ii.wb.sweep_id:
+				wandb.init()
+				ii.debug_log([ii.d,], ['log_agent_arg.log',])
+				# from run import run
+				# wandb.agent(ii.wb.sweep_id, function=run, project=ii.project, entity=ii.wb.entity, count=1)
+				# https://docs.wandb.ai/guides/sweeps/local-controller
+				print('After Agent')
+				return 
+
+			ii.wb.run = wandb.init(
+				project     = ii.project, 
+				group		= ii.exp_name,
+				dir         = ii.exp_data_dir,
+				entity      = ii.wb.entity,	
+				mode        = ii.wb.wb_mode,
+				config      = dict_to_wandb(ii.d),
+				id			= ii.exp_id,
+				tags 		= [ii.mode,],
+				reinit 		= not (ii.wb.run is None)
+			)
+
+	def pf_submit(ii):
+
+		if ii.resource.submit:
+			print('submitting')
 			ii.resource.submit = False # docs:submit
-   
+			ii.debug_log([ii.d,], ['pf_submit.log',])
+
 			run_or_sweep_d = ii.get_run_or_sweep_d()
 
 			for i, run_d in enumerate(run_or_sweep_d):
@@ -248,7 +343,7 @@ class PyfigBase:
 					group_exp = ii.group_exp
 
 				ii.setup_exp_dir(group_exp= group_exp, force_new_id= True)
-				base_d = inst_to_dict(ii, attr=True, sub_cls=True, flat=True, ignore=ii.ignore+['sweep', 'resource',], debug=ii.debug)
+				base_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore+['sweep','resource','dist_c','slurm_c'])
 				run_d = base_d | run_d
 
 				ii.debug_log([dict(os.environ.items()), run_d], ['env_submit.log', 'd_submit.log'])
@@ -257,7 +352,6 @@ class PyfigBase:
 
 				print(ii.wb.run_url)
 			
-			ii.pr(ii._debug_paths)
 			sys.exit('Exiting from submit.')
 
 	@staticmethod
@@ -283,22 +377,19 @@ class PyfigBase:
 
 	@property
 	def d(ii):
-		return inst_to_dict(ii, sub_cls=True, prop=True, attr=True, ignore=ii.ignore)
+		return ins_to_dict(ii, sub_ins=True, prop=True, attr=True, ignore=ii.ignore)
 
-	def _get_d_with(ii, sub_cls=False, prop=False, attr=False, flat=False, ignore=None):
-		return inst_to_dict(ii, sub_cls=sub_cls, prop=prop, attr=attr, flat=flat, ignore=ignore)
+	def init_sub_cls(ii,) -> dict:
+		sub_cls = ins_to_dict(ii, sub_cls=True)
+		for sub_k, sub_v in sub_cls.items():
+			sub_ins = sub_v(parent=ii)
+			setattr(ii, sub_k, sub_ins)
+			if sub_k not in ii.sub_ins:
+				ii.sub_ins[sub_k] = sub_ins
 
-	def _init_sub_cls(ii,) -> dict:
-		_sub_cls = dict(
-      		((k,v) for k,v in vars(ii.__class__).items() 
-                if isinstance(v, type) and issubclass(v, Sub))
-    	)
-		for sub_name, sub in _sub_cls.items(): # docs:sub_classes-init
-			setattr(ii, sub_name, sub(parent=ii))
-	
 	@property
-	def sub_cls(ii):
-		return dict((k,v) for k,v in vars(ii).items() if isinstance(v, Sub))
+	def sub_ins(ii):
+		return dict()
 
 	def setup_exp_dir(ii, group_exp=False, force_new_id=False):
 
@@ -336,7 +427,7 @@ class PyfigBase:
 				n_sweep += len(v)
 	
 			# n_sweep = len(get_cartesian_product(*(v for v in param))
-			base_c = inst_to_dict(ii, sub_cls=True, attr=True, flat=True, ignore=ii.ignore+['sweep', 'head', 'exp_id'] + sweep_keys)
+			base_c = ins_to_dict(ii, sub_ins=True, attr=True, flat=True, ignore=ii.ignore+['sweep', 'head', 'exp_id'] + sweep_keys)
 			base_cmd = dict_to_cmd(base_c, sep='=')
 			base_sc = dict((k, dict(value=v)) for k,v in base_c.items())
    
@@ -344,15 +435,13 @@ class PyfigBase:
 				sweep_c = dict(
 					command 	= ['python', '-u', '${program}', f'{base_c}', '${args}', '--exp_id=${exp_id}', ],
 					program 	= str(Path(ii.run_name).absolute()),
-					method  	= ii.sweep.method,
+					method  	= ii.sweep.sweep_method,
 					parameters  = base_sc|param,
 					controller  = dict(type='local'),
 				)
 
 				os.environ['WANDB_PROJECT'] = 'hwat'
 				os.environ['WANDB_ENTITY'] = 'hwat'
-
-				pprint.pprint(sweep_c)
 
 				ii.wb.sweep_id = wandb.sweep(
 					sweep_c, 
@@ -388,23 +477,12 @@ class PyfigBase:
 		d = {k:v for k,v in d.items() if k in d_k} | kw
 		return f(**d)
 
-	def update(ii, arg: dict):
+	def update(ii, arg: dict, sub_ins_tag='_p'):
 		arg = flat_any(arg)
-		for k,v in copy(arg).items():
-			for inst in [ii,] + list(ii.sub_cls.values()):
-				if hasattr(inst, k):
-					v_ref = getattr(inst, k)
-					v = type_me(v, v_ref)
-					setattr(inst, k, copy(arg.pop(k)))
-					print(f'update {k}: {v_ref} --> {v}')
-		
-		print('not updated:')
-		[print(f'! ', (k, v, type(v))) for k,v in arg]
-
-	# def __setattr__(ii, k: str, v: Any):
-	# 	for inst in [ii,]
-	# 		ref = ii.__dict__[k]
-	# 		ii.__dict__[k] = v
+		for k_update,v_update in copy(arg).items():
+			is_updated = walk_ins_tree(ii, k_update, v_update, sub_ins_tag=sub_ins_tag)
+			if not is_updated:
+				print(f'not updated: {k_update} - input val: {v_update} type: {type(v_update)}')
 
 	@staticmethod
 	def log(info: dict|str, path: Path):
@@ -415,147 +493,40 @@ class PyfigBase:
 
 	def to(ii, framework='torch'):
 		if framework=='torch':
-			base_d = ii._get_d_with(attr=True, sub_cls=True, flat=True, ignore=ii.ignore+['sweep'])
+			base_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore+['sweep'])
 			d = {k:v for k,v in base_d.items() if isinstance(v, (np.ndarray, np.generic, list))}
 			d = {k:torch.tensor(v, requires_grad=False) for k,v in d.items() if not isinstance(v[0], str)}
 		ii.update(d)
 			
-	def set_dtype(ii):
+	def set_dtype(ii, dtype=torch.DoubleTensor):
+		print('setting default dtype: ', dtype)
+		torch.set_default_tensor_type(dtype)   # docs:todo ensure works when default not set AND can go float32 or 64
 		dtype = torch.randn((1,)).dtype
 		ii.update({k:v.to(dtype) for k,v in flat_any(ii.d).items() if isinstance(v, torch.Tensor)})
 
-	def set_dist(ii, dist: Any=None):
-		print('setting distribution: ', dist)
-		print('config says ', ii.distribute.dist_method)
-		ii.distribute.dist = dist
-		return dist
-
-	def set_device(ii, device=None):
-		device = device or ii.distribute.dist.device
-		ii.update({k:v.to(device) for k,v in flat_any(ii.d).items() if isinstance(v, torch.Tensor)})
-		return device
-  
-
-
-
-
-class distribute_accelerate(Sub):
+def walk_ins_tree(
+	ins: type, 
+	k_update: str, 
+	v_update: Any,
+	sub_ins_tag='_p'
+):
+	if hasattr(ins, k_update):
+		v_ref = getattr(ins, k_update)
+		v_update = type_me(v_update, v_ref)
+		setattr(ins, k_update, v_update)
+		print(f'updated {k_update}: \t {v_ref} ----> {v_update}')
+		return True
+	else:
+		sub_ins = ins_to_dict(ins, sub_ins_ins=True)
+		for v_ins in sub_ins.values():
+			is_updated = walk_ins_tree(v_ins, k_update, v_update)
+			if is_updated:
+				return True
+	return False
 	
-	def __init__(ii, parent=None):
-		super().__init__(parent)
-		global Accelerator
-		global DataLoader
-
-		from accelerate import Accelerator
-		from torch.utils.data import DataLoader
-
-	def setup_distribute(
-		ii, 
-		model: nn.Module, 
-		opt, 
-	 	tr_loader=None, 
-	  	scheduler=None
-	) -> tuple:
-		ii.dist = Accelerator()
-		model, opt, tr_loader, scheduler = \
-	 		ii.dist.prepare(model, opt, tr_loader, scheduler)
-		
-		return [model, opt] + (tr_loader or []) + (scheduler or [])
-
-	def backward(ii, loss: torch.Tensor, sync: dict): 
-		ii.dist.backward(loss)
-  
-class distribute_pyfig(Sub):
-	_p: PyfigBase
  
-	def __init__(ii, parent=None):
-		super().__init__(parent)
-		global Accelerator
-		global DataLoader
-
-		from accelerate import Accelerator
-		from torch.utils.data import DataLoader
-
-	def setup_distribute(
-		ii, 
-		model: nn.Module, 
-		opt, 
-	 	tr_loader=None, 
-	  	scheduler=None
-	) -> tuple:
-		ii.dist = Accelerator()
-		model, opt, tr_loader, scheduler = \
-	 		ii.dist.prepare(model, opt, tr_loader, scheduler)
-		
-		return [model, opt] + (tr_loader or []) + (scheduler or [])
-
-	def backward(ii, loss: torch.Tensor, sync: dict):
-		
-		loss.backward()
-  
-	def sync(ii, step: int, v_tr: dict):
-		v_path = (ii._p.exchange_dir / f'{step}_{ii._p.distribute.dist_id}').with_suffix('.pk')
-		v_mean_path = add_to_Path(v_path, '-mean')
-		
-		try:
-			gc.disable()
-
-			v_ref_leaves, treespec = optree.tree_flatten(v_tr)
-			v_sync_save = [v.detach().cpu().numpy() if isinstance(v, torch.Tensor) else v for v in v_ref_leaves]
-			dump(v_path, v_sync_save)
-
-		except Exception as e:
-			print(e)
-		finally:
-			gc.enable()
-		
-		if ii._p.distribute.head:
-
-			n_ready = 0
-			while n_ready < ii.resource.n_gpu:
-				k_path_all = list(ii.exchange_dir.glob(f'{step}_*'))
-				n_ready = len(k_path_all)
-
-			for i, p in enumerate(k_path_all):
-				leaves = [load(p),] if i==0   else [*leaves, load(p)]
-	
-			v_mean = [np.stack(l).mean(axis=0) for l in zip(*leaves)]
-
-			try:
-				gc.disable()
-				for p in k_path_all:
-					dump(add_to_Path(p, '-mean'), v_mean)
-			except Exception as e:
-				print(e)
-			finally:
-				sleep(0.01)
-				[p.unlink() for p in k_path_all]
-				gc.enable()
-
-		while v_path.exists():
-			sleep(0.02)
-		sleep(0.02)
-  
-		gc.disable()
-		try:
-			v_sync_leaves = load(v_mean_path)  # Speed: Only load sync vars
-			v_sync_leaves = [torch.tensor(data=v, device=ref.device, dtype=ref.dtype, requires_grad=False) 
-				if isinstance(ref, torch.Tensor) else v 
-				for v, ref in zip(v_sync_leaves, v_ref_leaves)]
-			v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync_leaves)
-			
-		except Exception as e:
-			v_sync = v_tr
-			print(e)
-		finally: # ALWAYS EXECUTED
-			v_mean_path.unlink()
-			gc.enable()
-		return v_sync
-
-
-### slurm things
-
-class niflheim_resource(Sub):
+# slurm things
+class niflheim_resource(PyfigBase.resource):
 	_p: PyfigBase = None
  
 	env: str     	= ''
@@ -572,180 +543,119 @@ class niflheim_resource(Sub):
 	pci_id:			str		= property(lambda _: ''.join(run_cmds(_._pci_id_cmd, silent=True)))
 
 	n_device_env:	str		= 'CUDA_VISIBLE_DEVICES'
-	n_device:       int     = property(lambda _: sum(c.isdigit() for c in os.environ.get(_.n_device_env, 'ZERO')))
+	# n_device:       int     = property(lambda _: sum(c.isdigit() for c in os.environ.get(_.n_device_env, '')))
+	n_device:       int     = property(lambda _: len(os.environ.get(_.n_device_env, '').replace(',', '')))
 
-	class c(Config):
+	class slurm_c(Sub):
 		export			= 'ALL'
 		nodes           = '1' 			# (MIN-MAX) 
-		# mem_per_cpu     = 1024
-		# mem				= 'MaxMemPerNode'
 		cpus_per_gpu   = 8				# 1 task 1 gpu 8 cpus per task 
 		partition       = 'sm3090'
 		time            = '0-00:10:00'  # D-HH:MM:SS
-		gres            = property(lambda _: 'gpu:RTX3090:' + (str(_.n_gpu) if int(_.nodes) == 1 else '10'))
-		ntasks          = property(lambda _: _.n_gpu)
-		job_name        = property(lambda _: _._p.exp_name)
-		output          = property(lambda _: _._p.cluster_dir/'o-%j.out')
-		error           = property(lambda _: _._p.cluster_dir/'e-%j.err')
+		gres            = property(lambda _: 'gpu:RTX3090:' + (str(_._p.n_gpu) if int(_.nodes) == 1 else '10'))
+		ntasks          = property(lambda _: _._p.n_gpu)
+		job_name        = property(lambda _: _._p._p.exp_name)
+		output          = property(lambda _: _._p._p.cluster_dir/'o-%j.out')
+		error           = property(lambda _: _._p._p.cluster_dir/'e-%j.err')
 
+	# mem_per_cpu     = 1024
+	# mem				= 'MaxMemPerNode'
 	# n_running_cmd:	str		= 'squeue -u amawi -t pending,running -h -r'
 	# n_running:		int		= property(lambda _: len(run_cmds(_.n_running_cmd, silent=True).split('\n')))	
 	# running_max: 	int     = 20
 
 	def cluster_submit(ii, job: dict):
 		
-		class _Body:
-			lines = []
-			def __iadd__(ii, l):
-				ii.lines += [l]
-			def __repr__(self) -> str:
-				pass
-			def __str__(ii) -> str:
-				return '\n'.join(ii.lines)
-
-		try:
-			_body = _Body()
-			_body += 'x'
-			print(_body)
-		except Exception as e:
-			print(e)
-	  
 		if job['head']:
-			print(ii.script)
-		body = []
-		body += [
-			'module purge', 
-			'module load foss', 
-   			# 'module load CUDA/11.7.0',
-   			# 'module load OpenMPI',
-		]
-		# body += [f'source ~/.bashrc', ]
-		# body += [f'conda activate {ii.env}',]
-		# body += [
-		# 'export $SLURM_JOB_ID',
-		# 'export MKL_NUM_THREADS=1',
-		# 'export NUMEXPR_NUM_THREADS=1',
-		# 'export OMP_NUM_THREADS=8',
-		# 'export OPENBLAS_NUM_THREADS=1',
-		# ]
-		body += ['echo all_gpus-${SLURM_JOB_GPUS}', 'echo nodelist-${SLURM_JOB_NODELIST}', 'nvidia-smi']
-		
-		port = np.random.randint(29500, 64000)
-		# body += ['export ']
-		body += ['echo api-${WANDB_API_KEY}']
-		body += ['echo project-${WANDB_PROJECT}']
-		body += ['echo entity-${WANDB_ENTITY}']
-		# body += ['curl -s --head  --request GET https://wandb.ai/site']
-		body += [f'export exp_id="{job["exp_id"]}"', 'echo exp_id-${exp_id}']
-		body += ['echo ${PWD}']
-		body += ['echo ${CWD}']
-		body += ['echo ${SLURM_EXPORT_ENV}']
-		body += ['scontrol show config']
-		body += ['srun --mpi=list']
-		body += [f'export WANDB_DIR="{ii._p.exp_dir}"']
-		body += ['printenv']
-		# body += [f'ping api.wandb.ai']
+			print(ii._slurm)
 
+		body = []
+		body = f"""
+		module purge
+		module load foss
+		source ~/.bashrc
+  		conda activate {ii.env}
+		export exp_id="{job["exp_id"]}"
+		echo exp_id-${{exp_id}}
+		"""
+		extra = """
+		module load CUDA/11.7.0'
+		module load OpenMPI'
+		export MKL_NUM_THREADS=1
+		export NUMEXPR_NUM_THREADS=1
+		export OMP_NUM_THREADS=8
+		export OPENBLAS_NUM_THREADS=1
+		"""
+		debug_body = f""" \
+  		export $SLURM_JOB_ID
+		echo all_gpus-${{SLURM_JOB_GPUS}}', 'echo nodelist-${{SLURM_JOB_NODELIST}}', 'nvidia-smi']
+		echo api-${{WANDB_API_KEY}}
+		echo project-${{WANDB_PROJECT}}
+		echo entity-${{WANDB_ENTITY}}
+		echo ${{PWD}}
+		echo ${{CWD}}
+		echo ${{SLURM_EXPORT_ENV}}
+		scontrol show config
+		srun --mpi=list
+		export WANDB_DIR="{ii._p.exp_dir}"
+		printenv']
+		curl -s --head --request GET https://wandb.ai/site
+		ping api.wandb.ai
+		"""
 		if ii._p.wb.wb_sweep:
-			print('\n wb sweep')
-				# server local https://github.com/wandb/wandb/issues/4586
-			# launch_cmd = 'srun --gpus=1 --ntasks=1 --exclusive --label  '
-			launch_cmd = ''
 			body += [f'wandb controller {ii._p.wb.sweep_id}'] # {ii._p.wb.sweep_path_id}
 			body += [f'wandb agent {ii._p.wb.sweep_id} 1> {ii.device_log_path(rank=0)} 2>&1 ']
-			# body += [f'{launch_cmd} python -u {ii._p.run_name} {dict_to_cmd(job)} 1> {ii.device_log_path(rank=0)} 2>&1 & ']
-				# srun --nodes=1 --mpi=cray_shasta --gpus=1 --cpus-per-task=8 --ntasks=1 -vvvvv --label --exclusive bash -c &
 			body += ['wait',]
-   
+
 		elif ii._p.distribute.dist_method == 'accelerate':
 			print('\n accelerate distribution')
-			# c_dist = lo_ve(path='c_dist.yaml')
-			c_dist = 'c_dist.yaml'
-			launch_cmd = f'accelerate launch --config_file {c_dist} --main_process_port {port}'
-			cmd = dict_to_cmd(job)
-			body += [f'{launch_cmd} {job["run_name"]} \ {cmd} 1> {ii.device_log_path(rank=0)} 2>&1 '] # \  ']  # \n 
+			# ! backslash must come between run.py and cmd
+			cmd = dict_to_cmd(job, exclude_none=True)
+			body += f'{ii._p.distribute._launch_cmd} {job["run_name"]} \ {cmd} 1> {ii.device_log_path(rank=0)} 2>&1 \n'  
    
-			# backslash must come between run.py and cmd
 		elif ii._p.distribute.dist_method == 'pyfig':
 			print('\n pyfig distribution')
-			launch_cmd = 'srun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label  '
 			for i in range(ii.n_gpu):
 				job.update(dict(head= i==0))
 				cmd = dict_to_cmd(job)
 				cmd = f'python -u {job["run_name"]} {cmd}'
-				body += [f'{launch_cmd} {cmd} 1> {ii.device_log_path(rank=i)} 2>&1 & ']
+				body += f'\n{ii._p.distribute._launch_cmd} {cmd} 1> {ii.device_log_path(rank=i)} 2>&1 & \n'
+			body += '\nwait \n'
 		
-			body += ['wait',]
-   
-		body += ['echo End']
-		body = '\n'.join(body)
+		body += '\necho End \n'
+
 		if ii._p.debug:
 			print(body)
-		slurm = ii.script
+
 		ii._p.log([body,], ii._p.cluster_dir/'sbatch.log')
-		job_id = slurm.sbatch(body, verbose=True)
+		job_id = ii._slurm.sbatch(body, verbose=True)
 		print('slurm out: ', job_id)
   
 	@property
-	def script(ii,):
-		return Slurm(
-			export			= ii.export,
-			partition       = ii.partition,
-			nodes           = ii.nodes,
-			cpus_per_gpu   	= ii.cpus_per_gpu,
-			time            = ii.time         ,
-			gres            = ii.gres         ,
-			ntasks          = ii.ntasks       ,
-			job_name        = ii.job_name     ,
-			output          = ii.output       ,
-			error           = ii.error        ,
-		)
+	def _slurm(ii,) -> Slurm:
+		if ii._p.debug:
+			ii._p.pr(ii.slurm_c.d)
+		return Slurm(**ii.slurm_c.d)
 
 	def device_log_path(ii, rank=0):
-		return ii._p.cluster_dir/(str(rank)+"_device.log") # + ii._p.hostname.split('.')[0])
+		return ii._p.exp_dir/(str(rank)+"_device.log") # + ii._p.hostname.split('.')[0])
 
+def setup_distribute(
+		ii, 
+		model: nn.Module, 
+		opt, 
+		tr_loader=None, 
+		scheduler=None
+) -> tuple:
+		ii.dist = Accelerator()
+		model, opt, tr_loader, scheduler = \
+			ii.dist.prepare(model, opt, tr_loader, scheduler)
+		
+		return [model, opt] + (tr_loader or []) + (scheduler or [])
 
-
-""" slurm docs
-sinfo -p cluster
-groups
-sbalance
-sreport -t hours cluster AccountUtilization account=project_465000153
-sbatch - submit a batch script
-salloc - allocate compute resources
-srun - allocate compute resources and launch job-steps
-squeue - check the status of running and/or pending jobs
-scancel - delete jobs from the queue
-sinfo - view intormation abount cluster nodes and partitions
-scontrol - show detailed information on active and/or recently completed jobs, nodes and partitions
-sacct - provide the accounting information on running and completed jobs
-slurmtop - text-based view of cluster nodes' free and in-use resources and status of jobs
-
-Based on available resources and in keeping with maintaining a fair balance between all users, we may sometimes be able to accommodate special needs for a limited time. In that case, please submit a short explanation to cluster-help@luis.uni-hannover.de.
-
-To list job limits relevant for you, use the sacctmgr command:
-
-sacctmgr -s show user
-sacctmgr -s show user adwilson (works on lumi)
-sacctmgr -s show user format=user,account,maxjobs,maxsubmit,maxwall,qos
-sacctmgr -s show user zailacka
-Up-to-date information on ALL available nodes:
-
- sinfo -Nl
- scontrol show nodes
-Information on partitons and their configuration:
-
- sinfo -s
- scontrol show partitions
-
-"""
-
-# utils things we might move 
-
-import pickle as pk
-import yaml
-import json
-from functools import partial
+def backward(ii, loss: torch.Tensor, sync: dict):
+	
+	loss.backward()
 
 def lo_ve(path:Path, data=None):
 	""" loads anything you want (add other interfaces as needed) 
@@ -785,46 +695,62 @@ def lo_ve(path:Path, data=None):
 		data = interface(data, f) if not data is None else interface(f)
 	return data
 
+def get_cls_d(ins: type, cls_k: list):
+	return {k:getattr(ins.__class__, k) for k in cls_k}
 
-def inst_to_dict(
-	inst: PyfigBase, 
+def ins_to_dict( # docs:pyfig:ins_to_dict can only be used when sub_ins have been init 
+	ins: type, 
 	attr=False,
-	sub_cls=False, 
+	sub_ins=False,  # always recursive
+	sub_ins_ins=False,  # just the ins
+	sub_cls=False,
+	call=False,
 	prop=False,
 	ignore:list=None,
 	flat:bool=False,
-	debug:bool=False
+	sub_ins_tag:str='_p',
+	debug: bool=False,
 ) -> dict:
-		ignore = ignore or []
 
-		inst_keys = [k for k in dir(inst) if not k.startswith('_') and not k in ignore] # docs:python:cls-inst:q? could dirs --> vars? 
-		if debug:
-			print('inst-to-dict: inst_keys: ', inst_keys)
+	ignore = ignore or []
 
+	cls_k = [k for k in dir(ins) if not k.startswith('_') and not k in ignore]
+	cls_d = {k:getattr(ins.__class__, k) for k in cls_k}
+	cls_prop_k = [k for k,v in cls_d.items() if isinstance(v, property)]
+	cls_sub_cls_k = [k for k,v in cls_d.items() if isinstance(v, type)]
+	cls_call_k = [k for k,v in cls_d.items() if (callable(v) and not (k in cls_sub_cls_k))]
+	cls_attr_k = [k for k in cls_k if not k in (cls_prop_k + cls_sub_cls_k + cls_call_k)]
 
-		d_ins = {k:v for k,v in vars(inst).items() if not k.startswith('_') and not k in ignore}
-		d_ins = {k:getattr(inst, k) for k in inst_keys}
-		d_cls = {k:getattr(inst.__class__, k) for k in inst_keys}
-		
-		d_callable = {k:v for k,v in d_ins.items() if callable(v) and not isinstance(v, Sub)}
-		d_prop = {k:v for k,v in d_ins.items() if isinstance(d_cls[k], property)}
-		property_has_setter = lambda v: getattr(v, 'fset') is not None
-		d_prop_w_setter = {k:v for k,v in d_prop.items() if property_has_setter(d_cls[k])}
-		
-		d_sub = {}
-		for k,v in d_ins.items():
-			if isinstance(v, Sub):
-				d_sub[k] = inst_to_dict(v, attr=attr, sub_cls=sub_cls, prop=prop, ignore=ignore)
+	ins_kv = []
+
+	ins_sub_cls_or_ins = [(k, getattr(ins, k)) for k in cls_sub_cls_k]
+
+	ins_kv += [(k,v) for (k,v) in ins_sub_cls_or_ins if isinstance(v, type) and sub_cls]
+
+	for (k_ins, v_ins) in ins_sub_cls_or_ins:
+		if not isinstance(v_ins, type):
+			if sub_ins_ins: # just the ins
+				ins_kv += [(k_ins, v_ins),]
+			elif sub_ins: # recursive dict
+				sub_ins_d: dict = ins_to_dict(v_ins, 
+					attr=attr, sub_ins=sub_ins, prop=prop, 
+					ignore=ignore, flat=flat, sub_ins_tag=sub_ins_tag
+				)
+				ins_kv += [(k_ins, sub_ins_d),]
 	
-		d_attr = {k:v for k,v in d_ins.items() if not k in (d_callable | d_prop | d_sub).keys()} | d_prop_w_setter
-		
-		d = dict()
-		[d.setdefault(k, v) for k,v in d_sub.items() if sub_cls]
-		[d.setdefault(k, v) for k,v in d_attr.items() if attr]
-		[d.setdefault(k, v) for k,v in d_prop.items() if prop]
-		if debug:
-			print('inst-to-dict: d_sub: ', d_sub)
-		return flat_any(d) if flat else d # docs:python:flat:q? parameter to flat dict in levels?
+	if prop: 
+		ins_kv += [(k, getattr(ins, k)) for k in cls_prop_k]
+
+	if call:
+		ins_kv += [(k, getattr(ins, k)) for k in cls_call_k]
+
+	if attr:
+		ins_kv += [(k, getattr(ins, k)) for k in cls_attr_k]
+
+	if debug:
+		sys.exit()
+
+	return flat_any(dict(ins_kv)) if flat else dict(ins_kv) 
 
 # prefix components:
 draw_space =  '    '
@@ -890,6 +816,16 @@ def draw_tree():
  
  
 """ 
+
+class distribute_pyfig(Sub):
+ 
+	def __init__(ii, parent=None):
+		super().__init__(parent)
+		global Accelerator
+		global DataLoader
+
+		from accelerate import Accelerator
+		from torch.utils.data import DataLoader
  
 	# class git(Sub):
 	# 	branch:     str     = 'main'
@@ -903,4 +839,74 @@ def draw_tree():
 		# pull:   		list	= property(lambda _: run_cmds(_.pull_cmd, cwd=_.project_dir))
   
   
+def ins_to_dict( # docs:pyfig:ins_to_dict can only be used when sub_ins have been init 
+	ins: type, 
+	attr=False,
+	sub_ins=False,
+	sub_cls=False,
+	call=False,
+	prop=False,
+	ignore:list=None,
+	flat:bool=False,
+	sub_ins_tag:str='_p',
+) -> dict:
+
+	ignore = ignore or []
+
+	# ins_d = {k:getattr(ins, k) for k in dir(ins)}
+	cls_k = (k for k in dir(ins) if not k.startswith('_') and not k in ignore)
+	cls_d = get_cls_d(ins)
+
+	
+	sub_ins_kv, prop_kv, call_kv, attr_kv, sub_cls_kv = [], [], [], [], []
+	for cls_k, cls_v in cls_d.items():
+
+		if isinstance(v, type):
+			sub_cls_kv += [(k,v),]
+   
+		elif hasattr(v, sub_ins_tag):
+			sub_ins: dict = ins_to_dict(v, 
+				attr=attr, sub_ins=sub_ins, prop=prop, 
+				ignore=ignore, flat=flat, sub_ins_tag=sub_ins_tag
+			)
+			sub_ins_kv += list(sub_ins.items())
+   
+		elif prop: # docs:pyfig:sub_cls:issues
+			if isinstance(getattr(ins.__class__, k), property):
+				prop_kv += [(k,v),]
+	
+		elif call and (callable(v) and not hasattr(v, sub_ins_tag)):
+			call_kv += [(k,v),]
+   
+		elif attr:
+			attr_kv += [(k,v),]
+
+		else:
+			pass
+
+	# final_d = dict(prop*prop_kv + sub_ins*sub_ins_kv + attr*attr_kv + sub_cls*sub_cls_kv) # + call*call_kv one day but not needed
+	final_d = dict(prop_kv + sub_ins_kv + attr_kv + sub_cls_kv) # + call*call_kv one day but not needed
+	return flat_any(final_d) if flat else final_d # docs:python:flat:q? parameter to flat dict in levels?
+# server local https://github.com/wandb/wandb/issues/4586
+			# launch_cmd = 'srun --gpus=1 --ntasks=1 --exclusive --label  '
+			# body += [f'{launch_cmd} python -u {ii._p.run_name} {dict_to_cmd(job)} 1> {ii.device_log_path(rank=0)} 2>&1 & ']
+				# srun --nodes=1 --mpi=cray_shasta --gpus=1 --cpus-per-task=8 --ntasks=1 -vvvvv --label --exclusive bash -c &
+
+
+		class _Body:
+			lines = []
+			def __iadd__(ii, l):
+				ii.lines += [l]
+			def __repr__(self) -> str:
+				pass
+			def __str__(ii) -> str:
+				return '\n'.join(ii.lines)
+
+		try:
+			_body = _Body()
+			_body += 'x'
+			print(_body)
+		except Exception as e:
+			print(e)
+	  
 """
