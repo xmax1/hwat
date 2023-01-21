@@ -370,4 +370,4 @@ def sample_b(
 		acc = mask_no*acc + mask_yes*acc_test
 		deltar = mask_no*dr_test + mask_yes*deltar
  
-	return r_0, acc_all/2., deltar
+	return dict(r=r_0, acc=acc_all/2., deltar=deltar)

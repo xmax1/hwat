@@ -1,7 +1,7 @@
 from pathlib import Path
 import numpy as np
 
-from pyfig_utils import PyfigBase, Sub, niflheim_resource
+from pyfig_utils import PyfigBase, Param, niflheim_resource
 
 from dump.systems import systems
 from dump.user_secret import user
@@ -18,8 +18,8 @@ class Pyfig(PyfigBase):
 	
 	seed:           	int   	= 808017424 # grr
 	dtype:          	str   	= 'float32'
-	n_step:         	int   	= 10000
-	n_step_eval:        int   	= 10000
+	n_step:         	int   	= 1000
+	n_step_eval:        int   	= 1000
 	log_metric_step:	int   	= 10
 	log_state_step: 	int   	= 10
 	
@@ -31,11 +31,11 @@ class Pyfig(PyfigBase):
 		a:          np.ndarray  = np.array([[0.0, 0.0, 0.0],])
 		a_z:        np.ndarray  = np.array([4.,])
 
-		n_b:        int         = 256
+		n_b:        int         = 512
 		n_corr:     int         = 20
-		n_equil:    int         = 10000
 		acc_target: int         = 0.5
 
+		n_equil_step:int        = property(lambda _: 1e6//_.n_corr)
 		n_e:        int         = property(lambda _: int(sum(_.a_z)))
 		n_u:        int         = property(lambda _: (_.spin + _.n_e)//2)
 		n_d:        int         = property(lambda _: _.n_e - _.n_u)
@@ -68,13 +68,21 @@ class Pyfig(PyfigBase):
 
 	class sweep(PyfigBase.sweep):
 		method: 		str		= 'grid'
-		parameters: 	dict 	= 	dict(
-			n_b  = dict(values=[16,]),
+		parameters: 	dict 	= dict(
+			lr= Param(domain=(0.01,0.0001), log=True)
 		)
 		
 	class distribute(PyfigBase.distribute):
 		dist_mode: 		str		= 'accelerate'  # options: accelerate
-		sync_step:		int		= 5		
+		sync_step:		int		= 5
+		c_compute_environment = 'LOCAL_MACHINE',
+		c_distributed_type =  'MULTI_GPU',
+		c_num_processes =  property(lambda _: str(_._p.resource.n_gpu))
+		c_num_machines =  property(lambda _: str(_._p.resource.n_node)),
+		c_machine_rank =  '0',
+		c_use_cpu =  'false',
+		c_same_network =  'true',
+		c_main_process_port =  'null'
 
 	class resource(niflheim_resource):
 		submit:    		bool	= False
@@ -85,15 +93,16 @@ class Pyfig(PyfigBase):
 		wb_mode = 'online'
 		print('loading wandb from base class')
 
-	def __init__(ii, notebook:bool=False, sweep: dict=None, init_arg: dict=None, **other_arg) -> None:
+	def __init__(ii, notebook: bool=False, sweep: dict={}, c_init: dict={}, **other_arg) -> None:
 
 		print('initialising')
-		super().__init__(notebook=notebook, init_arg=init_arg, **other_arg)
+		super().__init__(notebook=notebook, c_init=c_init, sweep=sweep, **other_arg)
 
 		system = systems.get(ii.data.system, {})
 
 		print('initialising system')
-		super().__post_init__(**system)
+		# super().__post_init__(**system)
+		ii.update(system)
   
 		print('running')
 		ii.runfig() # docs:runfig
@@ -101,7 +110,15 @@ class Pyfig(PyfigBase):
 		"""  
 		# pyfig
 		## pyfig:todo
-  
+		### docs:pyfig:load
+		- load exp_dir
+		- load sub_cls
+		- if c.load_exp is True
+		- normalised pretraining
+		
+		if c.load.load_exp_dir:
+			
+
 		## pyfig:def
 		- machine rank = global relative id of machine/process ??
 
@@ -184,6 +201,19 @@ class Pyfig(PyfigBase):
 		# is because you have allreduce_post_accumulation=False, allreduce_post_accumulation_fp16=False
 		# Torchscript/NVFuser currently works with the above two flags set to true. 
 		# Setting the above two to true will also increase performance orthogonally.
+  
+  
+		## docs:optuna
+		Median pruning algorithm implemented in MedianPruner
+		Non-pruning algorithm implemented in NopPruner
+		Algorithm to operate pruner with tolerance implemented in PatientPruner
+		Algorithm to prune specified percentile of trials implemented in PercentilePruner
+		Asynchronous Successive Halving algorithm implemented in SuccessiveHalvingPruner
+		Hyperband algorithm implemented in HyperbandPruner
+		Threshold pruning algorithm implemented in ThresholdPruner
+	
+		For RandomSampler, MedianPruner is the best.
+		For TPESampler, HyperbandPruner is the best.
 		"""
   
 """ 

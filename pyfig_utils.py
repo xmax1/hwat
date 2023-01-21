@@ -1,13 +1,12 @@
 from pathlib import Path
 from itertools import islice
 from time import sleep
-from typing import TypedDict
 import optree
 import os
 import gc
 from simple_slurm import Slurm
 import sys
-from typing import Callable, Tuple
+from typing import Callable, Tuple, Any, TypedDict
 import wandb
 import pprint
 import inspect
@@ -29,22 +28,40 @@ hostname = os.environ['HOSTNAME']
 
 class Sub:
 	_p = None
-	ignore: list = ['ignore', 'd', '_p',]
+	ignore: list = ['_p',]
 	
 	def __init__(ii, parent=None):
-		ii._p = parent
+		ii._p: PyfigBase
+		ii._p: PyfigBase = parent
+		ii.ignore += ii._p.ignore
   
 	@property
 	def d(ii):
 		return inst_to_dict(ii, sub_cls=True, prop=True, attr=True, ignore=ii.ignore)
 
-class Param(Sub): # docs:todo all wb sweep structure
-    name:   str = None
-    values: list = None
-    domain: tuple = None
-    dtype: type = None
-    log: bool = False
-step_size: float|int = None
+class Config:
+    pass
+
+class Static:
+    pass
+
+class Param(Sub, Static): 
+    # docs:todo all wb sweep structure
+	values: list = None
+	domain: tuple = None
+	dtype: type = None
+	log: bool = False
+	step_size: float|int = None
+	sample: str = None # docs:Param:sample from ('uniform', )
+
+	def __init__(ii, **kw) -> None: # docs:Param:init needed so can use kw arg to init
+		for k,v in kw.items():
+			setattr(ii, k, v)
+
+	# @property
+	# def d(ii):
+	# 	return inst_to_dict(ii, attr=True, sub_cls=True, prop=True, ignore=ii.ignore)
+		# return dict((k,v) for k,v in vars(ii).items() if (not isinstance(v, property)) and (not callable(v)))
 
 class PyfigBase:
 
@@ -55,12 +72,19 @@ class PyfigBase:
 	exp_name:       	str		= '' # default is demo
 	exp_id: 			str		= ''
 	group_exp: 			bool	= False
-	mode: 				str		= 'opt_hypam:train:evaluate'
+
+	multimode: 			str		= 'train:evaluate' # 'max_mem:profile:opt_hypam:train:evaluate'
+	mode: 				str		= ''
+	debug: 				bool    = False
+	run_sweep:      	bool    = False
 	
 	seed:           	int   	= 808017424 # grr
 	dtype:          	str   	= 'float32'
-	n_step:         	int   	= 10000
-	n_step_eval:        int   	= 5000
+
+	n_step:         	int   	= 5000
+	n_step_eval:        int   	= 1000
+	n_pretrain_step:    int   	= 500
+
 	log_metric_step:	int   	= 10
 	log_state_step: 	int   	= 10
 	
@@ -101,12 +125,11 @@ class PyfigBase:
 		hessian_power: 	float 	= 1.
   
 	class sweep(Sub):
+		storage: 		Path = property(lambda _: 'sqlite:///' + str(_._p.exp_dir / 'hypam_opt.db'))
 		sweep_name: 	str				= None
-		sweep_method: 	str				= None # name of the alg
-		opt_hypam: 		str				= None   
+		sweep_method: 	str				= None # name of the alg 
 		parameters: 	dict[Param]		= None
-		# sweep_method: 	str 			= property(fget=partial(getattr, __name='_method'), fset=lambda _, v:(setattr(_, '_method', v))) # property(fget, fset, fdel, doc)
-
+		n_trials: 		int				= 100
   
 	class wb(Sub):
 		run = None
@@ -123,6 +146,7 @@ class PyfigBase:
 		run_url: 		str		= property(lambda _: f'https://wandb.ai/{_.entity}/{_._p.project}/{_.wb_type}')
   
 	class distribute(Sub):
+		dist: 			Any		= None
 		dist_method: 	str		= 'accelerate'
 		head:			bool	= True
 		rank: 			bool 	= property(lambda _: os.environ.get('RANK', '0'))  #  or _.head no work bc same input to all script fix
@@ -141,68 +165,47 @@ class PyfigBase:
 		script:			Callable= None
 		device_log_path:Callable= None
 
-	class git(Sub):
-		branch:     str     = 'main'
-		remote:     str     = 'origin' 
-
-		_commit_id_cmd:	str 	= 'git log --pretty=format:%h -n 1'
-		commit_id:   	list	= property(lambda _: run_cmds(_._commit_id_cmd, cwd=_._p.project_dir, silent=True))
-		# commit_cmd:	str     = 'git commit -a -m "run"' # !NB no spaces in msg 
-		# commit: 		list	= property(lambda _: run_cmds(_.commit_cmd, cwd=_.project_dir)) 
-		# pull_cmd:		str 	= ['git fetch --all', 'git reset --hard origin/main']
-		# pull:   		list	= property(lambda _: run_cmds(_.pull_cmd, cwd=_.project_dir))
-  
 	home:				Path	= Path().home()
 	project_dir:        Path    = property(lambda _: _.home / 'projects' / _.project)
- 
-	dump:               Path    = property(lambda _: Path('dump'))
-	# dump_exp_dir: 		Path 	= property(lambda _: Path(_.dump,'exp'))
-	tmp_dir:            Path	= property(lambda _: Path(_.dump,'tmp'))
+	dump_dir:               Path    = property(lambda _: Path('dump'))
+	tmp_dir:            Path	= property(lambda _: Path(_.dump_dir,'tmp'))
 	exp_dir:        	Path	= property(lambda _: Path(_.dump_exp_dir, _.exp_name, _.exp_id))
-	dump_exp_dir:        	Path	= property(lambda _: Path(_.dump, 'exp'))
+	dump_exp_dir:        	Path	= property(lambda _: Path(_.dump_dir, 'exp'))
 	cluster_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'cluster'))
 	exchange_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exchange'))
 	profile_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'profile'))
+	exp_data_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exp_data'))
 	log_dir: 			Path    = property(lambda _: _.cluster_dir)
 
-	run_sweep:      bool    = False
-	group_exp: 		bool	= False	or run_sweep
-	debug: 			bool    = False
-	env_log_path = 'dump/tmp/env.log'
-	d_log_path = 'dump/tmp/d.log'
-
-	ignore: list = [
-		'ignore', 
-		'd', 'cmd', 'sub_cls', 
-		'sweep',
-		'commit', 'pull',
-		'backward',
-	]
+	ignore_f = ['commit', 'pull', 'backward']
+	ignore_cls = ['Static']
+	ignore: list = ['ignore', 'd', 'cmd', 'sub_cls',] + ignore_f
+	_sub_cls: list[Sub] = None
 
 	def __init__(ii, 
-        notebook:bool=False,  # removes sys_arg for notebooks
-        sweep: dict=None,  # special properties for config update so is separated
-        init_d: dict|str|Path=None,  # args specificall  
-        post_init_arg: dict=None,
-        **other_arg):     
+		notebook:bool=False,  # removes sys_arg for notebooks
+		sweep: dict={},  # special properties for config update so is separated
+		c_init: dict|str|Path={},  # args specificall  
+		post_init_arg: dict={},
+		**other_arg):     
 
-		for sub_name, sub in ii.sub_cls.items(): # docs:sub_classes-init
-			setattr(ii, sub_name, sub(parent=ii))
+		ii._init_sub_cls()
 
 		for k,v in (sweep or {}).items():
 			setattr(ii.sweep, k, v)
 
-		c_init = flat_any(ii.d)
-		sys_arg = cmd_to_dict(sys.argv[1:], c_init) if not notebook else {}
+		if not notebook:
+			sys_arg = cmd_to_dict(sys.argv[1:], ii._get_d_with(attr=True, sub_cls=True, flat=True, ignore=ii.ignore+['sweep'])) 
 
-		update = flat_any(init_d or {}) | flat_any(other_arg or {}) | sys_arg
-		ii.update_configuration(update)
+		update = flat_any((c_init or {})) | flat_any((other_arg or {})) | (sys_arg or {})
+		ii.update(update)
 
 		ii.debug_log([sys_arg, dict(os.environ.items()), ii.d], ['log_sys_arg.log', 'log_env_run.log', 'log_d.log'])
 		
-	def __post_init__(ii, **post_init_arg):
+	def __post_init__(ii, post_init_arg: dict=None, **other_arg):
 		""" application specific initialisations """
-		ii.update_configuration(flat_any(post_init_arg))
+		ii.update((post_init_arg or {}) | other_arg)
+
 
 	def runfig(ii):
 
@@ -220,18 +223,18 @@ class PyfigBase:
 					# wandb.agent(ii.wb.sweep_id, function=run, project=ii.project, entity=ii.wb.entity, count=1)
 					# https://docs.wandb.ai/guides/sweeps/local-controller
 					print('After Agent')
-    
+	
 				else:
 					ii.wb.run = wandb.init(
 						project     = ii.project, 
 						group		= ii.exp_name,
-						dir         = ii.exp_dir,
+						dir         = ii.exp_data_dir,
 						entity      = ii.wb.entity,  	
 						mode        = ii.wb.wb_mode,
 						config      = dict_to_wandb(ii.d),
-						id			= ii.exp_id
+						id			= ii.exp_id+str(len(list(ii.exp_data_dir.iterdir())))
 					)
-    
+	
 		elif ii.resource.submit:
 			ii.resource.submit = False # docs:submit
    
@@ -245,7 +248,7 @@ class PyfigBase:
 					group_exp = ii.group_exp
 
 				ii.setup_exp_dir(group_exp= group_exp, force_new_id= True)
-				base_d = inst_to_dict(ii, attr=True, sub_cls=True, flat=True, ignore=ii.ignore+['sweep', 'resource'], debug=ii.debug)
+				base_d = inst_to_dict(ii, attr=True, sub_cls=True, flat=True, ignore=ii.ignore+['sweep', 'resource',], debug=ii.debug)
 				run_d = base_d | run_d
 
 				ii.debug_log([dict(os.environ.items()), run_d], ['env_submit.log', 'd_submit.log'])
@@ -259,12 +262,16 @@ class PyfigBase:
 
 	@staticmethod
 	def pr(d: dict):
+		""" pretty print and return dict """
 		pprint.pprint(d)
+		return d
 
 	@property
 	def _paths(ii):
+		""" check """
 		path_filter = lambda item: any([p in item[0] for p in ['path', 'dir']])
-		return dict(filter(path_filter, ii.d.items()))
+		paths = dict(filter(path_filter, ii.d.items()))
+		return ii.pr(paths) if ii.debug else paths
 
 	@property
 	def _debug_paths(ii):
@@ -278,15 +285,23 @@ class PyfigBase:
 	def d(ii):
 		return inst_to_dict(ii, sub_cls=True, prop=True, attr=True, ignore=ii.ignore)
 
+	def _get_d_with(ii, sub_cls=False, prop=False, attr=False, flat=False, ignore=None):
+		return inst_to_dict(ii, sub_cls=sub_cls, prop=prop, attr=attr, flat=flat, ignore=ignore)
+
+	def _init_sub_cls(ii,) -> dict:
+		_sub_cls = dict(
+      		((k,v) for k,v in vars(ii.__class__).items() 
+                if isinstance(v, type) and issubclass(v, Sub))
+    	)
+		for sub_name, sub in _sub_cls.items(): # docs:sub_classes-init
+			setattr(ii, sub_name, sub(parent=ii))
+	
 	@property
-	def sub_cls(ii) -> dict:
-		inst_keys = [k for k in dir(ii) if not k.startswith('_') and not k in ii.ignore] + ['sweep',]
-		ii.log(inst_keys, path=ii.tmp_dir/'inst_keys.log')
-		d_init = {k:getattr(ii, k) for k in inst_keys}
-		return {k:v for k,v in d_init.items() if isinstance(v, type) or isinstance(v, Sub)}
+	def sub_cls(ii):
+		return dict((k,v) for k,v in vars(ii).items() if isinstance(v, Sub))
 
 	def setup_exp_dir(ii, group_exp=False, force_new_id=False):
-		
+
 		if ii.debug:
 			print('debug:setup_exp_dir:', ii.exp_id, ii.distribute.head, ii.group_exp, force_new_id)
 
@@ -300,7 +315,8 @@ class PyfigBase:
 			ii.exp_name = exp_group_dir.name
 
 			print('exp_dir: ', ii.exp_dir)  # is property
-			[mkdir(ii.exp_dir/_dir) for _dir in ['cluster', 'exchange', 'wandb', 'profile']]
+   
+		[mkdir(p) for _, p in ii._paths.items()]
 	
 	def get_run_or_sweep_d(ii,):
 		
@@ -309,7 +325,7 @@ class PyfigBase:
 			takes configuration from base in submit loop
 			"""
 			return [dict(),] 
-    
+	
 		if ii.wb.wb_sweep:
 			param = ii.sweep.parameters
 			sweep_keys = list(param.keys())
@@ -318,16 +334,13 @@ class PyfigBase:
 			for k, k_d in param.items():
 				v = k_d.get('values', [])
 				n_sweep += len(v)
-    
+	
 			# n_sweep = len(get_cartesian_product(*(v for v in param))
 			base_c = inst_to_dict(ii, sub_cls=True, attr=True, flat=True, ignore=ii.ignore+['sweep', 'head', 'exp_id'] + sweep_keys)
 			base_cmd = dict_to_cmd(base_c, sep='=')
 			base_sc = dict((k, dict(value=v)) for k,v in base_c.items())
    
-			if ii.wb.op_sweep:
-				c.hypam_opt
-       
-			else:
+			if ii.wb.wb_sweep:
 				sweep_c = dict(
 					command 	= ['python', '-u', '${program}', f'{base_c}', '${args}', '--exp_id=${exp_id}', ],
 					program 	= str(Path(ii.run_name).absolute()),
@@ -375,22 +388,24 @@ class PyfigBase:
 		d = {k:v for k,v in d.items() if k in d_k} | kw
 		return f(**d)
 
-	def update_configuration(ii, merge: dict):
-		merge = flat_any(merge)
-		for k,v in merge.items():
-			k_update = False
+	def update(ii, arg: dict):
+		arg = flat_any(arg)
+		for k,v in copy(arg).items():
 			for inst in [ii,] + list(ii.sub_cls.values()):
-				ref = inst_to_dict(inst, attr=True, ignore=ii.ignore)
-				v_ref = ref.get(k, None)
-				if not v_ref is None:
+				if hasattr(inst, k):
+					v_ref = getattr(inst, k)
 					v = type_me(v, v_ref)
-					setattr(inst, k, copy(v))
+					setattr(inst, k, copy(arg.pop(k)))
 					print(f'update {k}: {v_ref} --> {v}')
-					k_update = True
-			if not k_update:
-				print(f'{k} not updated: {v} {type(v)}')
+		
+		print('not updated:')
+		[print(f'! ', (k, v, type(v))) for k,v in arg]
 
-	
+	# def __setattr__(ii, k: str, v: Any):
+	# 	for inst in [ii,]
+	# 		ref = ii.__dict__[k]
+	# 		ii.__dict__[k] = v
+
 	@staticmethod
 	def log(info: dict|str, path: Path):
 		mkdir(path)
@@ -398,14 +413,30 @@ class PyfigBase:
 		with open(path, 'w') as f:
 			f.writelines(info)
 
-	def to(ii, to, device, dtype):
-		if to == 'torch':
-			import torch
-			base_d = inst_to_dict(ii, attr=True, sub_cls=True, flat=True, ignore=ii.ignore, debug=ii.debug)
+	def to(ii, framework='torch'):
+		if framework=='torch':
+			base_d = ii._get_d_with(attr=True, sub_cls=True, flat=True, ignore=ii.ignore+['sweep'])
 			d = {k:v for k,v in base_d.items() if isinstance(v, (np.ndarray, np.generic, list))}
-			d = {k:torch.tensor(v, dtype=dtype, device=device, requires_grad=False) for k,v in d.items() if not isinstance(v[0], str)}
-		ii.debug_log([d,], ['to_torch.log',])
-		ii.update_configuration(d)
+			d = {k:torch.tensor(v, requires_grad=False) for k,v in d.items() if not isinstance(v[0], str)}
+		ii.update(d)
+			
+	def set_dtype(ii):
+		dtype = torch.randn((1,)).dtype
+		ii.update({k:v.to(dtype) for k,v in flat_any(ii.d).items() if isinstance(v, torch.Tensor)})
+
+	def set_dist(ii, dist: Any=None):
+		print('setting distribution: ', dist)
+		print('config says ', ii.distribute.dist_method)
+		ii.distribute.dist = dist
+		return dist
+
+	def set_device(ii, device=None):
+		device = device or ii.distribute.dist.device
+		ii.update({k:v.to(device) for k,v in flat_any(ii.d).items() if isinstance(v, torch.Tensor)})
+		return device
+  
+
+
 
 
 class distribute_accelerate(Sub):
@@ -420,14 +451,14 @@ class distribute_accelerate(Sub):
 
 	def setup_distribute(
 		ii, 
-    	model: nn.Module, 
-    	opt, 
-     	tr_loader=None, 
-      	scheduler=None
+		model: nn.Module, 
+		opt, 
+	 	tr_loader=None, 
+	  	scheduler=None
 	) -> tuple:
 		ii.dist = Accelerator()
 		model, opt, tr_loader, scheduler = \
-     		ii.dist.prepare(model, opt, tr_loader, scheduler)
+	 		ii.dist.prepare(model, opt, tr_loader, scheduler)
 		
 		return [model, opt] + (tr_loader or []) + (scheduler or [])
 
@@ -447,14 +478,14 @@ class distribute_pyfig(Sub):
 
 	def setup_distribute(
 		ii, 
-    	model: nn.Module, 
-    	opt, 
-     	tr_loader=None, 
-      	scheduler=None
+		model: nn.Module, 
+		opt, 
+	 	tr_loader=None, 
+	  	scheduler=None
 	) -> tuple:
 		ii.dist = Accelerator()
 		model, opt, tr_loader, scheduler = \
-     		ii.dist.prepare(model, opt, tr_loader, scheduler)
+	 		ii.dist.prepare(model, opt, tr_loader, scheduler)
 		
 		return [model, opt] + (tr_loader or []) + (scheduler or [])
 
@@ -487,7 +518,7 @@ class distribute_pyfig(Sub):
 
 			for i, p in enumerate(k_path_all):
 				leaves = [load(p),] if i==0   else [*leaves, load(p)]
-    
+	
 			v_mean = [np.stack(l).mean(axis=0) for l in zip(*leaves)]
 
 			try:
@@ -521,6 +552,7 @@ class distribute_pyfig(Sub):
 			gc.enable()
 		return v_sync
 
+
 ### slurm things
 
 class niflheim_resource(Sub):
@@ -528,6 +560,7 @@ class niflheim_resource(Sub):
  
 	env: str     	= ''
 	n_gpu: int 		= 1
+	n_node: int		= 1
 
 	architecture:   str 	= 'cuda'
 	nifl_gpu_per_node: int  = property(lambda _: 10)
@@ -541,20 +574,19 @@ class niflheim_resource(Sub):
 	n_device_env:	str		= 'CUDA_VISIBLE_DEVICES'
 	n_device:       int     = property(lambda _: sum(c.isdigit() for c in os.environ.get(_.n_device_env, 'ZERO')))
 
-	### Slurm Configuration ###
-	export			= 'ALL'
-	nodes           = '1' 			# (MIN-MAX) 
-	# mem_per_cpu     = 1024
-	# mem				= 'MaxMemPerNode'
-	cpus_per_gpu   = 8				# 1 task 1 gpu 8 cpus per task 
-	partition       = 'sm3090'
-	time            = '0-00:10:00'  # D-HH:MM:SS
-
-	gres            = property(lambda _: 'gpu:RTX3090:' + (str(_.n_gpu) if int(_.nodes) == 1 else '10'))
-	ntasks          = property(lambda _: _.n_gpu)
-	job_name        = property(lambda _: _._p.exp_name)
-	output          = property(lambda _: _._p.cluster_dir/'o-%j.out')
-	error           = property(lambda _: _._p.cluster_dir/'e-%j.err')
+	class c(Config):
+		export			= 'ALL'
+		nodes           = '1' 			# (MIN-MAX) 
+		# mem_per_cpu     = 1024
+		# mem				= 'MaxMemPerNode'
+		cpus_per_gpu   = 8				# 1 task 1 gpu 8 cpus per task 
+		partition       = 'sm3090'
+		time            = '0-00:10:00'  # D-HH:MM:SS
+		gres            = property(lambda _: 'gpu:RTX3090:' + (str(_.n_gpu) if int(_.nodes) == 1 else '10'))
+		ntasks          = property(lambda _: _.n_gpu)
+		job_name        = property(lambda _: _._p.exp_name)
+		output          = property(lambda _: _._p.cluster_dir/'o-%j.out')
+		error           = property(lambda _: _._p.cluster_dir/'e-%j.err')
 
 	# n_running_cmd:	str		= 'squeue -u amawi -t pending,running -h -r'
 	# n_running:		int		= property(lambda _: len(run_cmds(_.n_running_cmd, silent=True).split('\n')))	
@@ -562,7 +594,7 @@ class niflheim_resource(Sub):
 
 	def cluster_submit(ii, job: dict):
 		
-		class _body:
+		class _Body:
 			lines = []
 			def __iadd__(ii, l):
 				ii.lines += [l]
@@ -572,11 +604,12 @@ class niflheim_resource(Sub):
 				return '\n'.join(ii.lines)
 
 		try:
+			_body = _Body()
 			_body += 'x'
 			print(_body)
 		except Exception as e:
 			print(e)
-      
+	  
 		if job['head']:
 			print(ii.script)
 		body = []
@@ -758,17 +791,20 @@ def inst_to_dict(
 	attr=False,
 	sub_cls=False, 
 	prop=False,
-	ignore:list=[],
+	ignore:list=None,
 	flat:bool=False,
 	debug:bool=False
 ) -> dict:
+		ignore = ignore or []
 
 		inst_keys = [k for k in dir(inst) if not k.startswith('_') and not k in ignore] # docs:python:cls-inst:q? could dirs --> vars? 
 		if debug:
 			print('inst-to-dict: inst_keys: ', inst_keys)
 
-		d_cls = {k:getattr(inst.__class__, k) for k in inst_keys}
+
+		d_ins = {k:v for k,v in vars(inst).items() if not k.startswith('_') and not k in ignore}
 		d_ins = {k:getattr(inst, k) for k in inst_keys}
+		d_cls = {k:getattr(inst.__class__, k) for k in inst_keys}
 		
 		d_callable = {k:v for k,v in d_ins.items() if callable(v) and not isinstance(v, Sub)}
 		d_prop = {k:v for k,v in d_ins.items() if isinstance(d_cls[k], property)}
@@ -851,3 +887,20 @@ def tree(
 
 def draw_tree():
 	recurse_tree(Path.home() / 'pyscratch')
+ 
+ 
+""" 
+ 
+	# class git(Sub):
+	# 	branch:     str     = 'main'
+	# 	remote:     str     = 'origin' 
+
+	# 	_commit_id_cmd:	str 	= 'git log --pretty=format:%h -n 1'
+	# 	commit_id:   	list	= property(lambda _: run_cmds(_._commit_id_cmd, cwd=_._p.project_dir, silent=True))
+		# commit_cmd:	str     = 'git commit -a -m "run"' # !NB no spaces in msg 
+		# commit: 		list	= property(lambda _: run_cmds(_.commit_cmd, cwd=_.project_dir)) 
+		# pull_cmd:		str 	= ['git fetch --all', 'git reset --hard origin/main']
+		# pull:   		list	= property(lambda _: run_cmds(_.pull_cmd, cwd=_.project_dir))
+  
+  
+"""

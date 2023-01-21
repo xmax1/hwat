@@ -5,7 +5,8 @@
 import os
 from accelerate import Accelerator
 import torch
-
+from typing import Callable
+import time
 from accelerate.utils import set_seed
 import numpy as np
 import pprint
@@ -27,12 +28,97 @@ from hwat import init_r, get_center_points
 from functorch import make_functional_with_buffers, vmap
 from copy import deepcopy
 
+
+from optuna import Trial
+import optuna
+from optuna import pruners, samplers
+from pyfig_utils import lo_ve
+import sys
+from pyfig_utils import Param
+
 from torch import nn
  
 def init_agent():
 	pprint.pprint(run.config)
 	c = Pyfig(init_arg=run.config)
 	return c
+
+def suggest_hypam(trial: Trial, name: str, v: Param):
+	if isinstance(v, dict):
+		v = Param(**v)
+
+	if not v.domain:
+		return trial.suggest_categorical(name, v.values)
+
+	if v.sample:
+		if v.step_size:
+			return trial.suggest_discrete_uniform(name, *v.domain, q=v.step_size)
+		elif v.log:
+			return trial.suggest_loguniform(name, *v.domain)
+		else:
+			return trial.suggest_uniform(name, *v.domain)
+
+	if v.dtype is int:
+		return trial.suggest_int(name, *v.domain, log=v.log)
+	
+	if v.dtype is float:
+		return lambda : trial.suggest_float(name, *v.domain, log=v.log)
+	
+	sys.exit('{v} not supported in hypam opt')
+		
+def get_hypam_from_study(trial: Trial, sweep_params: dict) -> dict:
+	print('trialing hypam: ')
+	for i, (name, v) in enumerate(sweep_params.items()):
+		v = suggest_hypam(trial, name, v)
+		c_update = {name:v} if i==0 else {**c_update, name:v}
+	pprint.pprint(c_update)
+	return c_update
+
+def get_max_mem_c(fn: Callable, r: torch.Tensor, deltar: torch.Tensor, start=5, **kw):
+	print('finding max_mem')
+	n_b_0 = r.shape[0]
+	for n_b_power in range(start, 15):
+		try:
+			n_b = 2**n_b_power
+			n_factor = max(1, n_b // n_b_0)
+			r_mem = r.tile((n_factor,) + (1,)*(r.ndim-1))
+			assert r_mem.shape[0] == n_b
+			stats = gen_profile(fn, r=r, deltar=deltar, mode='train', c_update=dict(n_b=n_b))
+			print(stats)
+		except Exception as e:
+			print('mem_max: ', e)
+		finally:
+			n_b_max = 2**(n_b_power-1)
+			return dict(c_update=dict(n_b=n_b_max))
+
+def opt_hypam(c: Pyfig, objective: Callable):
+	if c.distribute.head:
+		study = optuna.create_study(
+			study_name		= c.sweep.sweep_name,
+			load_if_exists 	= True, 
+			direction 		= "minimize",
+			storage			= c.sweep.storage,
+			sampler 		= lo_ve(c.exp_dir/'sampler.pk') or samplers.TPESampler(seed=c.seed),
+			pruner			= pruners.MedianPruner(n_warmup_steps=10),
+		)
+	else:
+		while not c.sweep.storage.exists():
+			sleep(3)
+
+	study.optimize(
+		objective, 
+		n_trials=c.sweep.n_trials, 
+		timeout=None, 
+		callbacks=None, 
+		show_progress_bar=True, 
+		gc_after_trial=True
+	)
+
+	if c.debug:
+		print(vars(study))
+		print(study.trials)
+
+	return dict(c_update=study.best_params)
 
 def sync(v_d: torch.Tensor, dist: Accelerator) -> list[torch.Tensor]:
 	v_flat, treespec = optree.tree_flatten(v_d)
@@ -45,55 +131,29 @@ def sync(v_d: torch.Tensor, dist: Accelerator) -> list[torch.Tensor]:
 	v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync_mean)
 	return v_sync
 
-def gen_profile(model: nn.Module, model_rv: nn.Module, r: torch.Tensor=None, deltar: torch.Tensor=None, wait=1, warmup=1, active=1, repeat=1):
-	# https://wandb.ai/wandb/trace/reports/Using-the-PyTorch-Profiler-with-W-B--Vmlldzo5MDE3NjU
-	print('profiling')
-	model_tmp = deepcopy(model)
-	model_pr = lambda : model_tmp(r)
-	sample_pr = lambda : sample_b(model_tmp, r, deltar, n_corr=c.data.n_corr) 
-	ke_pr = lambda : compute_ke_b(model_tmp, model_rv, r, ke_method=c.model.ke_method)
+def gen_profile(fn: Callable, wait=1, warmup=1, active=1, repeat=1, v_init: dict=None, c_update: dict=None):
+	
+	fn = partial(fn, r=v_init.get('r'), deltar=v_init.get('deltar'), mode=v_init.get('mode'), c_update=c_update or dict())
 
 	profiler = torch.profiler.profile(
+		activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
 		schedule=torch.profiler.schedule(wait=wait, warmup=warmup, active=active, repeat=repeat),
 		on_trace_ready=torch.profiler.tensorboard_trace_handler(c.profile_dir),
 		profile_memory=True, with_stack=True, with_modules=True
 	)
 	with profiler:
-		times = dict(t_model=0.0, t_sample=0.0, t_ke=0.0)
-		import time
 		for _ in range((wait + warmup + active) * repeat):
-			t0 = time.time()
-			model_pr()
-			times['t_model'] += time.time() - t0
-			t0 = time.time()
-			sample_pr()
-			times['t_sample'] += time.time() - t0
-			t0 = time.time()
-			ke_pr()
-			times['t_ke'] += time.time() - t0
+			fn()
 			profiler.step()
-	for k,v in times.items():
-		c.wb.run.summary[k] = v
+
+	profiler.export_stacks(c.profile_dir/'profiler_stacks.txt', 'self_cuda_time_total')
+
+	print(profiler.key_averages().table())
 
 	profile_art = wandb.Artifact(f"trace", type="profile")
-	for p in c.profile_dir.iterdir():
-		profile_art.add_file(p, "trace.pt.trace.json")
-		break
+	p = next(c.profile_dir.iterdir())
+	profile_art.add_file(p, "trace.pt.trace.json")
 	profile_art.save()
-	profiler.export_stacks(c.profile_dir/'profiler_stacks.txt', 'self_cuda_time_total')
-	"""
-	# if not c.model.compile_ts: # https://github.com/pytorch/pytorch/issues/76791
-	# docs:profiler
-	1- --> wandb --> Artifacts --> files --> trace
-	https://wandb.ai/wandb/trace/reports/Using-the-PyTorch-Profiler-with-W-B--Vmlldzo5MDE3NjU
-	2- tensorboard --logdir=c.profile_dir
-	browser: http://localhost:6006/pytorch_profiler
-	https://pytorch.org/tutorials/intermediate/tensorboard_profiler_tutorial.html
-	"""
-	print('profile end.')
-
-
-
 
 def get_opt(c: Pyfig) -> type:
 	if c.opt.opt_name == 'RAdam':
@@ -130,12 +190,12 @@ def get_opt(c: Pyfig) -> type:
 
 # 	if c.model.functional:
 # 		pass
+
 def run(c: Pyfig=None):
 	
 	print('\n pyfig \n')
 	c = c or Pyfig()
 	pprint.pprint(c.d)
-
 
 	# torch.backends.cudnn.benchmark = True
 	# torch.manual_seed(c.seed)
@@ -143,14 +203,10 @@ def run(c: Pyfig=None):
 	torch.set_default_tensor_type(torch.DoubleTensor)   # docs:todo ensure works when default not set AND can go float32 or 64
 	print(f'{torch.cuda.is_available()*"CUDA and "} 🤖 {c.resource.n_device} GPUs available.')
 
-	_dummy = torch.randn((1,))
-	dtype = _dummy.dtype
- 
-	dist = Accelerator()
-	# device = 'cuda' if  else 'cpu'
-	device = dist.device
-
-	c.to(to='torch', device=device, dtype=dtype)
+	c.to(framework='torch')
+	dist=dist=Accelerator()
+	dtype = c.set_dtype()
+	device = c.set_device(device=dist.device)
 
 	### init things ###
 	center_points = get_center_points(c.data.n_e, c.data.a)
@@ -203,27 +259,36 @@ def run(c: Pyfig=None):
 
 			opt.step()
 		opt.zero_grad(set_to_none=True)
- 
-	def execute(*, r: torch.Tensor=None, deltar: torch.Tensor=None, mode: str='train', c_update: dict=None):
-     
-		c.update_configuration(c_update or {})
+
+	def execute(*, r: torch.Tensor=None, deltar: torch.Tensor=None, mode: str='train', c_update: dict=None, **kw):
+	 
+		c.update(c_update or {})
 		
 		if mode=='train':
 			model.train()
 		elif mode=='evaluate':
 			model.eval()
 
+		v_d = dict(r=r, deltar=deltar)
+  
+		if c.debug:
+			pprint.pprint(c.d)
+			[print(k, v.shape) for k,v in v_d.items()]
+
+		[setattr(p, 'requires_grad', False) for p in model.parameters()]
 		opt.zero_grad(set_to_none=True)
   
 		for step in range(1, (c.n_step if mode=='train' else c.n_step_eval) + 1):
 
-			def loss_fn(r: torch.Tensor=None, deltar: torch.Tensor=None):
-
+			def loss_fn(r: torch.Tensor=None, deltar: torch.Tensor=None, **kw):
+				
 				v_sam = sample_b(model, r, deltar, n_corr=c.data.n_corr)
 				r, deltar = v_sam['r'], v_sam['deltar']
 				r = keep_around_points(r, center_points, l=5.) if step < c.n_pretrain_step else r
 		
 				v_e = compute_energy(model, r)
+
+				loss = grads = params = None
 
 				if mode=='train':
 					e = v_e['e']
@@ -233,17 +298,15 @@ def run(c: Pyfig=None):
 					opt.zero_grad()
 					for p in model.parameters():
 						p.requires_grad = True
-			
-					params = {k:p.data for k,p in model.named_parameters()}
-					grads = {k:p.grad.data for k,p in model.named_parameters()}
 
 					loss: torch.Tensor = ((e_clip - e_clip.mean())*model(r)).mean()
 
-					dist.backward(v_d['loss'])
+					dist.backward(loss)
 	 
-					v_tr = dict(loss=loss, grads=grads, params=params)
+					params = {k:p.data for k,p in model.named_parameters()}
+					grads = {k:p.grad.data for k,p in model.named_parameters()}
 
-				return dict(**v_sam, **v_tr, **v_e)
+				return dict(loss=loss, grads=grads, params=params, **v_sam, **v_e)
 	
 			v_d = loss_fn(**v_d)
 
@@ -261,119 +324,43 @@ def run(c: Pyfig=None):
 
 	v_init_0 = v_init = dict(r= r, deltar= deltar_0)
 
+	# 	$ mysql -u root -e "CREATE DATABASE IF NOT EXISTS example"
+	# 	$ optuna create-study --study-name "distributed-example" --storage "mysql://root@localhost/example"
+	#	[I 2020-07-21 13:43:39,642] A new study created with name: distributed-example
 
-	def opt_hypam():
-		"""
-		Median pruning algorithm implemented in MedianPruner
+	res = dict(v_init_0=v_init_0, v_init=v_init_0)
 
-		Non-pruning algorithm implemented in NopPruner
+	for mode in (c.mode or c.multimode.split(':')):
+		v_init = res.get('v_init')
+		c.mode = mode
 
-		Algorithm to operate pruner with tolerance implemented in PatientPruner
+		if mode == 'opt_hypam':
 
-		Algorithm to prune specified percentile of trials implemented in PercentilePruner
+			def objective(trial: Trial):
+				c_update = get_hypam_from_study(trial, c.sweep.parameters)
+				v_tr = execute(**v_init_0, c_update=c_update)
+				v_eval = execute(**v_tr, c_update=c_update)
+				return v_eval['e']
 
-		Asynchronous Successive Halving algorithm implemented in SuccessiveHalvingPruner
+			v_run = opt_hypam(c, objective)
 
-		Hyperband algorithm implemented in HyperbandPruner
+		elif mode=='max_mem':
+			v_init.update(dict(mode='train'))
+			v_run = get_max_mem_c(execute, **res.get('v_init'))
 
-		Threshold pruning algorithm implemented in ThresholdPruner
-	
-		trial.report(intermediate_value, step)
+		elif mode=='profile':
+			v_init.update(dict(mode='train'))
+			v_run = gen_profile(execute, **res.get('v_init'))
 
-			# Handle pruning based on the intermediate value.
-			if trial.should_prune():
-				raise optuna.TrialPruned()
-		optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
-		study = optuna.create_study(pruner=optuna.pruners.MedianPruner())
-		study.optimize(objective, n_trials=20)
-		For RandomSampler, MedianPruner is the best.
+		else:
+			v_run = execute(**res.get('v_init'), mode=mode)
 
-		For TPESampler, HyperbandPruner is the best.
+		c.update(v_run.get('c_update', {}))
+		res.update(v_run)
+		res[mode] = v_run
 
-		$ mysql -u root -e "CREATE DATABASE IF NOT EXISTS example"
-		$ optuna create-study --study-name "distributed-example" --storage "mysql://root@localhost/example"
-	
-		import optuna
+	return res
 
-
-	def objective(trial):
-		x = trial.suggest_float("x", -10, 10)
-		return (x - 2) ** 2
-
-
-	if __name__ == "__main__":
-		study = optuna.load_study(
-			study_name="distributed-example", storage="mysql://root@localhost/example"
-		)
-		study.optimize(objective, n_trials=100)
-
-		n_trials is the number of trials each process will run, 
-	not the total number of trials across all processes. 
-	For example, the script given above runs 100 trials for each process, 
-	100 trials * 2 processes = 200 trials. optuna.study.MaxTrialsCallback 
-	can ensure how many times trials will be performed across all processes.
-	
-	
-	study.optimize(objective, n_trials=100, timeout=600)
-	"""
-
-	from optuna import Trial
-	import optuna
-	from optuna import pruners, samplers
-	from pyfig_utils import lo_ve
-
-	study = optuna.create_study(
-			study_name		= c.sweep.sweep_name,
-			load_if_exists 	= True, 
-			direction 		= "minimize",
-			storage			= c.sweep.storage,
-			sampler 		= lo_ve(c.exp_dir/'sampler.pk') or samplers.TPESampler(seed=c.seed),
-			pruner			= pruners.MedianPruner(n_warmup_steps=10),
-	)
-
-	def get_hypam_from_study(trial: Trial, sweep_params: dict) -> dict:
-		from pyfig_utils import Param
-		# class Param(Sub): # docs:todo all wb sweep structure
-		# 	name:   str = None
-		# 	values: list = None
-		# 	domain: tuple = None
-		# 	dtype: type = None
-		# 	log: bool = False
-		# step_size
-		for i, (k,v) in enumerate(sweep_params.items()):
-			if isinstance(v, dict):
-				v = Param(**v)
-
-			trial.suggest_discrete_uniform(v.name, *v.domain, q=step_size)
-			trial.suggest_loguniform
-			trial.suggest_uniform
-			if v.domain:
-				if v.dtype is int:
-					suggest = lambda : trial.suggest_int(v.name, *v.domain, log=v.log)
-				elif v.dtype is float:
-					suggest = lambda : trial.suggest_float(v.name, *v.domain, log=v.log)
-			else:
-				suggest = trial.suggest_categorical(v.name, v.values)
-			
-			return suggest
-		return dict()
-
-	def objective(trial: Trial):
-		c_update = get_hypam_from_study(trial, c.sweep.parameters)
-		v_tr = execute(**v_init_0, mode='train', c_update=c_update)
-		v_eval = execute(**v_tr, mode='evaluate', c_update=c_update)
-		return v_eval['e']
-
-	study.optimize(objective, n_trials=3)
-
-	res = {}
-	for mode in c.mode.split(':'):
-		v_init = res.get(res, v_init_0)
-		v_init = v_tr = execute(**v_init, mode=mode)
-
-	if 'evaluate' in c.mode:
-		v_init = v_eval = execute(**v_init, mode='evaluate')
-  
 
 if __name__ == "__main__":
 	
@@ -381,4 +368,63 @@ if __name__ == "__main__":
 
 	c = Pyfig(notebook=False, sweep=None, c_init=None)
 
-	run(c)
+	res = run(c)
+
+
+
+"""
+
+
+def gen_profile(
+	model: nn.Module, 
+	model_rv: nn.Module, 
+	r: torch.Tensor=None, 
+	deltar: torch.Tensor=None, 
+	wait=1, warmup=1, active=1, repeat=1
+):
+	# https://wandb.ai/wandb/trace/reports/Using-the-PyTorch-Profiler-with-W-B--Vmlldzo5MDE3NjU
+	print('profiling')
+	model_tmp = deepcopy(model)
+	model_pr = lambda : model_tmp(r)
+	sample_pr = lambda : sample_b(model_tmp, r, deltar, n_corr=c.data.n_corr) 
+	ke_pr = lambda : compute_ke_b(model_tmp, model_rv, r, ke_method=c.model.ke_method)
+
+	profiler = torch.profiler.profile(
+		schedule=torch.profiler.schedule(wait=wait, warmup=warmup, active=active, repeat=repeat),
+		on_trace_ready=torch.profiler.tensorboard_trace_handler(c.profile_dir),
+		profile_memory=True, with_stack=True, with_modules=True
+	)
+	with profiler:
+		times = dict(t_model=0.0, t_sample=0.0, t_ke=0.0)
+		import time
+		for _ in range((wait + warmup + active) * repeat):
+			t0 = time.time()
+			model_pr()
+			times['t_model'] += time.time() - t0
+			t0 = time.time()
+			sample_pr()
+			times['t_sample'] += time.time() - t0
+			t0 = time.time()
+			ke_pr()
+			times['t_ke'] += time.time() - t0
+			profiler.step()
+	for k,v in times.items():
+		c.wb.run.summary[k] = v
+
+	profile_art = wandb.Artifact(f"trace", type="profile")
+	for p in c.profile_dir.iterdir():
+		profile_art.add_file(p, "trace.pt.trace.json")
+		break
+	profile_art.save()
+	profiler.export_stacks(c.profile_dir/'profiler_stacks.txt', 'self_cuda_time_total')
+	# if not c.model.compile_ts: # https://github.com/pytorch/pytorch/issues/76791
+	# docs:profiler
+	1- --> wandb --> Artifacts --> files --> trace
+	https://wandb.ai/wandb/trace/reports/Using-the-PyTorch-Profiler-with-W-B--Vmlldzo5MDE3NjU
+	2- tensorboard --logdir=c.profile_dir
+	browser: http://localhost:6006/pytorch_profiler
+	https://pytorch.org/tutorials/intermediate/tensorboard_profiler_tutorial.html
+
+	print('profile end.')
+ 
+ """

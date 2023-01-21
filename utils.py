@@ -160,27 +160,29 @@ def cmd_to_dict(cmd:Union[str, list], ref:dict, delim:str=' --', d=None):
 def format_cmd_item(v):
 	v = v.replace('(', '[').replace(')', ']')
 	return v.replace(' ', '')
-	
+
 def type_me(v, v_ref=None, is_cmd_item=False):
 	""" cmd_items: Accepted: bool, list of list (str, float, int), dictionary, str, explicit str (' "this" '), """
 	
 	if is_cmd_item:
-		
-		v = format_cmd_item(v)
-		
-		if v.startswith('[['):
-			v = v.strip('[]')
-			nest_lst = v.split('],[')
-			return [type_me('['+lst+']', v_ref[0], is_cmd_item=True) for lst in nest_lst]
-		
-		if v.startswith('['):
-			v = v.strip('[]')
-			v = v.split(',')
-			return [type_me(x, v_ref[0]) for x in v]
-		
-		booleans = ['True', 'true', 't', 'False', 'false', 'f']
-		if v in booleans: 
-			return booleans.index(v) < 3  # 0-2 True 3-5 False
+		try:
+			v = format_cmd_item(v)
+			
+			if v.startswith('[['):
+				v = v.strip('[]')
+				nest_lst = v.split('],[')
+				return [type_me('['+lst+']', v_ref[0], is_cmd_item=True) for lst in nest_lst]
+			
+			if v.startswith('['):
+				v = v.strip('[]')
+				v = v.split(',')
+				return [type_me(x, v_ref[0]) for x in v]
+			
+			booleans = ['True', 'true', 't', 'False', 'false', 'f']
+			if v in booleans: 
+				return booleans.index(v) < 3  # 0-2 True 3-5 False
+		except Exception as e:
+			print('type me issue: ', v, v_ref, is_cmd_item, e)
 	
 	if v_ref is not None:
 		type_ref = type(v_ref)
