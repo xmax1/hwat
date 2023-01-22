@@ -56,6 +56,7 @@ class Pyfig(PyfigBase):
 		n_u:        int         = property(lambda _: (_.spin + _.n_e)//2)
 		n_d:        int         = property(lambda _: _.n_e - _.n_u)
 
+
 	class model(PyfigBase.model):
 		compile_ts: 	bool	= False
 		compile_func:	bool	= False

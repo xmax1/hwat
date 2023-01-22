@@ -16,39 +16,6 @@ import optree
 from utils import debug_dict
 
 
-def get_things(c: Pyfig, c_init: dict, **kw):
-
-	c_init = (c_init or {}) | (kw or {})
-	c.update(c_init)
-	c.start()
-
-	c.set_dtype()
-	c.distribute.set_seed()
-	c.distribute.set_device()
-	c.to(device=c.distribute.device, dtype=c.dtype)
-	debug_dict(d=c.d, msg='pyfig at execute')
-
-	model: nn.Module = c.partial(Model)
-	model.to(device=c.distribute.device, dtype=c.dtype)
-	
-	model_fn, params, buffers = make_functional_with_buffers(model)  
-	model_fn_vmap = lambda params, _v: vmap(model_fn, in_dims=(None, None, 0))(params, buffers, _v).sum()
-
-	opt_for_params = get_opt(**c.opt.d_flat)
-	opt: torch.optim.Optimizer = opt_for_params(model.parameters())
-
-	scheduler_for_opt: torch.optim.lr_scheduler._LRScheduler = c.partial(get_scheduler)
-	scheduler: torch.optim.lr_scheduler._LRScheduler = scheduler_for_opt(opt)
-
-	model, opt, scheduler = c.distribute.prepare(model, opt, scheduler)  # docs:accelerate
-
-	if c.mode=='train':
-		model.train()
-	elif c.mode=='evaluate':
-		model.eval()
-
-	return dict(model=model, model_fn_vmap=model_fn_vmap, opt=opt, scheduler=scheduler)
-
 
 class distribute(PyfigBase.distribute):
 	dist: accelerate.Accelerator = None
