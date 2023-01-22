@@ -18,6 +18,8 @@ import pickle as pk
 import yaml
 import json
 from functools import partial
+import numpy as np
+from utils import get_max_n_from_filename
 
 from utils import dict_to_cmd, cmd_to_dict, dict_to_wandb
 from utils import mkdir, iterate_n_dir, gen_time_id, add_to_Path, dump, load
@@ -32,7 +34,7 @@ hostname = os.environ['HOSTNAME']
 class Sub:
 	_p = None
 	_sub_ins_tag = '_p'
-	ignore = ['d', 'ignore']
+	ignore = ['d', 'd_flat', 'ignore']
 
 	def __init__(ii, parent=None):
 		ii._p: PyfigBase
@@ -48,6 +50,10 @@ class Sub:
 	@property
 	def d(ii):
 		return ins_to_dict(ii, sub_ins=True, prop=True, attr=True, ignore=ii.ignore)
+
+	@property
+	def d_flat(ii):
+		return flat_any(ii.d)
 
 class Param(Sub): 
 	# docs:todo all wb sweep structure
@@ -81,11 +87,13 @@ class PyfigBase:
 	dtype:          	str   	= ''
 
 	n_step:         	int   	= 0
-	n_step_eval:        int   	= 0
+	n_eval_step:        int   	= 0
 	n_pre_step:    		int   	= 0
 
 	log_metric_step:	int   	= 0
 	log_state_step: 	int   	= 0
+ 
+	lo_ve_path:			str 	= ''
 	
 	class data(Sub):
 		system: 	str = ''
@@ -117,12 +125,12 @@ class PyfigBase:
 		n_fbv:          int     = property(lambda _: _.n_sv*3+_.n_pv*2)
 
 	class opt(Sub):
-		opt_name: 		str		= 'RAdam'
-		lr:  			float 	= 0.01
-		betas:			list	= [0.9, 0.999]
-		eps: 			float 	= 1e-4
-		weight_decay: 	float 	= 0.0
-		hessian_power: 	float 	= 1.
+		opt_name: 		str		= None
+		lr:  			float 	= None
+		betas:			list	= None
+		eps: 			float 	= None
+		weight_decay: 	float 	= None
+		hessian_power: 	float 	= None
   
 	class sweep(Sub):
 		storage: 		Path = property(lambda _: 'sqlite:///' + str(_._p.exp_dir / 'hypam_opt.db'))
@@ -136,17 +144,18 @@ class PyfigBase:
 		job_type:		str		= ''		
 		wb_mode: 		str		= ''
 		wb_sweep: 		bool	= False
-		_wb_agent: 		bool	= False
 		sweep_id: 		str 	= ''
   
 		entity:			str		= property(lambda _: _._p.project)
 		program: 		Path	= property(lambda _: Path( _._p.project_dir, _._p.run_name))
 		sweep_path_id:  str     = property(lambda _: f'{_.entity}/{_._p.project}/{_.sweep_id}')
-		wb_type: 		str		= property(lambda _: _.wb_sweep*f'sweeps/{_.sweep_id}' or f'runs/{_._p.exp_id}') # _._p.group_exp*f'groups' or 'runs') # or _._p.run_sweep*f'groups/{_._p.exp_name}'
+		wb_type: 		str		= property(lambda _: _.wb_sweep*f'sweeps/{_.sweep_id}' or f'group/{_._p.exp_name}/workspace') #  or f'runs/{_._p.exp_id} _._p.group_exp*f'groups' or 'runs') # or _._p.run_sweep*f'groups/{_._p.exp_name}'
 		run_url: 		str		= property(lambda _: f'https://wandb.ai/{_.entity}/{_._p.project}/{_.wb_type}')
+		_wb_agent: 		bool	= False
   
 	class distribute(Sub):
 		head:			bool	= True
+		device: 		str		= 'cpu'
 		dist_method: 	str		= 'pyfig'  # options: accelerate
 		sync_step:		int		= 5
   
@@ -237,9 +246,8 @@ class PyfigBase:
 			loss.backward()
 
 		def set_device(ii, device=None):
-			device = 'cuda' if torch.cuda.is_available() else 'cpu'
-			ii._p.update({k:v.to(device) for k,v in flat_any(ii._p.d).items() if isinstance(v, torch.Tensor)})
-			return device
+			ii.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+			return ii.device
 
 		def set_seed(ii, seed=None):
 			print('setting seed w torch manually ' )
@@ -263,11 +271,15 @@ class PyfigBase:
 	cluster_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'cluster'))
 	exchange_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exchange'))
 	profile_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'profile'))
+	state_dir: 			Path    = property(lambda _: Path(_.exp_dir, 'state'))
 	exp_data_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exp_data'))
 	log_dir: 			Path    = property(lambda _: _.cluster_dir)
 
+	_group_i: int = 0
+
 	_ignore_f = ['commit', 'pull', 'backward']
-	ignore: list = ['ignore', 'd', 'cmd', 'sub_ins',] + _ignore_f
+	_ignore_c = ['sweep',]
+	ignore: list = ['ignore', 'd', 'cmd', 'sub_ins', 'd_flat'] + _ignore_f + _ignore_c
 	_sub_ins_tag: str = '_p'
 
 	def __init__(ii, 
@@ -283,21 +295,23 @@ class PyfigBase:
 			setattr(ii.sweep, k, v)
 
 		if not notebook:
-			ref_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore+['sweep',])
+			ref_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore)
 			sys_arg = cmd_to_dict(sys.argv[1:], ref_d)
 
 		update = flat_any((c_init or {})) | flat_any((other_arg or {})) | (sys_arg or {})
 		ii.update(update)
 
+		if ii.debug:
+			os.environ['debug'] = 'True'
+
 		ii.debug_log([sys_arg, dict(os.environ.items()), ii.d], ['log_sys_arg.log', 'log_env_run.log', 'log_d.log'])
 		
 	def __post_init__(ii, post_init_arg: dict=None, **other_arg):
 		""" application specific initialisations """
-		ii.update((post_init_arg or {}) | other_arg)
+		update = ((post_init_arg or {}) | (other_arg or {}))
+		ii.update(update)
 
-	def start(ii, update: dict=None):
-
-		ii.update((update or {}))
+	def start(ii):
 
 		if ii.distribute.head and int(ii.distribute.rank)==0:
 			print('running')
@@ -321,7 +335,7 @@ class PyfigBase:
 				entity      = ii.wb.entity,	
 				mode        = ii.wb.wb_mode,
 				config      = dict_to_wandb(ii.d),
-				id			= ii.exp_id,
+				id			= ii.exp_id + '-' + ii.mode + '-' + str(ii.group_i),
 				tags 		= [ii.mode,],
 				reinit 		= not (ii.wb.run is None)
 			)
@@ -379,6 +393,19 @@ class PyfigBase:
 	def d(ii):
 		return ins_to_dict(ii, sub_ins=True, prop=True, attr=True, ignore=ii.ignore)
 
+	@property
+	def d_flat(ii):
+		return flat_any(ii.d)
+
+	@property
+	def sub_ins(ii):
+		return dict()
+
+	@property
+	def group_i(ii):
+		ii._group_i += 1
+		return ii._group_i
+
 	def init_sub_cls(ii,) -> dict:
 		sub_cls = ins_to_dict(ii, sub_cls=True)
 		for sub_k, sub_v in sub_cls.items():
@@ -387,14 +414,7 @@ class PyfigBase:
 			if sub_k not in ii.sub_ins:
 				ii.sub_ins[sub_k] = sub_ins
 
-	@property
-	def sub_ins(ii):
-		return dict()
-
 	def setup_exp_dir(ii, group_exp=False, force_new_id=False):
-
-		if ii.debug:
-			print('debug:setup_exp_dir:', ii.exp_id, ii.distribute.head, ii.group_exp, force_new_id)
 
 		if (not ii.exp_id) or force_new_id:
 			ii.exp_id = gen_time_id(7)
@@ -405,16 +425,13 @@ class PyfigBase:
 			exp_group_dir = iterate_n_dir(exp_group_dir, group_exp=group_exp) # does not append -{i} if group allowed
 			ii.exp_name = exp_group_dir.name
 
-			print('exp_dir: ', ii.exp_dir)  # is property
-   
+		print('exp_dir: ', ii.exp_dir)  # is property
 		[mkdir(p) for _, p in ii._paths.items()]
 	
 	def get_run_or_sweep_d(ii,):
 		
 		if not (ii.run_sweep or ii.wb.wb_sweep):
-			""" single run
-			takes configuration from base in submit loop
-			"""
+			""" single run takes c from base in submit loop """
 			return [dict(),] 
 	
 		if ii.wb.wb_sweep:
@@ -456,11 +473,10 @@ class PyfigBase:
 				print(ii.project, ii.wb.entity, Path(ii.run_name).absolute())
 
 			return [dict() for _ in range(n_sweep)]
-
-		ii.pr(ii.sweep.d)
+ 
 		d = ii.sweep.d
 		sweep_keys = list(d['parameters'].keys())
-		sweep_vals = [v['values'] for v in d['parameters'].values()]
+		sweep_vals = [v.get('values', []) for v in d['parameters'].values()]
 		sweep_vals = get_cartesian_product(*sweep_vals)
 		print(f'### sweep over {sweep_keys} ({len(sweep_vals)} total) ###')
 		return [{k:v for k,v in zip(sweep_keys, v_set)} for v_set in sweep_vals]
@@ -474,15 +490,21 @@ class PyfigBase:
 	def partial(ii, f:Callable, args=None, **kw):
 		d = flat_any(args if args else ii.d)
 		d_k = inspect.signature(f.__init__).parameters.keys()
-		d = {k:v for k,v in d.items() if k in d_k} | kw
+		d = {k:v for k,v in d.items() if k in d_k} | (kw or {})
 		return f(**d)
 
-	def update(ii, arg: dict, sub_ins_tag='_p'):
-		arg = flat_any(arg)
-		for k_update,v_update in copy(arg).items():
-			is_updated = walk_ins_tree(ii, k_update, v_update, sub_ins_tag=sub_ins_tag)
+	def update(ii, c_update: dict = None, **kw):
+		c_update = (c_update or {}) | (kw or {})
+		arg = flat_any(c_update)
+
+		c_keys = list(ii.d_flat.keys())
+		arg = filter(lambda kv: kv[0] in c_keys, arg.items())
+		print(f'excluding {[k for k in arg.keys() if not k in c_keys]} from update')
+
+		for k_update, v_update in deepcopy(arg):
+			is_updated = walk_ins_tree(ii, k_update, v_update)
 			if not is_updated:
-				print(f'not updated: {k_update} - input val: {v_update} type: {type(v_update)}')
+				print(f'not updated: k={k_update} v={v_update} type={type(v_update)}')
 
 	@staticmethod
 	def log(info: dict|str, path: Path):
@@ -491,37 +513,39 @@ class PyfigBase:
 		with open(path, 'w') as f:
 			f.writelines(info)
 
-	def to(ii, framework='torch'):
-		if framework=='torch':
-			base_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore+['sweep'])
-			d = {k:v for k,v in base_d.items() if isinstance(v, (np.ndarray, np.generic, list))}
-			d = {k:torch.tensor(v, requires_grad=False) for k,v in d.items() if not isinstance(v[0], str)}
+	def to(ii, device, dtype):
+		base_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore+['sweep'])
+		d = {k:v for k,v in base_d.items() if isinstance(v, (np.ndarray, np.generic))}
+		d = {k:torch.tensor(v, requires_grad=False).to(device=device, dtype=dtype) for k,v in d.items()}
 		ii.update(d)
 			
 	def set_dtype(ii, dtype=torch.DoubleTensor):
 		print('setting default dtype: ', dtype)
-		torch.set_default_tensor_type(dtype)   # docs:todo ensure works when default not set AND can go float32 or 64
-		dtype = torch.randn((1,)).dtype
-		ii.update({k:v.to(dtype) for k,v in flat_any(ii.d).items() if isinstance(v, torch.Tensor)})
+		torch.set_default_tensor_type(dtype) 
+		ii.dtype = torch.randn((1,)).dtype
 
 def walk_ins_tree(
 	ins: type, 
 	k_update: str, 
 	v_update: Any,
-	sub_ins_tag='_p'
+	v_ref = None,
 ):
-	if hasattr(ins, k_update):
-		v_ref = getattr(ins, k_update)
-		v_update = type_me(v_update, v_ref)
-		setattr(ins, k_update, v_update)
-		print(f'updated {k_update}: \t {v_ref} ----> {v_update}')
-		return True
-	else:
-		sub_ins = ins_to_dict(ins, sub_ins_ins=True)
-		for v_ins in sub_ins.values():
-			is_updated = walk_ins_tree(v_ins, k_update, v_update)
-			if is_updated:
-				return True
+	
+	try:
+		if hasattr(ins, k_update):
+			v_ref = getattr(ins, k_update)
+			v_update = type_me(v_update, v_ref)
+			setattr(ins, k_update, v_update)
+			print(f'updated {k_update}: \t {v_ref} ----> {v_update}')
+			return True
+		else:
+			sub_ins = ins_to_dict(ins, sub_ins_ins=True)
+			for v_ins in sub_ins.values():
+				is_updated = walk_ins_tree(v_ins, k_update, v_update)
+				if is_updated:
+					return True
+	except Exception as e:
+		print(f'pyfig:walk_ins_tree k={k_update} v={v_update} v_ref={v_ref} ins={ins}')
 	return False
 	
  
@@ -679,11 +703,24 @@ def lo_ve(path:Path, data=None):
 			r = json.load,
 			w = json.dump,
 		),
-	)    
+		state = dict(
+			r = torch.save,
+			w = torch.load
+		),
+		cmd = dict(
+			r = lambda f: ' '.join(f.readlines()),
+			w = lambda x, f: f.writelines(x),
+		),
+		npy = dict(
+			rb = np.load,
+			wb = np.save,
+		)
+	)
 	path = Path(path)
 	if not path.suffix:
 		path = path.with_suffix('.pk')
 	file_type = path.suffix[1:]
+
 	mode = 'r' if data is None else 'w'
 	mode += 'b' if file_type in ['pk',] else ''
 	interface = file_interface_all[file_type][mode]
@@ -691,8 +728,12 @@ def lo_ve(path:Path, data=None):
 	if 'r' in mode and not path.exists():
 		return print('path: ', str(path), 'n\'existe pas- returning None')
 
-	with open(path, mode) as f:
+	if 'state' in file_type:
 		data = interface(data, f) if not data is None else interface(f)
+	else:
+		with open(path, mode) as f:
+			data = interface(data, f) if not data is None else interface(f)
+
 	return data
 
 def get_cls_d(ins: type, cls_k: list):
@@ -746,9 +787,6 @@ def ins_to_dict( # docs:pyfig:ins_to_dict can only be used when sub_ins have bee
 
 	if attr:
 		ins_kv += [(k, getattr(ins, k)) for k in cls_attr_k]
-
-	if debug:
-		sys.exit()
 
 	return flat_any(dict(ins_kv)) if flat else dict(ins_kv) 
 

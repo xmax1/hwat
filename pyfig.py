@@ -5,6 +5,7 @@ from pyfig_utils import PyfigBase, Param, niflheim_resource, Sub, dict_to_cmd
 
 from dump.systems import systems
 from dump.user_secret import user
+from datetime import datetime
 
 class Pyfig(PyfigBase):
 
@@ -12,6 +13,8 @@ class Pyfig(PyfigBase):
  
 	project:            str     = 'hwat'
 	run_name:       	Path	= 'run.py'
+	load_exp_state:		str		= ''
+
 	exp_name:       	str		= '' # default is demo
 	exp_id: 			str		= ''
 	group_exp: 			bool	= False
@@ -24,12 +27,16 @@ class Pyfig(PyfigBase):
 	seed:           	int   	= 808017424 # grr
 	dtype:          	str   	= 'float32'
 
-	n_step:         	int   	= 5000
-	n_eval_step:        int   	= 1000
-	n_pre_step:    		int   	= 500
+	n_step:         	int   	= 100
+	n_eval_step:        int   	= 100
+	n_pre_step:    		int   	= 50
+	step: 				int 	= None
 
 	log_metric_step:	int   	= 10
 	log_state_step: 	int   	= 10
+ 
+	save: bool = False
+	load_state: bool = False
 	
 	class data(PyfigBase.data):
 		system: 	str			= '' # overwrites base
@@ -41,10 +48,10 @@ class Pyfig(PyfigBase):
 
 		n_b:        int         = 512
 		n_corr:     int         = 20
-		n_equil_step:	int		= 100
 		acc_target: int         = 0.5
 
-		n_equil_step:int        = property(lambda _: 1e6//_.n_corr)
+		n_equil_step:	int		= 100
+		# n_equil_step:int        = property(lambda _: 1e6//_.n_corr)
 		n_e:        int         = property(lambda _: int(sum(_.a_z)))
 		n_u:        int         = property(lambda _: (_.spin + _.n_e)//2)
 		n_d:        int         = property(lambda _: _.n_e - _.n_u)
@@ -64,11 +71,12 @@ class Pyfig(PyfigBase):
 		n_pv:           int     = 16
 		n_fb:           int     = 2
 		n_det:          int     = 1
-  
+		
 		n_fbv:          int     = property(lambda _: _.n_sv*3+_.n_pv*2)
   
 	class opt(PyfigBase.opt):
 		opt_name: 		str		= 'RAdam'
+		scheduler_name: str		= 'OneCycleLR'
 		lr:  			float 	= 0.0001
 		max_lr:			float 	= 0.01
 		betas:			list	= [0.9, 0.999]
@@ -79,7 +87,7 @@ class Pyfig(PyfigBase):
 	class sweep(PyfigBase.sweep):
 		method: 		str		= 'grid'
 		parameters: 	dict 	= dict(
-			lr= Param(domain=(0.01,0.0001), log=True)
+			lr= Param(domain=(0.01, 0.0001), log=True)
 		)
 
 	class distribute(PyfigBase.distribute):
@@ -113,11 +121,38 @@ class Pyfig(PyfigBase):
 		- load exp_dir
 		- load sub_cls
 		- if c.load_exp is True
+
 		- normalised pretraining
-		
+
+		- save eval r and stats compressed
+
+		- estimated time until finished from # electrons, batch size 
+		- accelerate test
+		- accelerate seeds test 
+		- buy food 
+		- call rents
+		- cook dinner
+		- buy cigarettes 
+		- look at week
+		- wandb url goes to group :X:
+		- groups are exp_id + mode + reinit# :X:
+		- wandb reports
+		- distributed metrics: e_std_across_nodes
+		- save best mem for c in dump 
+  
+		- # size_param: 	list	= property(lambda _: [datetime.now().strftime("%d-%m-%y:%H-%M-%S"), _.n_b, _.n_e, _.n_fb, _.n_sv, _.n_pv])
+		- for memory map
+
+
+		- save opt c
+		- optimise so works well for 10 electrons
+		- name exps "optimising c"
+		- save as cmd line for line
+		- save as .c file 
+
+		- load c (but only model and data)
 		if c.load.load_exp_dir:
-			
-		
+
 		## pyfig:def
 		- machine rank = global relative id of machine/process ??
 

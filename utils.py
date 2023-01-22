@@ -1,3 +1,5 @@
+
+import traceback
 import inspect
 import json
 import os
@@ -56,6 +58,14 @@ def dump(path, data):
 	with open(path, 'wb') as f:
 		pk.dump(data, f, protocol=pk.HIGHEST_PROTOCOL)
 	return
+
+def get_max_n_from_filename(path: Path):
+	n_step_max = 0
+	for p in path.iterdir():
+		filename = p.name
+		n_step = re.match(pattern='i[0-9]*', string=filename)
+		n_step = max(n_step, n_step_max)
+	return n_step
 
 ### metrics
 
@@ -128,9 +138,41 @@ def add_to_Path(path: Path, string: str | Path):
 
 ### convert things
 
+from typing import Any 
+
+def type_check_v(name:str, v: Any, v_ref_type: type, default: Any):
+	if isinstance(v, v_ref_type):
+		return v
+	else:
+		print(f'did not pass type check \nSetting default: {name} v={v} type_v={type(v)} v_new={default})')
+		return default
+
+def debug_dict(*, msg: str='no msg', step=1, debug=False, **kw):
+
+	try:
+		debug = debug or os.environ.get('debug', '')=='True'
+		if step==1 and debug:
+			print(msg if isinstance(msg, str) else 'error: passing non-string to debug:msg')
+			for k, v in kw.items():
+				if isinstance(v, list):
+					v = {k+str(i):v_i for i,v_i in enumerate(v)}
+				if isinstance(v, dict):
+					debug_dict(msg=f'debug_dict-unpacking {k}', **v)
+				elif isinstance(v, torch.Tensor):
+					if v.ndim==0:
+						v = v[None]
+					print(k, v.shape, 'req_grad=', v.requires_grad, 'dev=', v.device, v.mean(), v.std())
+				else:
+					print('debug print: ', k, v)
+
+	except Exception as e:
+		tb = traceback.format_exc()
+		print(f'debug {msg} error {e}')
+		pprint.pprint(kw)
+		print('traceback: ', tb)
+
+
 def dict_to_cmd(d: dict, sep=' ', exclude_false=False, exclude_none=True):
-	if d.get('debug', False):
-		pprint.pprint(d)
 
 	items = d.items()
 	items = [(k, (v.tolist() if isinstance(v, np.ndarray) else v)) for (k,v) in items]
@@ -140,9 +182,7 @@ def dict_to_cmd(d: dict, sep=' ', exclude_false=False, exclude_none=True):
 		items = [(k, v) for (k,v) in items if not (d[k] is False)]
 	if exclude_none:
 		items = [(k, v) for (k,v) in items if not (d[k] is None)]
-	if d.get('debug', False):
-		pprint.pprint(list(items))
-
+  
 	return ' '.join([(f'--{k}' if v is True else f'--{k + sep + v}') for k,v in items if v])
 
 def cmd_to_dict(cmd:Union[str, list], ref:dict, delim:str=' --', d=None):
@@ -300,9 +340,20 @@ def dict_to_wandb(d:dict, parent='', sep='.', items:list=None)->dict:
 def npify(v):
 	return torch.tensor(v.numpy())
 
-def numpify_tree(v: dict):
+def numpify_tree(v: dict|list, return_flat_with_spec=False):
+	if not isinstance(v, dict|list):
+		if isinstance(v, torch.Tensor):
+			v: torch.Tensor = v.detach().cpu().numpy()
+		return v
 	leaves, treespec = optree.tree_flatten(v)
 	leaves = [v.detach().cpu().numpy() if isinstance(v, torch.Tensor) else v for v in leaves]
+	if return_flat_with_spec:
+		return leaves, treespec
+	return optree.tree_unflatten(treespec=treespec, leaves=leaves)
+
+def cpuify_tree(v: dict):
+	leaves, treespec = optree.tree_flatten(v)
+	leaves = [v.detach().cpu() for v in leaves if isinstance(v, torch.Tensor)]
 	return optree.tree_unflatten(treespec=treespec, leaves=leaves)
 
 ### torch things

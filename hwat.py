@@ -4,6 +4,10 @@ import torch.nn as nn
 from torch.jit import Final
 from functorch import grad
 import functorch
+import pprint
+from utils import debug_dict
+from copy import deepcopy
+import numpy as np
 
 def fb_block(s_v: torch.Tensor, p_v: torch.Tensor, n_u: int, n_d: int):
 	n_e = n_u + n_d
@@ -31,10 +35,9 @@ class Ansatz_fb(nn.Module):
 	debug: Final[bool]          		# return sign of wavefunction
 	a: torch.Tensor      
 
-	def __init__(ii, n_e, n_u, n_d, n_det, n_fb, n_pv, n_sv, a: torch.Tensor, *, device=None, dtype=None, with_sign=False, debug=False):
+	def __init__(ii, n_e, n_u, n_d, n_det, n_fb, n_pv, n_sv, a: torch.Tensor|np.ndarray, *, with_sign=False):
 		super(Ansatz_fb, ii).__init__()
   
-
 		ii.with_sign = with_sign      # return sign of wavefunction
 
 		ii.n_e: Final[int] = n_e      					# number of electrons
@@ -45,14 +48,15 @@ class Ansatz_fb(nn.Module):
 		ii.n_pv = n_pv                # latent dimension for 2-electron
 		ii.n_sv = n_sv                # latent dimension for 1-electron
 		ii.n_sv_out = 3*n_sv+2*n_pv
-  
-		ii.n_a = len(a)               # nuclei positions
+
+		ii.n_a = len(a)
+
 		n_p_in = 4
 		n_s_in = 4*ii.n_a
 	
 		s_size = [(n_s_in*3 + n_p_in*2, n_sv),] + [(ii.n_sv_out, n_sv),]*n_fb
 		p_size = [(n_p_in, n_pv),] + [(n_pv, n_pv),]*n_fb
-		print('layers: ', s_size)
+		print('model fb layers: \n', s_size, p_size)
 
 		ii.s_lay = nn.ModuleList([nn.Linear(*dim) for dim in s_size])
 		ii.p_lay = nn.ModuleList([nn.Linear(*dim) for dim in p_size])
@@ -65,12 +69,12 @@ class Ansatz_fb(nn.Module):
   
 		ii.w_final = nn.Linear(ii.n_det, 1, bias=False)
 
-		ii.register_buffer('a', a)    # tensor
-		ii.register_buffer('eye', torch.eye(ii.n_e).unsqueeze(-1).unsqueeze(0))
-		ii.register_buffer('ones', torch.ones((1, ii.n_det,)))
-		ii.register_buffer('zeros', torch.zeros((1, ii.n_det,)))
+		ii.register_buffer('a', a.detach().clone().requires_grad_(False), persistent=False)    # tensor
+		ii.register_buffer('eye', torch.eye(ii.n_e).unsqueeze(0).unsqueeze(-1).requires_grad_(False), persistent=False)
+		ii.register_buffer('ones', torch.ones((1, ii.n_det,)).requires_grad_(False), persistent=False)
+		ii.register_buffer('zeros', torch.zeros((1, ii.n_det,)).requires_grad_(False), persistent=False)
   
-		print(s_size, p_size)
+		debug_dict(msg='model buffers', buffers=list(ii.buffers()))
 
 	def forward(ii, r: torch.Tensor) -> torch.Tensor:
 		
@@ -90,12 +94,12 @@ class Ansatz_fb(nn.Module):
 		
 		s_v_block = fb_block(s_v, p_v, ii.n_u, ii.n_d)
 
-		for l_i, (V, W) in enumerate(zip(ii.s_lay, ii.p_lay)):
+		for l_i, (s_lay, p_lay) in enumerate(zip(ii.s_lay, ii.p_lay)):
 
-			s_v_tmp = torch.tanh(V(s_v_block))
+			s_v_tmp = torch.tanh(s_lay(s_v_block))
 			s_v = s_v_tmp + s_v if l_i else s_v_tmp
 
-			p_v_tmp = torch.tanh(W(p_v))
+			p_v_tmp = torch.tanh(p_lay(p_v))
 			p_v = p_v_tmp + p_v if l_i else p_v_tmp
 
 			s_v_block = fb_block(s_v, p_v, ii.n_u, ii.n_d) # (n_b, n_e, 3n_sv+2n_pv)
@@ -155,7 +159,7 @@ class Ansatz_fb(nn.Module):
 
 compute_vv = lambda v_i, v_j: torch.unsqueeze(v_i, dim=-2)-torch.unsqueeze(v_j, dim=-3)
 
-def compute_emb(r, terms, a=None):  
+def compute_emb(r: torch.Tensor, terms: list, a=None):  
 	dtype, device = r.dtype, r.device
 	n_e, _ = r.shape
 	eye = torch.eye(n_e)[..., None]
@@ -172,7 +176,7 @@ def compute_emb(r, terms, a=None):
 	if 'rr' in terms:
 		z += [compute_vv(r, r)]
 	if 'rr_len' in terms:  # 2nd order derivative of norm is undefined, so use eye
-		z += [torch.linalg.norm(compute_vv(r, r)+eye, dim=-1, keepdims=True) * (torch.ones((n_e,n_e,1), device=device, dtype=dtype)-eye)]
+		z += [torch.linalg.norm(compute_vv(r, r)+eye, dim=-1, keepdims=True)]
 	return torch.concatenate(z, dim=-1)
 
 ### energy ###
@@ -302,13 +306,14 @@ def keep_around_points(r, points, l=1.):
 	r = r + points[None, ...]
 	return r
 
-def get_center_points(n_e, center: torch.Tensor, _r_cen=None):
+
+def get_center_points(n_e, center: np.ndarray|torch.Tensor, _r_cen=None):
 	""" from a set of centers, selects in order where each electron will start """
 	""" loop concatenate pattern """
 	for r_i in range(n_e):
 		r_i = center[[r_i % len(center)]]
 		_r_cen = r_i if _r_cen is None else torch.concatenate([_r_cen, r_i])
-	return torch.Tensor(_r_cen)
+	return _r_cen
 
 
 def init_r(n_b, n_e, center_points: torch.Tensor, std=0.1):
