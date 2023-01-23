@@ -13,9 +13,8 @@ from functools import partial
 from itertools import islice, product
 from pathlib import Path
 from time import sleep, time
-from typing import Any, Iterable, Union
+from typing import Any, Iterable, Union, Callable
 import pprint
-
 import numpy as np
 import optree
 import paramiko
@@ -23,31 +22,6 @@ import torch
 import yaml
 
 ### load (lo) and save (ve) lo_ve things 
-file_interface_all = dict(
-	pk = dict(
-		rb = partial(pk.load, protocol=pk.HIGHEST_PROTOCOL),
-		wb = partial(pk.dump, protocol=pk.HIGHEST_PROTOCOL),
-	),
-	yaml = dict(
-		r = yaml.load,
-		w = yaml.dump,
-	),
-	json = dict(
-		r = json.load,
-		w = json.dump,
-	),
-)      
-
-def lo_ve(path:Path, data=None):
-	if not path.suffix:
-		path = path.with_suffix('.pk')
-	file_type = path.suffix[1:]
-	mode = 'r' if data is None else 'w'
-	mode += 'b' if file_type in ['pk',] else ''
-	interface = file_interface_all[file_type][mode]
-	with open(path, mode) as f:
-		data = interface(data, f) if not data is None else interface(f)
-	return data
 
 def load(path):
 	with open(path, 'rb') as f:
@@ -138,8 +112,6 @@ def add_to_Path(path: Path, string: str | Path):
 
 ### convert things
 
-from typing import Any 
-
 def type_check_v(name:str, v: Any, v_ref_type: type, default: Any):
 	if isinstance(v, v_ref_type):
 		return v
@@ -147,21 +119,24 @@ def type_check_v(name:str, v: Any, v_ref_type: type, default: Any):
 		print(f'did not pass type check \nSetting default: {name} v={v} type_v={type(v)} v_new={default})')
 		return default
 
-def debug_dict(*, msg: str='no msg', step=1, debug=False, **kw):
+def debug_dict(*, msg: str='no msg', debug_step: int=1, **kw):
 
 	try:
-		debug = debug or os.environ.get('debug', '')=='True'
-		if step==1 and debug:
+		if debug_step==1 and ('t' in os.environ.get('debug', '').lower()):
 			print(msg if isinstance(msg, str) else 'error: passing non-string to debug:msg')
 			for k, v in kw.items():
+
 				if isinstance(v, list):
 					v = {k+str(i):v_i for i,v_i in enumerate(v)}
+
 				if isinstance(v, dict):
 					debug_dict(msg=f'debug_dict-unpacking {k}', **v)
+	
 				elif isinstance(v, torch.Tensor):
 					if v.ndim==0:
 						v = v[None]
 					print(k, v.shape, 'req_grad=', v.requires_grad, 'dev=', v.device, v.mean(), v.std())
+
 				else:
 					print('debug print: ', k, v)
 
@@ -351,23 +326,35 @@ def numpify_tree(v: dict|list, return_flat_with_spec=False):
 		return leaves, treespec
 	return optree.tree_unflatten(treespec=treespec, leaves=leaves)
 
-def cpuify_tree(v: dict):
-	leaves, treespec = optree.tree_flatten(v)
-	leaves = [v.detach().cpu() if isinstance(v, torch.Tensor) else v for v in leaves]
-	return optree.tree_unflatten(treespec=treespec, leaves=leaves)
-
 ### torch things
+
+def flat_wrap(wrap_fn: Callable) -> Callable:
+
+	def _flat_wrap(d: dict) -> dict:
+		d_v, treespec = optree.tree_flatten(d)
+		d_flat = wrap_fn(d_v)
+		return optree.tree_unflatten(treespec=treespec, leaves=d_flat)
+
+	return _flat_wrap
+
+def npify_list(d_v: list) -> dict:
+	torch_v = filter(lambda v: isinstance(v, torch.Tensor), d_v)
+	not_torch_v = filter(lambda v: not isinstance(v, torch.Tensor), d_v) 
+	return list(not_torch_v) + list([v.detach().cpu().numpy() for v in torch_v])
+
+npify_tree: Callable = flat_wrap(npify_list)
 
 if torch:
 
-	def compute_metrix(d:dict, mode='tr', fancy=None, ignore = [], _d = {}):
+	def compute_metrix(d:dict, mode='tr', ignore=[], _d={}):
 		
-		for k,v in d.copy().items():
-			if any([ig in k for ig in ignore+['step',]]):
-				continue 
-			
-			if not fancy is None:
-				k = fancy.get(k, k)
+		fancy = dict()
+
+		d = flat_any(d)
+		
+		for k,v in d.items():
+
+			k = fancy.get(k, k)
 
 			v_mean = optree.tree_map(lambda x: x.mean() if not np.isscalar(x) else x, v)  if not np.isscalar(v) else v
 			v_std = optree.tree_map(lambda x: x.std() if not np.isscalar(x) else x, v)  if not np.isscalar(v) else v
@@ -381,6 +368,7 @@ if torch:
 			_d = collect_stats(k, v_mean, _d, p=group, suf=r'_\mu$')
 			_d = collect_stats(k, v_std, _d, p=group+'/std', suf=r'_\sigma$')
 
+		# debug_dict(msg='metrix', metrix=metrix, step=step//c.log_metric_step)
 		return _d
 
 	def torchify_tree(v: np.ndarray, v_ref: torch.Tensor):

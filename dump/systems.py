@@ -9,6 +9,15 @@ systems = dict(
         a_z = [4.,],
         info = 'I have wanted to simulate this system since I learned about beryllium in chemistry at school :)',
     ),
+    Ne = dict(
+        nametag = 'Neon',
+        precision = '+',
+        charge = 0,
+        spin = 0,
+        a = [[0.0, 0.0, 0.0],],
+        a_z = [10.,],
+        info = 'Baseline',
+    ),
     O2_neutral_triplet = dict(
         nametag = 'O2_Triplet',
         precision = '+',

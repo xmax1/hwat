@@ -21,7 +21,7 @@ from functools import partial
 import numpy as np
 from utils import get_max_n_from_filename
 
-from utils import dict_to_cmd, cmd_to_dict, dict_to_wandb
+from utils import dict_to_cmd, cmd_to_dict, dict_to_wandb, debug_dict
 from utils import mkdir, iterate_n_dir, gen_time_id, add_to_Path, dump, load
 from utils import get_cartesian_product, type_me, run_cmds, flat_any 
 from dump.systems import systems
@@ -81,9 +81,10 @@ class PyfigBase:
 	run_name:       	Path	= ''
 	exp_name:       	str		= '' # default is demo
 	exp_id: 			str		= ''
+	run_id:		        str		= ''
 	group_exp: 			bool	= False
 
-	multimode: 			str		= '' # 'max_mem:profile:opt_hypam:train:evaluate'
+	multimode: 			str		= '' # 'max_mem:profile:opt_hypam:train:eval'
 	mode: 				str		= ''
 	debug: 				bool    = False
 	run_sweep:      	bool    = False
@@ -97,8 +98,10 @@ class PyfigBase:
 
 	log_metric_step:	int   	= 0
 	log_state_step: 	int   	= 0
- 
+
 	lo_ve_path:			str 	= ''
+
+	group_i: 			int 	= property(lambda _: _._group_i)
 	
 	class data(Sub):
 		system: 	str = ''
@@ -150,11 +153,13 @@ class PyfigBase:
 		wb_mode: 		str		= ''
 		wb_sweep: 		bool	= False
 		sweep_id: 		str 	= ''
-  
+		wb_run_path:	str 	= ''
+		wb_run_id:		str 	= ''
+
 		entity:			str		= property(lambda _: _._p.project)
 		program: 		Path	= property(lambda _: Path( _._p.project_dir, _._p.run_name))
 		sweep_path_id:  str     = property(lambda _: f'{_.entity}/{_._p.project}/{_.sweep_id}')
-		wb_type: 		str		= property(lambda _: _.wb_sweep*f'sweeps/{_.sweep_id}' or f'group/{_._p.exp_name}/workspace') #  or f'runs/{_._p.exp_id} _._p.group_exp*f'groups' or 'runs') # or _._p.run_sweep*f'groups/{_._p.exp_name}'
+		wb_type: 		str		= property(lambda _: _.wb_sweep*f'sweeps/{_.sweep_id}' or f'groups/{_._p.exp_name}/workspace') #  or f'runs/{_._p.exp_id} _._p.group_exp*f'groups' or 'runs') # or _._p.run_sweep*f'groups/{_._p.exp_name}'
 		run_url: 		str		= property(lambda _: f'https://wandb.ai/{_.entity}/{_._p.project}/{_.wb_type}')
 		_wb_agent: 		bool	= False
   
@@ -252,11 +257,13 @@ class PyfigBase:
 			loss.backward(create_graph=opt_is_adahess)
 
 		def set_device(ii, device=None):
+			ii.device = 'cpu'
 			is_cuda = torch.cuda.is_available()
-			torch_curr_device = torch.cuda.current_device()
-			torch_n_device = torch.cuda.device_count()
-			cuda_visible_devices = os.environ['CUDA_VISIBLE_DEVICES']
-			ii.device = 'cuda' if is_cuda else 'cpu'
+			if is_cuda:
+				torch_curr_device = torch.cuda.current_device()
+				torch_n_device = torch.cuda.device_count()
+				cuda_visible_devices = os.environ['CUDA_VISIBLE_DEVICES']
+				ii.device = 'cuda' # default is cpu
 			return ii.device
 
 		def set_seed(ii, seed=None):
@@ -285,12 +292,11 @@ class PyfigBase:
 	exp_data_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exp_data'))
 	log_dir: 			Path    = property(lambda _: _.cluster_dir)
 
-	_group_i: int = 0
-
 	_ignore_f = ['commit', 'pull', 'backward']
 	_ignore_c = ['sweep',]
 	ignore: list = ['ignore', 'd', 'cmd', 'sub_ins', 'd_flat'] + _ignore_f + _ignore_c
 	_sub_ins_tag: str = '_p'
+	_group_i: int = 0
 
 	def __init__(ii, 
 		notebook:bool=False,  # removes sys_arg for notebooks
@@ -315,28 +321,25 @@ class PyfigBase:
 			os.environ['debug'] = 'True'
 
 		ii.debug_log([sys_arg, dict(os.environ.items()), ii.d], ['log_sys_arg.log', 'log_env_run.log', 'log_d.log'])
-		
-	def __post_init__(ii, post_init_arg: dict=None, **other_arg):
-		""" application specific initialisations """
-		update = ((post_init_arg or {}) | (other_arg or {}))
-		ii.update(update)
 
 	def start(ii):
 
 		if ii.distribute.head and int(ii.distribute.rank)==0:
-			print('running')
 			assert ii.resource.submit == False
 
+			print('start:wb:init creating the group')
 			ii.setup_exp_dir(group_exp= ii.group_exp, force_new_id= False)
 
-			if ii.wb.sweep_id:
-				wandb.init()
-				ii.debug_log([ii.d,], ['log_agent_arg.log',])
-				# from run import run
-				# wandb.agent(ii.wb.sweep_id, function=run, project=ii.project, entity=ii.wb.entity, count=1)
-				# https://docs.wandb.ai/guides/sweeps/local-controller
-				print('After Agent')
-				return 
+			ii._group_i += 1
+			if ii._group_i==1:
+				ii.run_id = ii.exp_id
+			
+			ii.run_id = ii.exp_id + '.' + ii.mode + '.' + str(ii._group_i)
+			ii.wb.wb_run_path = f'{ii.wb.entity}/{ii.project}/{ii.run_id}'
+			ii.run_id = '.'.join(ii.wb.wb_run_id.split('.'))  # no / no : - in mode _ in names try \ + | .
+			
+			print('start:wb:init:exp_dir = \n ***', ii.exp_dir, '***')
+			ii.setup_exp_dir(group_exp= False, force_new_id= False)
 
 			ii.wb.run = wandb.init(
 				project     = ii.project, 
@@ -345,10 +348,11 @@ class PyfigBase:
 				entity      = ii.wb.entity,	
 				mode        = ii.wb.wb_mode,
 				config      = dict_to_wandb(ii.d_flat),
-				id			= ii.exp_id + '-' + ii.mode + '-' + str(ii.group_i),
+				id			= ii.run_id,
 				tags 		= [ii.mode,],
 				reinit 		= not (ii.wb.run is None)
 			)
+
 
 	def pf_submit(ii):
 
@@ -411,11 +415,6 @@ class PyfigBase:
 	def sub_ins(ii):
 		return dict()
 
-	@property
-	def group_i(ii):
-		ii._group_i += 1
-		return ii._group_i
-
 	def init_sub_cls(ii,) -> dict:
 		sub_cls = ins_to_dict(ii, sub_cls=True)
 		for sub_k, sub_v in sub_cls.items():
@@ -432,10 +431,10 @@ class PyfigBase:
 			exp_name = ii.exp_name or 'junk'
 			sweep_dir = 'sweep'*ii.run_sweep
 			exp_group_dir = Path(ii.dump_exp_dir, sweep_dir, exp_name)
-			exp_group_dir = iterate_n_dir(exp_group_dir, group_exp=group_exp) # does not append -{i} if group allowed
+			exp_group_dir = iterate_n_dir(exp_group_dir, group_exp=group_exp) # pyfig:setup_exp_dir does not append -{i} if group allowed
 			ii.exp_name = exp_group_dir.name
 
-		print('exp_dir: ', ii.exp_dir)  # is property
+		print('exp_dir: ', ii.exp_dir) 
 		[mkdir(p) for _, p in ii._paths.items()]
 	
 	def get_run_or_sweep_d(ii,):
@@ -501,19 +500,22 @@ class PyfigBase:
 		d = flat_any(args if args else {}) | ii.d_flat | (kw or {})
 		d_k = inspect.signature(f.__init__).parameters.keys()
 		d = {k:v for k,v in d.items() if k in d_k} 
-		print(d, d_k)
 		return f(**d)
 
-	def update(ii, c_update: dict = None, **kw):
-		c_update = (c_update or {}) | (kw or {})
+	def update(ii, _arg: dict=None, c_update: dict=None, **kw):
+		c_update = (_arg or {}) | (c_update or {}) | (kw or {})
 		arg = flat_any(c_update)
 		c_keys = list(ii.d_flat.keys())
 		arg = dict(filter(lambda kv: kv[0] in c_keys, arg.items()))
+
 		for k_update, v_update in deepcopy(arg).items():
 			is_updated = walk_ins_tree(ii, k_update, v_update)
 			if not is_updated:
 				print(f'not updated: k={k_update} v={v_update} type={type(v_update)}')
 
+		not_arg = dict(filter(lambda kv: kv[0] not in c_keys, arg.items()))
+		debug_dict(msg='update:not = \n', not_arg=not_arg)
+		
 	@staticmethod
 	def log(info: dict|str, path: Path):
 		mkdir(path)
@@ -688,7 +690,7 @@ def setup_distribute(
 def backward(ii, loss: torch.Tensor, sync: dict):
 	loss.backward()
 
-def lo_ve(path:Path, data=None):
+def lo_ve(path:Path=None, data: dict=None):
 	""" loads anything you want (add other interfaces as needed) 
 
 	1- str -> pathlib.Path
@@ -711,8 +713,8 @@ def lo_ve(path:Path, data=None):
 			w = json.dump,
 		),
 		state = dict(
-			r = torch.save,
-			w = torch.load
+			r = torch.load,
+			w = torch.save
 		),
 		cmd = dict(
 			r = lambda f: ' '.join(f.readlines()),
@@ -736,7 +738,7 @@ def lo_ve(path:Path, data=None):
 		return print('path: ', str(path), 'n\'existe pas- returning None')
 
 	if 'state' in file_type:
-		data = interface(data, f) if not data is None else interface(f)
+		data = interface(data, path) if not data is None else interface(path)
 	else:
 		with open(path, mode) as f:
 			data = interface(data, f) if not data is None else interface(f)
@@ -953,5 +955,31 @@ def ins_to_dict( # docs:pyfig:ins_to_dict can only be used when sub_ins have bee
 			print(_body)
 		except Exception as e:
 			print(e)
-	  
+
+	file_interface_all = dict(
+		pk = dict(
+			rb = pk.load,
+			wb = partial(pk.dump, protocol=pk.HIGHEST_PROTOCOL),
+		),
+		yaml = dict(
+			r = yaml.load,
+			w = yaml.dump,
+		),
+		json = dict(
+			r = json.load,
+			w = json.dump,
+		),
+		state = dict(
+			r = torch.save,
+			w = torch.load
+		),
+		cmd = dict(
+			r = lambda f: ' '.join(f.readlines()),
+			w = lambda x, f: f.writelines(x),
+		),
+		npy = dict(
+			rb = np.load,
+			wb = np.save,
+		)
+	) 
 """

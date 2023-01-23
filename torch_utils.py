@@ -107,12 +107,13 @@ def gen_profile(
 	return init_d
 
 
-def get_max_mem_c(fn: Callable, max_mem_min=6, max_mem_max=15, **kw) -> dict:
+def get_max_mem_c(fn: Callable, max_mem_min=6, max_max_mem=15, **kw) -> dict:
 	t = torch.cuda.get_device_properties(0).total_memory // 1024 // 1024
-	print('total memory on device: ', t)
+
+	print('get_max_mem_c:total memory on device: ', t)
 	r = torch.cuda.memory_reserved(0)
 	a = torch.cuda.memory_allocated(0)
-	for n_b_power in range(max_mem_min, max_mem_max):
+	for n_b_power in range(max_mem_min, max_max_mem):
 		try:
 			n_b = 2**n_b_power
 			print(f'max mem trial: n_b={n_b}, n_b_power={n_b_power}')
@@ -121,36 +122,42 @@ def get_max_mem_c(fn: Callable, max_mem_min=6, max_mem_max=15, **kw) -> dict:
 			print(f'n_b {n_b} used {mem_used} out of {t}')
 			torch.cuda.empty_cache()
 			if mem_used > t/2:
-				print('get_mem_max: b_s is ', n_b)
+				print('get_max_mem: b_s is ', n_b)
 				return dict(n_b=n_b, n_b_max=n_b, max_mem_alloc=mem_used)
 		except Exception as e:
-			print('get_mem_max error: ', fn, max_mem_min, e, n_b)
+			print('get_max_mem error: ', fn, max_mem_min, e, n_b)
 			n_b = 2**(n_b_power-1)
-			debug_dict(msg='mem_max-kw', d=kw)
+			debug_dict(msg='max_mem-kw', d=kw)
 			break
 
-	print('get_mem_max: b_s is ', n_b)
+	print('get_max_mem: b_s is ', n_b)
 	return dict(n_b=n_b, n_b_max=n_b)
 
-@torch.no_grad()
+
 def update_model(
+	step: int,
 	model: torch.nn.Module, 
 	grads: dict[str:torch.Tensor]=None, 
 	params: dict[str:torch.Tensor]=None,
-	step: int = 0
 ):
-	debug_dict(msg='model params: ', model_named=dict(model.named_parameters()))
-	debug_dict(msg='update:new grads: ', grads=grads)
-	debug_dict(msg='update:new params: ', params=params)
+
+	# debug_dict(msg='model params: ', model_named=dict(model.named_parameters()), debug_step=step)
+	# debug_dict(msg='update:new grads: ', grads=grads, debug_step=step)
+	# debug_dict(msg='update:new params: ', params=params, debug_step=step)
+
+	# model.zero_grad()
 
 	try:
-		for k, p in model.named_parameters():
-			if params is not None:
-				p.copy_(params[k])
+		with torch.no_grad():
+			for k, p in model.named_parameters():
+			# 	if params is not None:
+			# 		p.copy_(params[k])
 
-			if grads is not None:
-				p.grad.copy_(grads[k])
-
+				if grads is not None:
+					p.grad.copy_(grads[k])
+					# p.grad += grads[k]
+				
+					print(grads[k].mean())
 	except:
 		print('model, params, grads', len(grads or {}), len(params or {}), len(list(model.named_parameters())))
 		grads = grads or dict(model.named_parameters())
@@ -220,7 +227,8 @@ def get_scheduler(
 
 	return scheduler
 
-from utils import get_max_n_from_filename, lo_ve
+from utils import get_max_n_from_filename
+from pyfig_utils import lo_ve
  
 def load(c: PyfigBase, path: Path=None, **things_to_load):
 

@@ -19,24 +19,25 @@ class Pyfig(PyfigBase):
 	exp_id: 			str		= ''
 	group_exp: 			bool	= False
 
-	multimode: 			str		= 'train:evaluate' # 'max_mem:profile:opt_hypam:train:evaluate'
+	multimode: 			str		= 'train:eval' # 'max_mem:profile:opt_hypam:train:eval'
 	mode: 				str		= ''
 	debug: 				bool    = False
 	run_sweep:      	bool    = False
+	record: 			bool	= False
 	
 	seed:           	int   	= 808017424 # grr
 	dtype:          	str   	= 'float32'
 
 	n_step:         	int   	= 100
-	n_eval_step:        int   	= 100
 	n_pre_step:    		int   	= 50
-	step: 				int 	= None
 
+	step: 				int 	= None
 	log_metric_step:	int   	= 10
-	log_state_step: 	int   	= 10
+	log_state_step: 	int   	= property(lambda _: _.n_step//10)
  
+	n_eval_step:        int   	= 100
+	eval_me: 			list 	= ['e',]
 	step: int = -1
-	group_id: int = 0
 	
 	class data(PyfigBase.data):
 		system: 	str			= '' # overwrites base
@@ -89,9 +90,9 @@ class Pyfig(PyfigBase):
 		hessian_power: 	float 	= 1.0
 
 	class sweep(PyfigBase.sweep):
-		method: 		str		= 'grid'
+		# method: 		str		= 'grid'
 		parameters: 	dict 	= dict(
-			lr=Param(domain=(0.0001, 1.), log=True),
+			lr		=Param(domain=(0.0001, 1.), log=True),
 			opt_name=Param(values=['AdaHessian',  'RAdam'], dtype=str),
 			max_lr=Param(values=[0.1, 0.01, 0.001], dtype=str),
 		)
@@ -105,19 +106,20 @@ class Pyfig(PyfigBase):
 
 	class wb(PyfigBase.wb):
 		wb_mode = 'online'
-		print('loading wandb from base class')
 
 	def __init__(ii, notebook: bool=False, sweep: dict={}, c_init: dict={}, **other_arg) -> None:
 
-		print('initialising')
+		print('pyfig:init')
 		super().__init__(notebook=notebook, c_init=c_init, sweep=sweep, **other_arg)
 
-		system = systems.get(ii.data.system, {})
 
-		print('initialising system')
+		print('pyfig:init:system')
+		system = systems.get(ii.data.system, {})
 		ii.update(system)
   
-		ii.pf_submit() # docs:runfig
+
+		ii.pf_submit()
+
 
 		"""  
 		# pyfig

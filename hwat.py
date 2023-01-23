@@ -234,10 +234,12 @@ def dep_ke_comp(
 	e_jvp = gg + g**2
 	return -0.5 * e_jvp.sum(-1)
 
+from typing import Callable
 
+@torch.enable_grad()
 def compute_ke_b(
 	model: nn.Module, 
-	model_rv,
+	model_rv: Callable,
 	r: torch.Tensor,
 	ke_method='vjp', 
 	elements=False
@@ -245,53 +247,66 @@ def compute_ke_b(
 	dtype, device = r.dtype, r.device
 	n_b, n_e, n_dim = r.shape
 	n_jvp = n_e * n_dim
-
-	ones = torch.ones((n_b,), device=device, dtype=dtype)
-	eyes = torch.eye(n_jvp, dtype=dtype, device=device)[None].repeat((n_b, 1, 1))
  
-	r_flat = r.reshape(n_b, n_jvp)
+	with torch.enable_grad(): # must contain the function call
 
-	@torch.enable_grad()
-	def ke_grad_grad_method(r_flat):
-		def grad_fn(_r: torch.Tensor):
-			lp: torch.Tensor = model(_r)
-			g = torch.autograd.grad(lp.sum(), _r, create_graph=True)[0]
-			return g
+		ones = torch.ones((n_b,), device=device, dtype=dtype).requires_grad_(True)
+		eyes = torch.eye(n_jvp, dtype=dtype, device=device)[None].repeat((n_b, 1, 1)).requires_grad_(True)
 
-		def grad_grad_fn(_r: torch.Tensor):
-			g = grad_fn(_r)
-			ggs = [torch.autograd.grad(g[:, i], _r, grad_outputs=ones, retain_graph=True)[0] for i in range(n_jvp)]
-			ggs = torch.stack(ggs, dim=-1)
-			return torch.diagonal(ggs, dim1=1, dim2=2)
+		r_flat = r.reshape(n_b, n_jvp).detach().contiguous()  # need to activate gradient bc inherits from r 
+		r_flat.requires_grad = True
+		# params = [p.detach().requires_grad_(True) for p in model.parameters()]
+		# for p in model.parameters():
+		# 	p.requires_grad = True
+		# model_rv = lambda _r: model_fn_vmap(params, _r)
 
-		r_flat = r_flat.requires_grad_(True).contiguous()
-		g = grad_fn(r_flat)
-		gg = grad_grad_fn(r_flat)
-		return g, gg
+		# debug_dict(msg='ke', r_flat=r_flat.clone(), params=params)
 
-	@torch.enable_grad()
-	def ke_vjp_method(r_flat):
-		grad_fn = functorch.grad(model_rv)
-		g, fn = functorch.vjp(grad_fn, r_flat)
-		gg = torch.stack([fn(eyes[..., i])[0][:, i] for i in range(n_jvp)], dim=-1)
-		return g, gg
+		@torch.enable_grad()
+		def ke_grad_grad_method(r_flat):
 
-	@torch.enable_grad()
-	def ke_jvp_method(r_flat):
-		grad_fn = functorch.grad(model_rv)
-		jvp_all = [functorch.jvp(grad_fn, (r_flat,), (eyes[:, i],)) for i in range(n_jvp)]  # (grad out, jvp)
-		g = torch.stack([x[:, i] for i, (x, _) in enumerate(jvp_all)], dim=-1)
-		gg = torch.stack([x[:, i] for i, (_, x) in enumerate(jvp_all)], dim=-1)
-		return g, gg
+			@torch.enable_grad()
+			def grad_fn(_r: torch.Tensor):
+				lp: torch.Tensor = model(_r)
+				g = torch.autograd.grad(lp.sum(), _r, create_graph=True)[0]
+				return g
 
-	ke_function = dict(
-		grad_grad	= ke_grad_grad_method, 
-		vjp			= ke_vjp_method, 
-		jvp			= ke_jvp_method
-	)[ke_method]
+			@torch.enable_grad()
+			def grad_grad_fn(_r: torch.Tensor):
+				g = grad_fn(_r)
+				ggs = [torch.autograd.grad(g[:, i], _r, grad_outputs=ones, retain_graph=True)[0] for i in range(n_jvp)]
+				ggs = torch.stack(ggs, dim=-1)
+				return torch.diagonal(ggs, dim1=1, dim2=2)
 
-	g, gg = ke_function(r_flat)
+			with torch.enable_grad():
+				g = grad_fn(r_flat)
+				gg = grad_grad_fn(r_flat)
+			return g, gg
+
+		@torch.enable_grad()
+		def ke_vjp_method(r_flat):
+			grad_fn = functorch.grad(model_rv)
+			g, fn = functorch.vjp(grad_fn, r_flat)
+			gg = torch.stack([fn(eyes[..., i])[0][:, i] for i in range(n_jvp)], dim=-1)
+			return g, gg
+
+		@torch.enable_grad()
+		def ke_jvp_method(r_flat):
+			grad_fn = functorch.grad(model_rv)
+			jvp_all = [functorch.jvp(grad_fn, (r_flat,), (eyes[:, i],)) for i in range(n_jvp)]  # (grad out, jvp)
+			g = torch.stack([x[:, i] for i, (x, _) in enumerate(jvp_all)], dim=-1)
+			gg = torch.stack([x[:, i] for i, (_, x) in enumerate(jvp_all)], dim=-1)
+			return g, gg
+
+		ke_function = dict(
+			grad_grad	= ke_grad_grad_method, 
+			vjp			= ke_vjp_method, 
+			jvp			= ke_jvp_method
+		)[ke_method]
+
+		g, gg = ke_function(r_flat) # ke must be within enable grad context
  
+
 	if elements:
 		return g, gg
 
@@ -371,10 +386,11 @@ def sample_b(
 			del b_larger
 
 		acc_all += acc_test
+
 		a_larger, b_larger = is_a_larger(torch.absolute(0.5-acc), torch.absolute(0.5-acc_test))
 
 		acc = a_larger*acc_test + b_larger*acc
-  
 		deltar = a_larger*dr_test + b_larger*deltar
  
-	return dict(r=r_0, acc=acc_all/2., deltar=deltar)
+	return r_0, acc, deltar
+	# return dict(r=r_0, acc=acc_all/2., deltar=deltar)
