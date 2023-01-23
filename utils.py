@@ -353,7 +353,7 @@ def numpify_tree(v: dict|list, return_flat_with_spec=False):
 
 def cpuify_tree(v: dict):
 	leaves, treespec = optree.tree_flatten(v)
-	leaves = [v.detach().cpu() for v in leaves if isinstance(v, torch.Tensor)]
+	leaves = [v.detach().cpu() if isinstance(v, torch.Tensor) else v for v in leaves]
 	return optree.tree_unflatten(treespec=treespec, leaves=leaves)
 
 ### torch things

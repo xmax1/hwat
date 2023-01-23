@@ -248,11 +248,11 @@ def compute_ke_b(
 
 	ones = torch.ones((n_b,), device=device, dtype=dtype)
 	eyes = torch.eye(n_jvp, dtype=dtype, device=device)[None].repeat((n_b, 1, 1))
-
+ 
 	r_flat = r.reshape(n_b, n_jvp)
-	r_flat = r_flat.requires_grad_(True).contiguous()
 
-	def ke_grad_grad_method():
+	@torch.enable_grad()
+	def ke_grad_grad_method(r_flat):
 		def grad_fn(_r: torch.Tensor):
 			lp: torch.Tensor = model(_r)
 			g = torch.autograd.grad(lp.sum(), _r, create_graph=True)[0]
@@ -264,17 +264,20 @@ def compute_ke_b(
 			ggs = torch.stack(ggs, dim=-1)
 			return torch.diagonal(ggs, dim1=1, dim2=2)
 
+		r_flat = r_flat.requires_grad_(True).contiguous()
 		g = grad_fn(r_flat)
 		gg = grad_grad_fn(r_flat)
 		return g, gg
 
-	def ke_vjp_method():
+	@torch.enable_grad()
+	def ke_vjp_method(r_flat):
 		grad_fn = functorch.grad(model_rv)
 		g, fn = functorch.vjp(grad_fn, r_flat)
 		gg = torch.stack([fn(eyes[..., i])[0][:, i] for i in range(n_jvp)], dim=-1)
 		return g, gg
 
-	def ke_jvp_method():
+	@torch.enable_grad()
+	def ke_jvp_method(r_flat):
 		grad_fn = functorch.grad(model_rv)
 		jvp_all = [functorch.jvp(grad_fn, (r_flat,), (eyes[:, i],)) for i in range(n_jvp)]  # (grad out, jvp)
 		g = torch.stack([x[:, i] for i, (x, _) in enumerate(jvp_all)], dim=-1)
@@ -287,13 +290,13 @@ def compute_ke_b(
 		jvp			= ke_jvp_method
 	)[ke_method]
 
-	g, gg = ke_function()
+	g, gg = ke_function(r_flat)
  
 	if elements:
 		return g, gg
 
 	e_jvp = gg + g**2
-	return -0.5 * e_jvp.sum(-1)
+	return -0.5 * e_jvp.sum(-1).detach().requires_grad_(False)
 
 ### sampling ###
 def keep_around_points(r, points, l=1.):
@@ -352,17 +355,15 @@ def sample_b(
 	for dr_test in [deltar, deltar_1]:
 		for _ in torch.arange(1, n_corr+1):
 
-			with torch.no_grad():
+			r_1 = r_0 + torch.randn_like(r_0, device=device, dtype=dtype, layout=torch.strided)*dr_test
+			p_1 = torch.exp(model(r_1))**2
+			
+			a_larger, b_larger = is_a_larger(p_1/p_0, torch.rand_like(p_1, device=device, dtype=dtype, layout=torch.strided))
 
-				r_1 = r_0 + torch.randn_like(r_0, device=device, dtype=dtype, layout=torch.strided)*dr_test
-				p_1 = torch.exp(model(r_1))**2
-				
-				a_larger, b_larger = is_a_larger(p_1/p_0, torch.rand_like(p_1, device=device, dtype=dtype, layout=torch.strided))
+			p_0 = a_larger*p_1 + b_larger*p_0
+			r_0 = a_larger.unsqueeze(-1).unsqueeze(-1)*r_1 + b_larger.unsqueeze(-1).unsqueeze(-1)*r_0
 
-				p_0 = a_larger*p_1 + b_larger*p_0
-				r_0 = a_larger.unsqueeze(-1).unsqueeze(-1)*r_1 + b_larger.unsqueeze(-1).unsqueeze(-1)*r_0
-
-				acc_test = torch.mean(a_larger, dim=0, keepdim=True) # docs:torch:knowledge keepdim requires dim=int|tuple[int]
+			acc_test = torch.mean(a_larger, dim=0, keepdim=True) # docs:torch:knowledge keepdim requires dim=int|tuple[int]
 
 			del r_1
 			del p_1

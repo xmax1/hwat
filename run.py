@@ -1,20 +1,20 @@
-import os
-import torch
 import time
 import wandb
-from pyfig import Pyfig
+from datetime import datetime
 
-from optuna import Trial
-import sys
+import traceback
+from typing import Callable
 
+import torch
+from torch.optim.lr_scheduler import _LRScheduler
 from torch.optim import Optimizer
-from torch import nn
 from functorch import make_functional_with_buffers, vmap
-from torch_utils import update_model
-from utils import compute_metrix
-from torch_utils import get_opt, get_scheduler, load
-from utils import get_max_n_from_filename, debug_dict, numpify_tree, torchify_tree, cpuify_tree, lo_ve
+from torch_utils import get_opt, get_scheduler, load, update_model, get_max_mem_c
+from utils import get_max_n_from_filename, debug_dict, numpify_tree, torchify_tree, cpuify_tree, lo_ve, compute_metrix
+
 from pyfig_utils import Param
+from pyfig import Pyfig 
+from functools import partial
 
 from hwat import Ansatz_fb as Model
 from hwat import init_r, get_center_points
@@ -22,8 +22,20 @@ from hwat import keep_around_points, sample_b
 from hwat import compute_ke_b, compute_pe_b
 
 
+def get_run_if_wb_path(run: wandb.Api|str|Path=None) -> wandb.Run:
+	if isinstance(run, str|Path):
+		api = wandb.Api()
+		run = api.run(str(run))
+	return run
+
+
 def init_exp(c: Pyfig, c_init: dict=None, **kw):
+	
+	torch.cuda.empty_cache()
+	torch.cuda.reset_peak_memory_stats()
+
 	c_init = (c_init or {}) | (kw or {})
+	debug_dict(msg='init_exp:c_init: ', c_init=c_init)
 	c.update(c_init)
 
 	c.set_dtype()
@@ -31,200 +43,177 @@ def init_exp(c: Pyfig, c_init: dict=None, **kw):
 	c.distribute.set_device()
 	c.to(device=c.distribute.device, dtype=c.dtype)
 
-	model: nn.Module = c.partial(Model).to(device=c.distribute.device, dtype=c.dtype)
+	model: torch.nn.Module = c.partial(Model).to(device=c.distribute.device, dtype=c.dtype)
 	model_fn, params, buffers = make_functional_with_buffers(model)  
 	model_fn_vmap = lambda params, *_v: vmap(model_fn, in_dims=(None, None, 0))(params, buffers, *_v).sum()
 	
 	opt = get_opt(**c.opt.d_flat)(model.parameters())
-	scheduler = c.partial(get_scheduler)(opt)
+	scheduler = get_scheduler(n_step=c.n_step, **c.scheduler.d_flat)(opt)
 
 	if c.lo_ve_path:
 		c, model, opt, r = load(c, things_to_load=dict(model=model, opt=opt, r=r))
 
-	model, opt, scheduler, buffers = c.distribute.prepare(model, opt, scheduler, buffers, )
+	model, opt, scheduler, buffers = c.distribute.prepare(model, opt, scheduler, buffers)
 
 	if c.mode=='train':
 		model.train()
 	elif c.mode=='evaluate':
 		model.eval()
 
-	return dict(model=model, model_fn_vmap=model_fn_vmap, opt=opt, scheduler=scheduler)
+	return model, model_fn_vmap, opt, scheduler
+
+def loss_fn(
+	step: int, 
+	v_d: dict,
+	model:torch.nn.Module,
+	model_fn_vmap: Callable
+):
+	with torch.no_grad(): # does not affect fns
+		v_d |= sample_b(model, v_d['r'], v_d['deltar'], n_corr=c.data.n_corr)
+		if step < c.n_pre_step:
+			center_points = get_center_points(c.data.n_e, c.data.a)
+			r = keep_around_points(v_d['r'], center_points, l=5.+10.*step/c.n_pre_step)
+
+		model_rv = lambda _r: model_fn_vmap(model.parameters(), _r)
+		pe = compute_pe_b(v_d['r'], c.data.a, c.data.a_z)
+		ke = compute_ke_b(model, model_rv, v_d['r'], ke_method=c.model.ke_method)
+		e = pe + ke
+		e_mean_dist = torch.mean(torch.absolute(torch.median(e) - e))
+		e_clip = torch.clip(e, min=e-5*e_mean_dist, max=e+5*e_mean_dist)
 
 
-def run(c: Pyfig=None, c_init: dict=None, **kw):
+	if c.mode=='train':
 
-	c = c or Pyfig()
-	print('torch says: count-', torch.cuda.device_count(), 'device-', torch.cuda.current_device())
-	print(f'{torch.cuda.is_available()*"CUDA and "} 🤖 {c.resource.n_device} GPUs available. {os.environ["CUDA_VISIBLE_DEVICES"]}')
+		model.requires_grad_(True)
+		loss: torch.Tensor = ((e_clip - e_clip.mean())*model(v_d['r'])).mean()
+		c.distribute.backward(loss)
+  
+		params = {k:p for k,p in model.named_parameters()}
+		grads = {k:p.grad for k,p in params.items()}
+
+		v_d |= dict(grads=grads, params=params, loss=loss)  
+
+	return v_d | dict(e=e, pe=pe, ke=ke, opt_obj=e.mean())
+
+def run(c: Pyfig, c_init: dict=None, **kw):
+
+	model, model_fn_vmap, opt, scheduler = init_exp(c, c_init, **kw)
+
+	center_points 	= get_center_points(c.data.n_e, c.data.a)
+	r				= init_r(c.data.n_b, c.data.n_e, center_points, std=0.1)
+	deltar			= torch.tensor([0.02,], device=c.distribute.device, dtype=c.dtype)
+	v_d = dict(r=r, deltar=deltar, loop_vars=['r', 'deltar', 'loop_vars'])
 	
-	things = init_exp(c, c_init, **kw)
-
-	def get_app_things(ii):
-		center_points   = get_center_points(c.data.n_e, c.data.a)
-		r_0 			= init_r(c.data.n_b, c.data.n_e, center_points, std=0.1)
-		deltar		= torch.tensor([0.02,], device=c.distribute.device, dtype=c.dtype)
-		return dict(r=r_0, deltar=deltar) 
-
-	app_things = get_app_things(c)
-
+	t0 = time.time()
 	c.start()
-	
-	from typing import Callable
-	from torch.optim.lr_scheduler import _LRScheduler
+	for step in range(1, (c.n_step if c.mode=='train' else c.n_eval_step) + 1):
 
-	def loop(
-		c: Pyfig,
-		v_d: dict				= None,
-		model: 	nn.Module 		= None,
-		model_fn_vmap: Callable	= None,
-		opt: Optimizer			= None,
-		scheduler: _LRScheduler = None
-	):
+		model.requires_grad_(False)
+		model.zero_grad(set_to_none=True)
 
-		def loss_fn(step: int, v_d: dict):
-			
-			opt.zero_grad(set_to_none=True)
-			[setattr(p, 'requires_grad', False) for p in model.parameters()]
-			params = [p.detach().data for p in model.parameters()]
-			model_rv = lambda _r: model_fn_vmap(params, _r)
+		v_d: dict = loss_fn(step, v_d, model, model_fn_vmap)
+  
+		if (not (step % c.distribute.sync_step)) and (c.resource.n_gpu-1) and mode=='train':
+			v_d = c.distribute.sync(step, v_d)
 
-			###--- start app ---###
-			with torch.no_grad():
-				v_app_d = sample_b(model, v_d['r'], v_d['deltar'], n_corr=c.data.n_corr)
+		if c.mode=='train':
+			update_model(model, grads= v_d.get('grads'), step=step)
+			opt.step()
+			scheduler.step()
 
-				if step < c.n_pre_step:
-					r = keep_around_points(v_app_d['r'], c.data.center_points, l=5.+10.*step/c.n_pre_step)
-
-				pe = compute_pe_b(r, c.data.a, c.data.a_z)
-
-			ke = compute_ke_b(model, model_rv, v_app_d['r'], ke_method=c.model.ke_method)
-
-			v_app_d = v_app_d | dict(e=pe+ke, pe=pe, ke=ke, opt_obj=e.mean())
-			###--- end app ---###
-
-			loss = grads = params = None
-
-			if c.mode=='train':
-				opt.zero_grad(set_to_none=True)
-				for p in model.parameters():
-					p.requires_grad = True
-
-				###--- start app loss ---###
-				e = v_app_d['e']
-				e_mean_dist = torch.mean(torch.absolute(torch.median(e) - e))
-				e_clip = torch.clip(e, min=e-5*e_mean_dist, max=e+5*e_mean_dist)
-				loss: torch.Tensor = ((e_clip - e_clip.mean())*model(r)).mean()
-				###--- end app loss ---###
-
-				c.distribute.backward(loss)
-
-			return dict(loss=loss, grads=grads, params=params) | v_app_d
-
-				params = {k:p.data for k,p in model.named_parameters()}
-				grads = {k:p.grad.data for k,p in model.named_parameters()}
-
-		t0 = time.time()
-		torch.cuda.reset_peak_memory_stats()
-		for step in range(1, (c.n_step if c.mode=='train' else c.n_eval_step) + 1):
-
-			v_d: dict = loss_fn(step, **v_d)
-			debug_dict(msg='loss_fn:v_d', d=v_d, step=step)
-
-			if (not (step % c.distribute.sync_step)):
-				if c.resource.n_gpu > 1:
-					v_d = c.distribute.sync(step, v_d)
-
-			if c.mode=='train':
-				update_model(model, grads= v_d.get('grads'), step=step)
-				scheduler.step()
-				opt.step()
+		with torch.no_grad():
 
 			v_cpu_d = cpuify_tree(v_d)
-			v_d = {k:v.detach() for k,v in v_d.items() if k in v_d['loop_vars']}
-			###--- cpu only from here ---###
+			v_d = {k:v for k,v in v_d.items() if k in v_d['loop_vars']}
 
+			###--- cpu only from here ---###
 			if not (step % c.log_metric_step):
-				if int(c.distribute.rank)==0:
+
+				v_cpu_d['max_mem_alloc'] = torch.cuda.max_memory_allocated() // 1024 // 1024
+				torch.cuda.reset_peak_memory_stats() 
+	
+				t_diff, t0 = time.time() - t0, time.time()
+				v_cpu_d['t_per_it'] = t_diff/c.distribute.sync_step
+
+				if int(c.distribute.rank)==0 and c.distribute.head:
 					metrix = compute_metrix(v_cpu_d, mode=c.mode)
 					debug_dict(msg='metrix', metrix=metrix, step=step//c.log_metric_step)
 					wandb.log(metrix, step=step)
-					# c.wb.run.summary[k] = v.abs().mean()
+					
+	 
+			if not (step % c.log_state_step):
+				name = f'{c.mode}_i{step}.state'
+				lo_ve(path=c.state_dir/name, data=v_d)
 	
-				v_cpu_d['max_mem_alloc'] = torch.cuda.max_memory_allocated() // 1024 // 1024
-				torch.cuda.reset_peak_memory_stats() 
-
-				t_diff, t0 = time.time() - t0, time.time()
-				v_cpu_d['t_per_it'] = t_diff/c.distribute.sync_step
 	
-			v_cpu_d['opt_obj_all'] = v_cpu_d.get('opt_obj_all', []) + [v_cpu_d['opt_obj'],]
+	
+	torch.cuda.empty_cache()
+	# run = get_run_if_wb_path(run)
+	post_process(ii.wb.run)
+	run.finish()
 
-		torch.cuda.empty_cache()
 
-		return numpify_tree(v_cpu_d) # end loop
+	def post_process(run: wandb.Api):
+		import numpy as np
 
-	return res
+		c: dict = run.config
+		history = run.scan_history(keys=['e'])
+		opt_obj = [row['e'] for row in history]
+  
+		a_z = np.asarray(c['a_z']).squeeze()
+		a = np.asarray(c['a']).squeeze()
+		exp_metaid = f'{c.charge_c.spin_("-".join([int(i) for i in a_z]))_a.mean()}'
+		Result = wandb.Table(
+      				columns=["charge_spin_az0-az1-..._pmu", "Energy", "Error (+/- std)"], 
+                    data=[exp_metaid, opt_obj.mean(), opt_obj.std()])
+
+		run.summary.update(dict(Result=Result))
+	
+	return numpify_tree(v_cpu_d)
 
 
 if __name__ == "__main__":
-	
-	from pyfig import Pyfig 
 
 	c = Pyfig(notebook=False, sweep=None, c_init=None)
-
-	res = run(c)
  
-	import traceback
-	v_run = dict()
 	res = dict()
+	v_run = dict()
 	for mode in ([c.mode,] if c.mode else c.multimode.split(':')):
-		print('Running: ', mode)
 		c.mode = mode
 
-		try:
-			if mode == 'opt_hypam':
+		if mode == 'opt_hypam':
+			from opt_hypam_utils import get_hypam_from_study, opt_hypam, objective
+   
+			objective = partial(objective, c=c, run=run)
+			v_run = opt_hypam(objective, c)
+			debug_dict(v_run, msg='opt_hypam:v_run')
 
-				from opt_hypam_utils import get_hypam_from_study, opt_hypam
+		elif mode=='max_mem':
+			v_run = get_max_mem_c(run, mode='train', n_step=2*c.log_metric_step)
+			now = datetime.now().strftime("%d-%m-%y:%H-%M-%S")
+			line = now + ',' + ','.join([str(v) for v in 
+							[v_run['max_mem_alloc'], c.data.n_b, c.data.n_e, c.model.n_fb, c.model.n_sv, c.model.n_pv]])
+			with open('./dump/mem.csv', 'a+') as f:
+				f.writelines([line])
 
-				def objective(trial: Trial):
-					c_update = get_hypam_from_study(trial, c.sweep.parameters)
-					c.mode = 'train'
-					v_tr = run(c=c, init_d=c_update)
-					c.mode = 'evaluate'
-					v_eval = run(c=c, **v_tr)
-					return torch.stack(v_eval['opt_obj_all']).mean()
+		elif mode=='profile':
+			from torch_utils import gen_profile
+			v_run = gen_profile(run, profile_dir=c.profile_dir, mode='train', **v_run)
+		else:
+			print('train or evaluate')
 
-				v_run = opt_hypam(objective, c)
+			v_run = run(c=c, **v_run)
 
-				debug_dict(v_run, msg='opt_hypam:v_run')
-				
-				sys.exit('now figure out cnversion')
+		c.update(**v_run)
+		res[mode] = v_run
 
-			elif mode=='max_mem':
-				from torch_utils import get_max_mem_c
-				from datetime import datetime
-				v_run = get_max_mem_c(run, mode='train', n_step=2*c.log_metric_step)
-				if c.save:
-					now = datetime.now().strftime("%d-%m-%y:%H-%M-%S"), 
-					line = now + ',' + ','.join([str(v) for v in 
-									[v_run['max_mem_alloc'], c.data.n_b, c.data.n_e, c.model.n_fb, c.model.n_sv, c.model.n_pv]])
-					with open('./dump/mem.csv', 'a+') as f:
-						f.writelines([line])
 
-			elif mode=='profile':
-				pass
-				from torch_utils import gen_profile
-				debug_dict(d=v_run, msg='profile:init_d')
-				v_run = gen_profile(run, profile_dir=c.profile_dir, mode='train', **v_run)
-			else:
-				print('train or evaluate')
-				v_run = run(c=c, **v_run)
+	
+	# 	system_metrics = run.history(stream="events")
+	# 	system_metrics.to_csv("sys_metrics.csv")
+	# 	# if run.state == "finished":
+	# 	row["_timestamp"]
+	# 	# for i, row in run.history().iterrows():
 
-			c.update(**v_run)
-			res[mode] = v_run
-
-		except Exception as e:
-			tb = traceback.format_exc()
-			print(f'mode loop error={e}')
-			debug_dict(msg='c.d=', d=c.d_flat)
-			debug_dict(msg='v_run=', d=v_run)
-			print(f'traceback={tb}')
+	# 	for i, row in run.history(keys=["accuracy"]).iterrows():
+	#   print(row["_timestamp"], row["accuracy"])

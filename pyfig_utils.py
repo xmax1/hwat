@@ -64,9 +64,14 @@ class Param(Sub):
 	step_size: float|int = None
 	sample: str = None # docs:Param:sample from ('uniform', )
 
-	def __init__(ii, **kw) -> None: # docs:Param:init needed so can use kw arg to init
-		for k,v in kw.items():
-			setattr(ii, k, v)
+	def __init__(ii, values=None, domain=None, dtype=None, log=None, step_size=None, sample=None, parent=None) -> None: # docs:Param:init needed so can use kw arg to init
+		super().__init__(parent=parent)
+		ii.values = values
+		ii.domain = domain
+		ii.dtype = dtype
+		ii.log = log
+		ii.sample = sample
+		ii.step_size = step_size
 
 class PyfigBase:
 
@@ -243,10 +248,15 @@ class PyfigBase:
 			return v_sync
 
 		def backward(ii, loss: torch.Tensor):
-			loss.backward()
+			opt_is_adahess = ii._p.opt.opt_name.lower() == 'AdaHessian'.lower()
+			loss.backward(create_graph=opt_is_adahess)
 
 		def set_device(ii, device=None):
-			ii.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+			is_cuda = torch.cuda.is_available()
+			torch_curr_device = torch.cuda.current_device()
+			torch_n_device = torch.cuda.device_count()
+			cuda_visible_devices = os.environ['CUDA_VISIBLE_DEVICES']
+			ii.device = 'cuda' if is_cuda else 'cpu'
 			return ii.device
 
 		def set_seed(ii, seed=None):
@@ -334,7 +344,7 @@ class PyfigBase:
 				dir         = ii.exp_data_dir,
 				entity      = ii.wb.entity,	
 				mode        = ii.wb.wb_mode,
-				config      = dict_to_wandb(ii.d),
+				config      = dict_to_wandb(ii.d_flat),
 				id			= ii.exp_id + '-' + ii.mode + '-' + str(ii.group_i),
 				tags 		= [ii.mode,],
 				reinit 		= not (ii.wb.run is None)
@@ -488,20 +498,18 @@ class PyfigBase:
 			ii.log(d, path=ii.tmp_dir/name)
 			
 	def partial(ii, f:Callable, args=None, **kw):
-		d = flat_any(args if args else ii.d)
+		d = flat_any(args if args else {}) | ii.d_flat | (kw or {})
 		d_k = inspect.signature(f.__init__).parameters.keys()
-		d = {k:v for k,v in d.items() if k in d_k} | (kw or {})
+		d = {k:v for k,v in d.items() if k in d_k} 
+		print(d, d_k)
 		return f(**d)
 
 	def update(ii, c_update: dict = None, **kw):
 		c_update = (c_update or {}) | (kw or {})
 		arg = flat_any(c_update)
-
 		c_keys = list(ii.d_flat.keys())
-		arg = filter(lambda kv: kv[0] in c_keys, arg.items())
-		print(f'excluding {[k for k in arg.keys() if not k in c_keys]} from update')
-
-		for k_update, v_update in deepcopy(arg):
+		arg = dict(filter(lambda kv: kv[0] in c_keys, arg.items()))
+		for k_update, v_update in deepcopy(arg).items():
 			is_updated = walk_ins_tree(ii, k_update, v_update)
 			if not is_updated:
 				print(f'not updated: k={k_update} v={v_update} type={type(v_update)}')
@@ -678,7 +686,6 @@ def setup_distribute(
 		return [model, opt] + (tr_loader or []) + (scheduler or [])
 
 def backward(ii, loss: torch.Tensor, sync: dict):
-	
 	loss.backward()
 
 def lo_ve(path:Path, data=None):

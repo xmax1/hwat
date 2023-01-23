@@ -6,11 +6,24 @@ from time import sleep
 import pprint
 import os
 from utils import debug_dict
+from pyfig import Pyfig
+import numpy as np
+from optuna import Trial
+
+
+def objective(trial: Trial, c: Pyfig, run: Callable):
+	c_update = get_hypam_from_study(trial, c.sweep.parameters)
+	c.mode = 'train'
+	v_tr = run(c=c, init_d=c_update)
+	c.mode = 'evaluate'
+	v_eval = run(c=c, **v_tr)
+	return np.stack(v_eval['opt_obj_all']).mean()
+
 
 def suggest_hypam(trial: optuna.Trial, name: str, v: Param):
 	if isinstance(v, dict):
 		v = Param(**v)
-
+		print(v, trial, name)
 	debug_dict(d=v.d, msg='suggest_hypam:Param')
 
 	if not v.domain:
@@ -30,7 +43,7 @@ def suggest_hypam(trial: optuna.Trial, name: str, v: Param):
 		return trial.suggest_int(name, *v.domain, log=v.log)
 	
 	if dtype is float:
-		return lambda : trial.suggest_float(name, *v.domain, log=v.log)
+		return trial.suggest_float(name, *v.domain, log=v.log)
 	
 	raise Exception(f'{v} not supported in hypam opt')
  
@@ -42,6 +55,7 @@ def get_hypam_from_study(trial: optuna.Trial, sweep: dict) -> dict:
 		c_update = {name:v} if i==0 else {**c_update, name:v}
 	debug_dict(d=c_update, msg='get_hypam_from_study:c_update')
 	return c_update
+
 
 def opt_hypam(objective: Callable, c: PyfigBase):
 	print('hypam opt create/get study')

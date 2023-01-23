@@ -35,8 +35,8 @@ class Pyfig(PyfigBase):
 	log_metric_step:	int   	= 10
 	log_state_step: 	int   	= 10
  
-	save: bool = False
-	load_state: bool = False
+	step: int = -1
+	group_id: int = 0
 	
 	class data(PyfigBase.data):
 		system: 	str			= '' # overwrites base
@@ -50,8 +50,7 @@ class Pyfig(PyfigBase):
 		n_corr:     int         = 20
 		acc_target: int         = 0.5
 
-		n_equil_step:	int		= 100
-		# n_equil_step:int        = property(lambda _: 1e6//_.n_corr)
+		n_equil_step:int        = property(lambda _: 1000//_.n_corr)
 		n_e:        int         = property(lambda _: int(sum(_.a_z)))
 		n_u:        int         = property(lambda _: (_.spin + _.n_e)//2)
 		n_d:        int         = property(lambda _: _.n_e - _.n_u)
@@ -74,12 +73,16 @@ class Pyfig(PyfigBase):
 		n_det:          int     = 1
 		
 		n_fbv:          int     = property(lambda _: _.n_sv*3+_.n_pv*2)
-  
+
+	class scheduler(Sub):
+		scheduler_name: str		= 'OneCycleLR'
+		max_lr:			float 	= 0.01
+		epochs: 		int 	= 1
+
 	class opt(PyfigBase.opt):
 		opt_name: 		str		= 'RAdam'
-		scheduler_name: str		= 'OneCycleLR'
+		# opt_name: 		str		= 'AdaHessian'
 		lr:  			float 	= 0.0001
-		max_lr:			float 	= 0.01
 		betas:			list	= [0.9, 0.999]
 		eps: 			float 	= 1e-4
 		weight_decay: 	float 	= 0.0
@@ -88,7 +91,9 @@ class Pyfig(PyfigBase):
 	class sweep(PyfigBase.sweep):
 		method: 		str		= 'grid'
 		parameters: 	dict 	= dict(
-			lr= Param(domain=(0.01, 0.0001), log=True)
+			lr=Param(domain=(0.0001, 1.), log=True),
+			opt_name=Param(values=['AdaHessian',  'RAdam'], dtype=str),
+			max_lr=Param(values=[0.1, 0.01, 0.001], dtype=str),
 		)
 
 	class distribute(PyfigBase.distribute):
@@ -110,7 +115,6 @@ class Pyfig(PyfigBase):
 		system = systems.get(ii.data.system, {})
 
 		print('initialising system')
-		# super().__post_init__(**system)
 		ii.update(system)
   
 		ii.pf_submit() # docs:runfig
@@ -119,31 +123,25 @@ class Pyfig(PyfigBase):
 		# pyfig
 		## pyfig:todo
 		### docs:pyfig:load
-		- load exp_dir
-		- load sub_cls
-		- if c.load_exp is True
 
 		- normalised pretraining
+		- save eval r and stats compressed (5 min)
 
-		- save eval r and stats compressed
-
-		- estimated time until finished from # electrons, batch size 
-		- accelerate test
 		- accelerate seeds test 
-		- buy food 
+		- accelerate test
+		- estimated time until finished from # electrons, batch size 
+		- wandb reports
+		- distributed metrics: e_std_across_nodes
+		
+  		- buy food 
 		- call rents
 		- cook dinner
 		- buy cigarettes 
 		- look at week
-		- wandb url goes to group :X:
-		- groups are exp_id + mode + reinit# :X:
-		- wandb reports
-		- distributed metrics: e_std_across_nodes
 		- save best mem for c in dump 
   
 		- # size_param: 	list	= property(lambda _: [datetime.now().strftime("%d-%m-%y:%H-%M-%S"), _.n_b, _.n_e, _.n_fb, _.n_sv, _.n_pv])
 		- for memory map
-
 
 		- save opt c
 		- optimise so works well for 10 electrons

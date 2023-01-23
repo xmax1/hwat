@@ -14,7 +14,7 @@ import torch
 import accelerate
 import optree
 from utils import debug_dict
-
+from torch import nn
 
 
 class distribute(PyfigBase.distribute):
@@ -37,20 +37,20 @@ class distribute(PyfigBase.distribute):
 		super().__init__(parent)
 		ii.dist: accelerate.Accelerator = accelerate.Accelerator()
 
-	def sync(ii, v_d: dict[str:torch.Tensor], step: int) -> list[torch.Tensor]:
+	@torch.no_grad()
+	def sync(ii, step, v_d: dict[str:torch.Tensor]) -> list[torch.Tensor]:
 
 		if ((step/ii.sync_step)==1) and ii._p.debug:
 			[print(k, v.shape) for k,v in v_d.items()]
 
-		with torch.no_grad():
-			v_flat, treespec = optree.tree_flatten(v_d)
-			v_sync_flat: list[torch.Tensor] = ii.dist.gather(v_flat)
-			for i, (v, v_ref) in enumerate(zip(v_sync_flat, v_flat)):
-				if ((step/ii.sync_step)==1) and ii._p.debug:
-					print(v.shape, v_ref.shape)
-				v = v.reshape(-1, *v_ref.shape).mean(dim=0)
-				v_sync_mean = [v] if i==0 else [*v_sync_mean, v]
-			v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync_mean)
+		v_flat, treespec = optree.tree_flatten(v_d)
+		v_sync_flat: list[torch.Tensor] = ii.dist.gather(v_flat)
+		for i, (v, v_ref) in enumerate(zip(v_sync_flat, v_flat)):
+			if ((step/ii.sync_step)==1) and ii._p.debug:
+				print(v.shape, v_ref.shape)
+			v = v.reshape(-1, *v_ref.shape).mean(dim=0)
+			v_sync_mean = [v] if i==0 else [*v_sync_mean, v]
+		v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync_mean)
 
 		return v_sync
 
@@ -132,6 +132,7 @@ def get_max_mem_c(fn: Callable, max_mem_min=6, max_mem_max=15, **kw) -> dict:
 	print('get_mem_max: b_s is ', n_b)
 	return dict(n_b=n_b, n_b_max=n_b)
 
+@torch.no_grad()
 def update_model(
 	model: torch.nn.Module, 
 	grads: dict[str:torch.Tensor]=None, 
@@ -143,13 +144,12 @@ def update_model(
 	debug_dict(msg='update:new params: ', params=params)
 
 	try:
-		with torch.no_grad():
-			for k, p in model.named_parameters():
-				if params is not None:
-					p.data: torch.Tensor = params[k]
+		for k, p in model.named_parameters():
+			if params is not None:
+				p.copy_(params[k])
 
-				if grads is not None:
-					p.grad.data: torch.Tensor = grads[k]
+			if grads is not None:
+				p.grad.copy_(grads[k])
 
 	except:
 		print('model, params, grads', len(grads or {}), len(params or {}), len(list(model.named_parameters())))
@@ -171,10 +171,10 @@ def get_opt(
 	**kw, 
 ) -> torch.optim.Optimizer:
 
-	if opt_name == 'RAdam':
+	if opt_name.lower() == 'RAdam'.lower():
 		opt_for_model = partial(torch.optim.RAdam, lr=lr)
 
-	elif opt_name == 'Adahessian':
+	elif opt_name.lower() == 'Adahessian'.lower():
 		import torch_optimizer  # pip install torch_optimizer
 		opt_for_model = partial(
     		torch_optimizer.Adahessian,
@@ -190,7 +190,9 @@ def get_opt(
 
 	return opt_for_model
 
+
 from utils import type_check_v
+
 
 def get_scheduler(
 	scheduler_name: str = None,
@@ -201,14 +203,13 @@ def get_scheduler(
 	**kw,
 ) -> torch.optim.lr_scheduler._LRScheduler:
 
-	epochs = type_check_v('epochs', epochs, int, 1)
-	max_lr = type_check_v('max_lr', max_lr, float, 0.001)
-	n_step = type_check_v('n_step', n_step, int, 10000)
-	scheduler_name = type_check_v('scheduler_name', scheduler_name, str, '')
+	# epochs = type_check_v('epochs', epochs, int, 1)
+	# max_lr = type_check_v('max_lr', max_lr, float, 0.001)
+	# n_step = type_check_v('n_step', n_step, int, 10000)
+	# scheduler_name = type_check_v('scheduler_name', scheduler_name, str, '')
+	# epochs = epochs if epochs else 1
 
-	epochs = epochs if epochs else 1
-
-	if scheduler_name.lower()=='OneCycleLR'.lower():
+	if scheduler_name.lower() == 'OneCycleLR'.lower():
 		scheduler = partial(
 			torch.optim.lr_scheduler.OneCycleLR, max_lr=max_lr, steps_per_epoch=n_step, epochs=epochs
 		)
@@ -218,11 +219,12 @@ def get_scheduler(
 		return get_scheduler(scheduler_name=default, max_lr=max_lr, epochs=epochs, n_step=n_step)
 
 	return scheduler
-	
+
+from utils import get_max_n_from_filename, lo_ve
  
-def load(c: Pyfig, path: Path=None, **things_to_load):
+def load(c: PyfigBase, path: Path=None, **things_to_load):
+
 	load_keys = list(things_to_load.keys())
- 
 	path = path or c.lo_ve_path
 	
 	if path.suffix == '':
