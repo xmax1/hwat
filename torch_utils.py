@@ -108,63 +108,33 @@ def gen_profile(
 
 
 def get_max_mem_c(fn: Callable, max_mem_min=6, max_max_mem=15, **kw) -> dict:
+	import traceback
 	t = torch.cuda.get_device_properties(0).total_memory // 1024 // 1024
-
-	print('get_max_mem_c:total memory on device: ', t)
 	r = torch.cuda.memory_reserved(0)
 	a = torch.cuda.memory_allocated(0)
+	print('get_max_mem_c:total memory on device: ', t)
+
 	for n_b_power in range(max_mem_min, max_max_mem):
 		try:
-			n_b = 2**n_b_power
-			print(f'max mem trial: n_b={n_b}, n_b_power={n_b_power}')
+			
+			n_b = n_b=2**n_b_power
 			v_d = fn(n_b=n_b, **kw)
+
 			mem_used = v_d['max_mem_alloc']
 			print(f'n_b {n_b} used {mem_used} out of {t}')
+
 			torch.cuda.empty_cache()
 			if mem_used > t/2:
 				print('get_max_mem: b_s is ', n_b)
 				return dict(n_b=n_b, n_b_max=n_b, max_mem_alloc=mem_used)
+
 		except Exception as e:
-			print('get_max_mem error: ', fn, max_mem_min, e, n_b)
-			n_b = 2**(n_b_power-1)
-			debug_dict(msg='max_mem-kw', d=kw)
-			break
+			print(traceback.format_exc())
+			print('v_run max_mem: ', v_d)
+			raise Exception
 
-	print('get_max_mem: b_s is ', n_b)
-	return dict(n_b=n_b, n_b_max=n_b)
+	
 
-
-def update_model(
-	step: int,
-	model: torch.nn.Module, 
-	grads: dict[str:torch.Tensor]=None, 
-	params: dict[str:torch.Tensor]=None,
-):
-
-	# debug_dict(msg='model params: ', model_named=dict(model.named_parameters()), debug_step=step)
-	# debug_dict(msg='update:new grads: ', grads=grads, debug_step=step)
-	# debug_dict(msg='update:new params: ', params=params, debug_step=step)
-
-	# model.zero_grad()
-
-	try:
-		with torch.no_grad():
-			for k, p in model.named_parameters():
-			# 	if params is not None:
-			# 		p.copy_(params[k])
-
-				if grads is not None:
-					p.grad.copy_(grads[k])
-					# p.grad += grads[k]
-				
-					print(grads[k].mean())
-	except:
-		print('model, params, grads', len(grads or {}), len(params or {}), len(list(model.named_parameters())))
-		grads = grads or dict(model.named_parameters())
-		params = params or dict(model.named_parameters())
-		for (k,v), (k_p,v_p), (k_g,v_g) in zip(model.named_parameters(), params.items(), grads.items()):
-			print(k, v.shape, k_p, v_p.shape, k_g, v_g.shape)
-		sys.exit('shapes')
   
 def get_opt(
 	*,

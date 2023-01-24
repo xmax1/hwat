@@ -10,7 +10,7 @@ import torch
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.optim import Optimizer
 from functorch import make_functional_with_buffers, vmap
-from torch_utils import get_opt, get_scheduler, load, update_model, get_max_mem_c
+from torch_utils import get_opt, get_scheduler, load, get_max_mem_c
 from utils import debug_dict, npify_tree, compute_metrix, flat_any
 
 from pyfig_utils import Param, lo_ve
@@ -75,16 +75,16 @@ def init_exp(c: Pyfig, c_update: dict=None, **kw):
 	c.to(device=c.distribute.device, dtype=c.dtype)
 
 	model: torch.nn.Module = c.partial(Model).to(device=c.distribute.device, dtype=c.dtype)
-	model_fn, _, buffers = make_functional_with_buffers(model)  
-	model_fn_vmap = lambda params, *_v: vmap(model_fn, in_dims=(None, None, 0))(params, buffers, *_v).sum()
-	
+	model_fn, p, b = make_functional_with_buffers(model)
+	model_fn_vmap = vmap(model_fn, in_dims=(None, None, 0))
+
 	opt = get_opt(**c.opt.d_flat)(model.parameters())
 	scheduler = get_scheduler(n_step=c.n_step, **c.scheduler.d_flat)(opt)
 
 	if c.lo_ve_path:
 		c, model, opt, r = load(c, things_to_load=dict(model=model, opt=opt, r=r))
 
-	model, opt, scheduler, buffers = c.distribute.prepare(model, opt, scheduler, buffers)
+	model, opt, scheduler = c.distribute.prepare(model, opt, scheduler)
 
 	if 'train' in c.mode:
 		model.train()
@@ -95,123 +95,171 @@ def init_exp(c: Pyfig, c_update: dict=None, **kw):
 
 def loss_fn(
 	step: int,
-	r: torch.Tensor,
-	deltar: torch.Tensor,
-	model:torch.nn.Module,
-	model_fn_vmap: Callable,
+	r: torch.Tensor=None,
+	deltar: torch.Tensor=None,
+	model:torch.nn.Module=None,
+	_model_fn: Callable=None,
+	mode: str = 'train', 
+	**kw, 
 ):
+
+	model.zero_grad(set_to_none=True)
+	# model.requires_grad_(False)
+
 	# with torch.no_grad():
-	
 	r, acc, deltar = sample_b(model, r, deltar, n_corr=c.data.n_corr)
+	
 	if step < c.n_pre_step:
 		center_points = get_center_points(c.data.n_e, c.data.a)
 		r = keep_around_points(r, center_points, l=5.+10.*step/c.n_pre_step)
-
-	for p in model.parameters():
-		p.requires_grad = True
-	model_rv = lambda _r: model_fn_vmap(params, _r)
 	
-	pe = compute_pe_b(r, c.data.a, c.data.a_z)
-
-	ke = compute_ke_b(model, model_rv, r, ke_method=c.model.ke_method)
-
-	e = pe.detach().requires_grad_(False) + ke.detach().requires_grad_(False)
+	pe = compute_pe_b(r, c.data.a, c.data.a_z)	
+	
+	ke = compute_ke_b(model, _model_fn, r, ke_method=c.model.ke_method).detach()
+	
+	e = pe + ke
 	e_mean_dist = torch.mean(torch.absolute(torch.median(e) - e))
 	e_clip = torch.clip(e, min=e-5*e_mean_dist, max=e+5*e_mean_dist)
+	# v_use = dict(r=r.detach().requires_grad_(False), deltar=deltar.detach())
+	v_use = dict(r=r, deltar=deltar)
+		
+	loss, grads, params = None, None, None
 
-	model.zero_grad(set_to_none=True)
-	for p in model.parameters():
-		p.requires_grad = True
-	r_loss = r.detach()
+	if 'train' in mode:
 
-	loss: torch.Tensor = ((e_clip - e_clip.mean())*model(r_loss)).mean()
-	loss.backward()
-	# c.distribute.backward(loss)
+		model.requires_grad_(True)
+		for p in model.parameters():
+			p.requires_grad = True
+		
+		r_loss = r.detach()
+		r_loss.requires_grad = True
+	
+		energy = (e_clip - e_clip.mean()).detach()
+		energy.requires_grad = True
 
-	params = {k:p for k,p in model.named_parameters()} # needs to be done here unless dis-attached from graph
-	grads = {k:p.grad for k,p in params.items()}
+		log_psi = model(r_loss)
+		loss = (energy * log_psi).mean()
+		loss.backward()
+		# c.distribute.backward(loss)
 
-	return (r, deltar), dict(e=e, pe=pe, ke=ke, acc=acc, grads=grads, params=params, loss=loss)
+	return (r, deltar), dict(e=e, pe=pe, ke=ke, acc=acc, loss=loss.item())
 
 from copy import deepcopy
 
-
 def detach_tree(v_d: dict):
 	items = []
-	for k,v in v_d.items():
+	for k, v in v_d.items():
+
+		if isinstance(v, list):
+			v = {k + '_' + str(i): sub_i for i, sub_i in enumerate(v)}
+		
 		if isinstance(v, dict):
-			v = detach_tree(v)
+			v = {k: detach_tree(v)}
 		elif isinstance(v, torch.Tensor):
 			v = v.detach()
+		
 		items += [(k, v),]
+	
 	return dict(items)
 	
+from pyfig_utils import Sub
+
 def run(c: Pyfig=None, c_update: dict=None, **kw):
 
 	model, model_fn_vmap, opt, scheduler = init_exp(c, c_update, **kw)
 
 	center_points 	= get_center_points(c.data.n_e, c.data.a)
-	r				= init_r(c.data.n_b, c.data.n_e, center_points, std=0.1)
+	r 				= center_points + torch.randn(size=(c.n_b, *center_points.shape), dtype=c.dtype, device=c.distribute.device)
 	deltar			= torch.tensor([0.02,], device=c.distribute.device, dtype=c.dtype)
 	
-	v_d = dict(r=r, deltar=deltar)
-	
+	v_init = dict(r=r, deltar=deltar)
+	compute_loss = partial(loss_fn, mode=c.mode, _model_fn=model_fn_vmap, model=model)
 	debug_dict(msg='pyfig:run:preloop = \n', c_init=c.d)
 
-	t0 = time.time()
+	class Metrix(Sub):
+		_t0: 		   float = time.time()
+		max_mem_alloc: float = None
+		t_per_it: 	   float = None
+
+		exp_stats: 		list = ['max_mem_alloc', 't_per_it']
+		source: 		str  = 'exp_stats/'
+
+		def __init__(ii, parent=None):
+			super().__init__(parent)
+			torch.cuda.reset_peak_memory_stats()
+
+		def tick(ii, **kw) -> dict:
+			_t1 = time.time()
+			ii.t_per_it = _t1 - ii._t0
+			ii._t0 = time.time()
+
+			ii.max_mem_alloc = torch.cuda.max_memory_allocated() // 1024 // 1024
+			torch.cuda.reset_peak_memory_stats()
+			return dict(exp_stats = {k: getattr(ii, k) for k in ii.exp_stats})
+		
+		def to_dict(ii):
+			return {k: getattr(ii, k) for k in ii.exp_stats}
+
+	metrix = Metrix()
+
 	c.start()
-	for step in range(1, (c.n_step if 'train' in c.mode else c.n_eval_step) + 1):
+	for rel_step, step in enumerate(range(1, (c.n_step if 'train' in c.mode else c.n_eval_step) + 1)):
 
-		# model.requires_grad_(False)
-		# model.zero_grad(set_to_none=True)
-		# opt.zero_grad(set_to_none=True)
+		(r, deltar), v_d = compute_loss(step, r, deltar)
 
-		(r, deltar), v_d = loss_fn(step, r, deltar, model, model_fn_vmap)
-		# debug_dict(msg='v_d', v_d=deepcopy(v_d))
 
-		# if (not (step % c.distribute.sync_step)) and (c.resource.n_gpu-1) and 'train' in c.mode:
-		# 	v_d = c.distribute.sync(step, v_d)
+		# if 'train' in c.mode:
 
-		if 'train' in c.mode:
-			# model.zero_grad()
-			update_model(step, model, grads= v_d['grads'])
-			scheduler.step()
-			opt.step()
+			# if (not (step % c.distribute.sync_step)) and (c.resource.n_gpu > 1):
+			# 	v_d = c.distribute.sync(step, v_d)
 
-		v_d = detach_tree(v_d)
-		v_cpu_d = npify_tree(v_d)
+			# with torch.no_grad():
+				# for k, p in model.named_parameters():
+				# 	if p.grad is None:
+				# 		print(k, p, v_d.get('grads'))
+				# 		raise Exception
+				# 	p.grad.copy_(v_d.get('grads').get(k))
+			# opt.step()
+			# scheduler.step()
+			
+				# grads before params because detaching params zeros grads
+				
 
 		###--- cpu only from here ---###
-		if not (step % c.log_metric_step):
-			print(v_cpu_d.keys())
-			
-			v_cpu_d['max_mem_alloc'] = torch.cuda.max_memory_allocated() // 1024 // 1024
-			torch.cuda.reset_peak_memory_stats() 
+		if int(c.distribute.rank)==0 and c.distribute.head:
 
-			if int(c.distribute.rank)==0 and c.distribute.head:
-				wandb.log(compute_metrix(v_cpu_d, mode=c.mode), step=step)
+			if ('eval' in c.mode) or not (step % c.log_metric_step):
+
+				v_d['grads'] = {k:p.grad for k,p in model.named_parameters()}  
+				v_d['params'] = {k:p for k,p in model.named_parameters()}
+			
+				v_cpu_d = npify_tree(v_d)
+
+				t_metrix = metrix.tick()
+				v_metrix = compute_metrix(v_cpu_d, source=c.mode, sep='/')
+				wandb.log(v_metrix | t_metrix, step=step)
+
+				if (step//c.log_metric_step)==1:
+					import pprint
+					c.make_a_note(c.exp_dir/'s1_metrix', pprint.pformat(v_metrix | t_metrix))
+
 
 		if not (step % c.log_state_step) and 'savestate' in c.mode:
 			name = f'{c.mode}_i{step}.state'
 			lo_ve(path=c.state_dir/name, data=v_d)
-		
-		if 'eval' in c.mode:
-			v_eval = dict(filter(lambda kv: kv[0] in c.eval_me, v_cpu_d.items()))
-			wandb.log(compute_metrix(v_eval, mode=c.mode), step=step)
-
-	t1 = time.time()
-	v_cpu_d['t_per_it'] = (t1 - t0)/step
 
 	c.wb.run.finish()
 	torch.cuda.empty_cache()
 
 	if 'eval' in c.mode:
 		api = wandb.Api()
-		run = api.run(str(c.wb.wb_run_path))
+		print(str(c.wb.wb_run_path))
+		run = api.run(str(c.run_id))
 		post_process(run)
 		run.finish()
 
-	return npify_tree(v_cpu_d)
+	return npify_tree(v_cpu_d) | metrix.to_dict()
+
 
 if __name__ == "__main__":
 	

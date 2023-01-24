@@ -154,7 +154,6 @@ class PyfigBase:
 		wb_sweep: 		bool	= False
 		sweep_id: 		str 	= ''
 		wb_run_path:	str 	= ''
-		wb_run_id:		str 	= ''
 
 		entity:			str		= property(lambda _: _._p.project)
 		program: 		Path	= property(lambda _: Path( _._p.project_dir, _._p.run_name))
@@ -336,9 +335,11 @@ class PyfigBase:
 			
 			ii.run_id = ii.exp_id + '.' + ii.mode + '.' + str(ii._group_i)
 			ii.wb.wb_run_path = f'{ii.wb.entity}/{ii.project}/{ii.run_id}'
-			ii.run_id = '.'.join(ii.wb.wb_run_id.split('.'))  # no / no : - in mode _ in names try \ + | .
+			ii.run_id = '.'.join(ii.run_id.split('.'))  # no / no : - in mode _ in names try \ + | .
 			
 			print('start:wb:init:exp_dir = \n ***', ii.exp_dir, '***')
+			print('start:wb:init:wb_run_path = \n ***', ii.wb.wb_run_path, '***')
+			print('start:wb:init:run_id = \n ***', ii.run_id, '***')
 			ii.setup_exp_dir(group_exp= False, force_new_id= False)
 
 			ii.wb.run = wandb.init(
@@ -353,6 +354,7 @@ class PyfigBase:
 				reinit 		= not (ii.wb.run is None)
 			)
 
+			print('c', ii.d)
 
 	def pf_submit(ii):
 
@@ -387,6 +389,11 @@ class PyfigBase:
 		""" pretty print and return dict """
 		pprint.pprint(d)
 		return d
+
+	def make_a_note(ii, path: str|Path, note: str|list):
+		note = [note,] if isinstance(note, str) else note
+		with open(path, 'w') as f:
+			f.writelines(note)
 
 	@property
 	def _paths(ii):

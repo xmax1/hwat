@@ -83,7 +83,7 @@ class Pyfig(PyfigBase):
 	class opt(PyfigBase.opt):
 		opt_name: 		str		= 'RAdam'
 		# opt_name: 		str		= 'AdaHessian'
-		lr:  			float 	= 0.0001
+		lr:  			float 	= 0.01
 		betas:			list	= [0.9, 0.999]
 		eps: 			float 	= 1e-4
 		weight_decay: 	float 	= 0.0

@@ -279,6 +279,7 @@ def flat_list(lst):
 			items += [v]
 	return items
 
+
 def flat_dict(d:dict, items:list[tuple]=None):
 	items = items or []
 	for k,v in d.items():
@@ -288,7 +289,8 @@ def flat_dict(d:dict, items:list[tuple]=None):
 			items.append((k, v))
 	return dict(items)
 
-def flat_any(v: Union[list, dict]):
+
+def flat_any(v: list|dict):
 	if isinstance(v, list):
 		return flat_list(v)
 	if isinstance(v, dict):
@@ -328,6 +330,7 @@ def numpify_tree(v: dict|list, return_flat_with_spec=False):
 
 ### torch things
 
+
 def flat_wrap(wrap_fn: Callable) -> Callable:
 
 	def _flat_wrap(d: dict) -> dict:
@@ -337,39 +340,43 @@ def flat_wrap(wrap_fn: Callable) -> Callable:
 
 	return _flat_wrap
 
+
 def npify_list(d_v: list) -> dict:
-	torch_v = filter(lambda v: isinstance(v, torch.Tensor), d_v)
-	not_torch_v = filter(lambda v: not isinstance(v, torch.Tensor), d_v) 
-	return list(not_torch_v) + list([v.detach().cpu().numpy() for v in torch_v])
+	return [v.detach().cpu().numpy() if isinstance(v, torch.Tensor) else v for v in d_v]
+
 
 npify_tree: Callable = flat_wrap(npify_list)
 
 if torch:
 
-	def compute_metrix(d:dict, mode='tr', ignore=[], _d={}):
+	fancy = dict()
+
+	def compute_metrix(v: dict, source='', sep='/'):
+
+		items = {}
+
+		if isinstance(v, list):
+			v = {str(i): v_item for i, v_item in enumerate(v)}
 		
-		fancy = dict()
+		if isinstance(v, dict):
+			for k_item, v_item in v.items():
+				k = source + sep + k_item
+				items |= compute_metrix(v_item, source=k, sep=sep)
 
-		d = flat_any(d)
-		
-		for k,v in d.items():
+		elif isinstance(v, torch.Tensor):
+			v = v.detach().cpu().numpy()
 
-			k = fancy.get(k, k)
+		if np.isscalar(v):
+			items[source] = v
 
-			v_mean = optree.tree_map(lambda x: x.mean() if not np.isscalar(x) else x, v)  if not np.isscalar(v) else v
-			v_std = optree.tree_map(lambda x: x.std() if not np.isscalar(x) else x, v)  if not np.isscalar(v) else v
+		elif isinstance(v, (np.ndarray, np.generic)):
 			
-			group = mode
-			if 'grad' in k:
-				group = mode + '/grad'
-			elif 'param' in k:
-				group += '/param'
-				
-			_d = collect_stats(k, v_mean, _d, p=group, suf=r'_\mu$')
-			_d = collect_stats(k, v_std, _d, p=group+'/std', suf=r'_\sigma$')
+			items[source + r'_\mu$'] = v.mean()
+			items['std' + sep + source + r'_\sigma$'] = v.std()
 
-		# debug_dict(msg='metrix', metrix=metrix, step=step//c.log_metric_step)
-		return _d
+		return flat_any(items)
+		
+
 
 	def torchify_tree(v: np.ndarray, v_ref: torch.Tensor):
 		leaves, tree_spec = optree.tree_flatten(v)
