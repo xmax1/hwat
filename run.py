@@ -103,46 +103,32 @@ def loss_fn(
 	**kw, 
 ):
 
-	model.zero_grad(set_to_none=True)
-	# model.requires_grad_(False)
-
-	# with torch.no_grad():
-	r, acc, deltar = sample_b(model, r, deltar, n_corr=c.data.n_corr)
+	with torch.no_grad():
+		r, acc, deltar = sample_b(model, r, deltar, n_corr=c.data.n_corr)
+		
+		if step < c.n_pre_step:
+			center_points = get_center_points(c.data.n_e, c.data.a)
+			r = keep_around_points(r, center_points, l=5.+10.*step/c.n_pre_step)
+		
+		pe = compute_pe_b(r, c.data.a, c.data.a_z)	
 	
-	if step < c.n_pre_step:
-		center_points = get_center_points(c.data.n_e, c.data.a)
-		r = keep_around_points(r, center_points, l=5.+10.*step/c.n_pre_step)
+	ke = compute_ke_b(model, _model_fn, r, ke_method=c.model.ke_method).detach().requires_grad_(False)
 	
-	pe = compute_pe_b(r, c.data.a, c.data.a_z)	
-	
-	ke = compute_ke_b(model, _model_fn, r, ke_method=c.model.ke_method).detach()
-	
-	e = pe + ke
-	e_mean_dist = torch.mean(torch.absolute(torch.median(e) - e))
-	e_clip = torch.clip(e, min=e-5*e_mean_dist, max=e+5*e_mean_dist)
-	# v_use = dict(r=r.detach().requires_grad_(False), deltar=deltar.detach())
-	v_use = dict(r=r, deltar=deltar)
+	with torch.no_grad():
+		e = pe + ke
+		e_mean_dist = torch.mean(torch.absolute(torch.median(e) - e))
+		e_clip = torch.clip(e, min=e-5*e_mean_dist, max=e+5*e_mean_dist)
+		energy = (e_clip - e_clip.mean())
 		
 	loss, grads, params = None, None, None
 
 	if 'train' in mode:
-
-		model.requires_grad_(True)
-		for p in model.parameters():
-			p.requires_grad = True
-		
-		r_loss = r.detach()
-		r_loss.requires_grad = True
-	
-		energy = (e_clip - e_clip.mean()).detach()
-		energy.requires_grad = True
-
-		log_psi = model(r_loss)
-		loss = (energy * log_psi).mean()
-		loss.backward()
+		loss = (energy * model(r_loss)).mean()
 		# c.distribute.backward(loss)
+	
+	v_init = dict(r=r.detach().requires_grad_(True), deltar=deltar)
 
-	return (r, deltar), dict(e=e, pe=pe, ke=ke, acc=acc, loss=loss.item())
+	return loss, v_init, dict(r=r, deltar=deltar, e=e, pe=pe, ke=ke, acc=acc, loss=loss)
 
 from copy import deepcopy
 
@@ -169,7 +155,7 @@ def run(c: Pyfig=None, c_update: dict=None, **kw):
 	model, model_fn_vmap, opt, scheduler = init_exp(c, c_update, **kw)
 
 	center_points 	= get_center_points(c.data.n_e, c.data.a)
-	r 				= center_points + torch.randn(size=(c.n_b, *center_points.shape), dtype=c.dtype, device=c.distribute.device)
+	r 				= center_points + torch.randn(size=(c.data.n_b, *center_points.shape), dtype=c.dtype, device=c.distribute.device)
 	deltar			= torch.tensor([0.02,], device=c.distribute.device, dtype=c.dtype)
 	
 	v_init = dict(r=r, deltar=deltar)
@@ -205,34 +191,31 @@ def run(c: Pyfig=None, c_update: dict=None, **kw):
 	c.start()
 	for rel_step, step in enumerate(range(1, (c.n_step if 'train' in c.mode else c.n_eval_step) + 1)):
 
-		(r, deltar), v_d = compute_loss(step, r, deltar)
+		model.zero_grad(set_to_none=True)
 
+		loss, v_init, v_d = compute_loss(step, **v_init)
 
-		# if 'train' in c.mode:
+		if 'train' in c.mode:
+			v_d['grads'] = {k:p.grad.detach() for k,p in model.named_parameters()}  
 
-			# if (not (step % c.distribute.sync_step)) and (c.resource.n_gpu > 1):
-			# 	v_d = c.distribute.sync(step, v_d)
+			if (not (step % c.distribute.sync_step)) and (c.resource.n_gpu > 1):
+				v_d = c.distribute.sync(step, v_d)
 
-			# with torch.no_grad():
-				# for k, p in model.named_parameters():
-				# 	if p.grad is None:
-				# 		print(k, p, v_d.get('grads'))
-				# 		raise Exception
-				# 	p.grad.copy_(v_d.get('grads').get(k))
-			# opt.step()
-			# scheduler.step()
+			with torch.no_grad():
+				for k, p in model.named_parameters():
+					p.grad.copy_(v_d.get('grads').get(k))
+			opt.step()
+			scheduler.step()
 			
-				# grads before params because detaching params zeros grads
-				
 
 		###--- cpu only from here ---###
+
+		v_d['grads'] = {k:p.grad.detach().cpu().numpy() for k,p in model.named_parameters()}  
+		v_d['params'] = {k:p.detach().cpu().numpy() for k,p in model.named_parameters()}
+
 		if int(c.distribute.rank)==0 and c.distribute.head:
 
 			if ('eval' in c.mode) or not (step % c.log_metric_step):
-
-				v_d['grads'] = {k:p.grad for k,p in model.named_parameters()}  
-				v_d['params'] = {k:p for k,p in model.named_parameters()}
-			
 				v_cpu_d = npify_tree(v_d)
 
 				t_metrix = metrix.tick()
@@ -242,7 +225,6 @@ def run(c: Pyfig=None, c_update: dict=None, **kw):
 				if (step//c.log_metric_step)==1:
 					import pprint
 					c.make_a_note(c.exp_dir/'s1_metrix', pprint.pformat(v_metrix | t_metrix))
-
 
 		if not (step % c.log_state_step) and 'savestate' in c.mode:
 			name = f'{c.mode}_i{step}.state'
