@@ -74,18 +74,21 @@ def suggest_hypam(trial: optuna.Trial, name: str, v: Param):
 	raise Exception(f'{v} not supported in hypam opt')
 
 def order_conditionals(sweep_p: dict, order: list=None):
-	wait = dict()
+	from collections import OrderedDict
+	wait = []
 	order = []
 	for name, v in sweep_p.items():
 		if v.conditional:
 			if any([k_cond in order for k_cond in v.conditional]):
 				order += [name,]
 			else:
-				wait[name,] = v
+				wait += [(name, v),]
+		else:
+			order += [name,]
 	if wait:
-		order = order_conditionals(sweep_p, order)
+		wait = OrderedDict(reversed(wait))
+		order += order_conditionals(wait, order)
 	return order
-			
 
 def get_hypam_from_study(trial: optuna.Trial, sweep_p: dict) -> dict:
 	print('trialing hypam:sweep')

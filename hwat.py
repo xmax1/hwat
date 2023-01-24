@@ -248,7 +248,7 @@ def compute_ke_b(
 	n_jvp = n_e * n_dim
 	# with torch.no_grad():
 	# @torch.enable_grad() # !!! This API does not apply to forward-mode AD. 
-	params = [p.detach() for p in model.requires_grad_(False).parameters()]
+	params = [p.detach() for p in model.parameters()]
 	buffers = [b for b in model.buffers()]
 	model_rv = lambda _r: model_fn(params, buffers, _r).sum()
 
@@ -343,6 +343,7 @@ def is_a_larger(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 from utils import check
 
+@torch.no_grad()
 def sample_b(
 	model: nn.Module, 
 	r: torch.Tensor, 
@@ -351,8 +352,6 @@ def sample_b(
 ):
 	""" metropolis hastings sampling with automated step size adjustment """
 	device, dtype = r.device, r.dtype
-
-	# with torch.no_grad():
 
 	p_0 = torch.exp(model(r))**2
 

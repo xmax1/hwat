@@ -123,10 +123,10 @@ def loss_fn(
 	loss, grads, params = None, None, None
 
 	if 'train' in mode:
-		loss = (energy * model(r_loss)).mean()
+		loss = (energy * model(r)).mean()
 		# c.distribute.backward(loss)
 	
-	v_init = dict(r=r.detach().requires_grad_(True), deltar=deltar)
+	v_init = dict(r=r, deltar=deltar)
 
 	return loss, v_init, dict(r=r, deltar=deltar, e=e, pe=pe, ke=ke, acc=acc, loss=loss)
 
@@ -156,6 +156,7 @@ def run(c: Pyfig=None, c_update: dict=None, **kw):
 
 	center_points 	= get_center_points(c.data.n_e, c.data.a)
 	r 				= center_points + torch.randn(size=(c.data.n_b, *center_points.shape), dtype=c.dtype, device=c.distribute.device)
+	r.requires_grad_(False)
 	deltar			= torch.tensor([0.02,], device=c.distribute.device, dtype=c.dtype)
 	
 	v_init = dict(r=r, deltar=deltar)
@@ -166,6 +167,7 @@ def run(c: Pyfig=None, c_update: dict=None, **kw):
 		_t0: 		   float = time.time()
 		max_mem_alloc: float = None
 		t_per_it: 	   float = None
+		step: 		   int 	 = 0
 
 		exp_stats: 		list = ['max_mem_alloc', 't_per_it']
 		source: 		str  = 'exp_stats/'
@@ -174,9 +176,11 @@ def run(c: Pyfig=None, c_update: dict=None, **kw):
 			super().__init__(parent)
 			torch.cuda.reset_peak_memory_stats()
 
-		def tick(ii, **kw) -> dict:
+		def tick(ii, step: int, **kw) -> dict:
+			dstep = step - ii.step 
+
 			_t1 = time.time()
-			ii.t_per_it = _t1 - ii._t0
+			ii.t_per_it = (_t1 - ii._t0) / float(dstep)
 			ii._t0 = time.time()
 
 			ii.max_mem_alloc = torch.cuda.max_memory_allocated() // 1024 // 1024
@@ -195,30 +199,33 @@ def run(c: Pyfig=None, c_update: dict=None, **kw):
 
 		loss, v_init, v_d = compute_loss(step, **v_init)
 
+
 		if 'train' in c.mode:
-			v_d['grads'] = {k:p.grad.detach() for k,p in model.named_parameters()}  
+			c.distribute.backward(loss)
+			v_d['grads'] = {k:p.grad.detach() for k,p in model.named_parameters()}
+		
+		if (not (step % c.distribute.sync_step)) and (c.resource.n_gpu > 1):
+			v_d = c.distribute.sync(step, v_d)
 
-			if (not (step % c.distribute.sync_step)) and (c.resource.n_gpu > 1):
-				v_d = c.distribute.sync(step, v_d)
 
+		if 'train' in c.mode:
 			with torch.no_grad():
 				for k, p in model.named_parameters():
 					p.grad.copy_(v_d.get('grads').get(k))
-			opt.step()
-			scheduler.step()
-			
+				opt.step()
+				scheduler.step()
+
 
 		###--- cpu only from here ---###
-
-		v_d['grads'] = {k:p.grad.detach().cpu().numpy() for k,p in model.named_parameters()}  
-		v_d['params'] = {k:p.detach().cpu().numpy() for k,p in model.named_parameters()}
-
 		if int(c.distribute.rank)==0 and c.distribute.head:
 
 			if ('eval' in c.mode) or not (step % c.log_metric_step):
+				v_d['grads'] = {k:p.grad.detach().cpu().numpy() for k,p in model.named_parameters()}
+				v_d['params'] = {k:p.detach().cpu().numpy() for k,p in model.named_parameters()}
+
 				v_cpu_d = npify_tree(v_d)
 
-				t_metrix = metrix.tick()
+				t_metrix = metrix.tick(step)
 				v_metrix = compute_metrix(v_cpu_d, source=c.mode, sep='/')
 				wandb.log(v_metrix | t_metrix, step=step)
 
@@ -226,9 +233,12 @@ def run(c: Pyfig=None, c_update: dict=None, **kw):
 					import pprint
 					c.make_a_note(c.exp_dir/'s1_metrix', pprint.pformat(v_metrix | t_metrix))
 
+
 		if not (step % c.log_state_step) and 'savestate' in c.mode:
+			v_d['params'] = {k:p.detach() for k,p in model.named_parameters()}
 			name = f'{c.mode}_i{step}.state'
 			lo_ve(path=c.state_dir/name, data=v_d)
+
 
 	c.wb.run.finish()
 	torch.cuda.empty_cache()
@@ -261,7 +271,7 @@ if __name__ == "__main__":
 		if 'opt_hypam' in mode:
 			from opt_hypam_utils import opt_hypam, objective
    
-			objective = partial(objective, run=run, c=c, mode='train-eval')
+			objective = partial(objective, c=c, run=run)
 			v_run = opt_hypam(objective, c)
 
 		elif 'max_mem' in mode:

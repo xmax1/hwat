@@ -63,6 +63,7 @@ class Param(Sub):
 	log: bool = False
 	step_size: float|int = None
 	sample: str = None # docs:Param:sample from ('uniform', )
+	conditional: list = None
 
 	def __init__(ii, values=None, domain=None, dtype=None, log=None, step_size=None, sample=None, parent=None) -> None: # docs:Param:init needed so can use kw arg to init
 		super().__init__(parent=parent)
