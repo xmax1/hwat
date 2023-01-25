@@ -75,19 +75,26 @@ def loss_fn(
 	**kw, 
 ):
 
+
 	with torch.no_grad():
-		min_step = max(4, 2*round( (c.n_pre_step * (step/c.n_pre_step)) /2.))
-		n_corr = int(min(min_step, c.data.n_corr))
-		r, acc, deltar = sample_b(model, r, deltar, n_corr=n_corr)
 		
 		if step < c.n_pre_step:
 			center_points = get_center_points(c.data.n_e, c.data.a)
-			r = keep_around_points(r, center_points, l=5.+10.*step/c.n_pre_step)
+			r = center_points + 2*torch.randn_like(r)
+			min_step = max(4, 2*round( (c.n_pre_step * (step/c.n_pre_step)) /2.))
+			n_corr = int(min(min_step, c.data.n_corr))
+			
+			r, acc, deltar = sample_b(model, r, deltar, n_corr=n_corr)
+
+			r = keep_around_points(r, center_points, l=5.+50.*step/c.n_pre_step)
+
+		else:
+			r, acc, deltar = sample_b(model, r, deltar, n_corr=c.data.n_corr)
 		
 		pe = compute_pe_b(r, c.data.a, c.data.a_z)	
 	
 	ke = compute_ke_b(model, model_fn, r, ke_method=c.model.ke_method)
-	
+
 	with torch.no_grad():
 		e = pe + ke
 		e_mean_dist = torch.mean(torch.absolute(torch.median(e) - e))
@@ -115,12 +122,12 @@ def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 
 	metrix = Metrix(eval_keys=c.eval_keys)
 	
-
 	c.start(dark='dark' in c.mode)
 	
 	for rel_step, step in enumerate(range(1, (c.n_step if 'train' in c.mode else c.n_eval_step) + 1)):
 
 		model.zero_grad(set_to_none=True)
+
 
 		loss, v_init, v_d = compute_loss(step, **v_init)
 
@@ -136,8 +143,14 @@ def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 
 		if 'train' in c.mode:
 			with torch.no_grad():
+				is_pretraining = step<c.n_pre_step
+				max_update = 0.001
+				max_g = max([p.grad.max().item() for p in model.parameters()]) * 1./max_update
 				for k, p in model.named_parameters():
-					p.grad.copy_(v_d.get('grads').get(k))
+					g = v_d.get('grads').get(k)
+					if is_pretraining:
+						g /= max_g
+					p.grad.copy_( g )
 				opt.step()
 				scheduler.step()
 

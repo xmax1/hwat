@@ -143,6 +143,8 @@ class Pyfig(PyfigBase):
   
 		ii.run_local_or_submit()
 
+		# python run.py --submit --mode train --n_det 1 --n_step 10000 --a_z [4] --exp_name stab~4 --n_pre_step 1000
+		# python run.py --submit --mode train --n_det 1 --n_step 10000 --a_z [16] --exp_name stab~16 --n_pre_step 1000
 		# python run.py --submit --dist hf_accelerate --n_gpu 2 --exp_name demo~opt_hypam --mode opt_hypam --time 12:00:00 --system O2_neutral_triplet
 		# a_z		= 	Param(values=[[i,] for i in range(5, 50)], dtype=int),
 		# get_mem_max 15
