@@ -98,7 +98,7 @@ def run(c: Pyfig):
     ### train ###
     import wandb
     from hwat import keep_around_points, sample_b
-    from utils import compute_metrix
+    from walle import compute_metrix
     
     ### add in optimiser
     model.train()

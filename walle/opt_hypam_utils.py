@@ -1,17 +1,16 @@
 
 from pathlib import Path
 import sys
-from pyfig_utils import PyfigBase, Param, lo_ve
 import optuna
 from typing import Callable
 from time import sleep
 import pprint
 import os
-from utils import debug_dict
-from pyfig import Pyfig
 import numpy as np
 from optuna import Trial
 
+from .utils import debug_dict
+from .pyfig_utils import PyfigBase, Param, lo_ve
 """
 - print cmd to join run
 
@@ -38,7 +37,7 @@ parameters: 	dict 	= dict(
 def str_lower_eq(a: str, b:str):
 	return a.lower()==b.lower()
 
-def objective(trial: Trial, c: Pyfig, run: Callable):
+def objective(trial: Trial, c: PyfigBase, run: Callable):
 	c_update_next = get_hypam_from_study(trial, c.sweep.parameters)
 	print('trial')
 	pprint.pprint(c_update_next)

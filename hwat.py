@@ -5,7 +5,7 @@ from torch.jit import Final
 from functorch import grad
 import functorch
 import pprint
-from utils.utils import debug_dict
+from walle.utils import debug_dict
 from copy import deepcopy
 import numpy as np
 
@@ -341,8 +341,6 @@ def is_a_larger(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 	a_is_larger = (torch.sign(v) + 1.) / 2. # 1 when a bigger
 	b_is_larger = (a_is_larger-1.)*-1. # 1 when b bigger
 	return a_is_larger, b_is_larger
-
-from utils import check
 
 @torch.no_grad()
 def sample_b(

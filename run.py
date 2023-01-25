@@ -4,8 +4,8 @@ import wandb
 from datetime import datetime
 from pathlib import Path
 
-from utils.pyfig_utils import Metrix
-from utils.torch_utils import detach_tree
+from walle.pyfig_utils import Metrix
+from walle.torch_utils import detach_tree
 
 import traceback
 from typing import Callable
@@ -14,10 +14,10 @@ import torch
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.optim import Optimizer
 from functorch import make_functional_with_buffers, vmap
-from utils.torch_utils import get_opt, get_scheduler, load, get_max_mem_c
-from utils.utils import debug_dict, npify_tree, compute_metrix, flat_any
+from walle.torch_utils import get_opt, get_scheduler, load, get_max_mem_c
+from walle.utils import debug_dict, npify_tree, compute_metrix, flat_any
 
-from utils.pyfig_utils import Param, lo_ve
+from walle.pyfig_utils import Param, lo_ve
 from pyfig import Pyfig 
 from functools import partial
 
@@ -76,8 +76,8 @@ def loss_fn(
 ):
 
 	with torch.no_grad():
-		min_step = min(2, (20*step)//c.n_pre_step)
-		n_corr = int(2*round(min(c.data.n_corr, min_step/2.)))
+		min_step = max(4, 2*round( (c.n_pre_step * (step/c.n_pre_step)) /2.))
+		n_corr = int(min(min_step, c.data.n_corr))
 		r, acc, deltar = sample_b(model, r, deltar, n_corr=n_corr)
 		
 		if step < c.n_pre_step:
@@ -106,13 +106,17 @@ def loss_fn(
 
 def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 
+	### !!! under construction
+	# c.update((v_init.get('c_update', {}))
+
 	compute_loss, model, opt, scheduler = init_exp(c, c_update, **kw)
 	
 	v_init = c.init_app(v_init)
 
 	metrix = Metrix(eval_keys=c.eval_keys)
 	
-	c.start(dark='-dark' in c.mode)
+
+	c.start(dark='dark' in c.mode)
 	
 	for rel_step, step in enumerate(range(1, (c.n_step if 'train' in c.mode else c.n_eval_step) + 1)):
 
@@ -141,28 +145,32 @@ def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 		###--- cpu only from here ---###
 		if ('eval' in c.mode) or not (step % c.log_metric_step):
 
-				if 'debug' in c.mode: 
-					v_d['grads'] = {k:p.grad.detach().cpu().numpy() for k,p in model.named_parameters() if not p.grad is None}
-					v_d['params'] = {k:p.detach().cpu().numpy() for k,p in model.named_parameters()}
+			v_d['grads'] = {k:p.grad.detach().cpu().numpy() for k,p in model.named_parameters() if not p.grad is None}
+			v_d['params'] = {k:p.detach().cpu().numpy() for k,p in model.named_parameters()}
 
-				if 'eval' in c.mode:
-					keep_keys = c.eval_keys + list(v_init.keys()) + c.log_keys
-					v_d = dict(filter(lambda kv: kv[0] in keep_keys, v_d.items()))
+			if not 'debug' in c.mode:
+				v_d.pop('grads')
+				v_d.pop('params')
 
-				v_cpu_d = npify_tree(v_d)
+			if 'eval' in c.mode:
+				keep_keys = c.eval_keys + list(v_init.keys()) + c.log_keys
+				v_d = dict(filter(lambda kv: kv[0] in keep_keys, v_d.items()))
 
-				t_metrix = metrix.tick(step, opt_obj=v_cpu_d['e'].mean())
-				v_metrix = compute_metrix(v_cpu_d, source=c.mode, sep='/')
+			v_cpu_d = npify_tree(v_d)
 
-				if int(c.dist.rank)==0 and c.dist.head:
+			v_cpu_d |= metrix.tick(step, opt_obj=v_cpu_d['e'].mean())
 
-					if not 'dark' in c.mode:
-						wandb.log(v_metrix | t_metrix, step=step)
-					
-					if 'record' in c.mode:
-						log_data = dict(filter(lambda kv: kv[0] in c.log_keys, v_d.items()))
-						log_data = {k:v[None] for k,v in log_data.items()}
-						metrix.log = log_data if rel_step==1 else {k:np.stack(v, log_data[k]) for k,v in log_data.items()}
+			v_metrix = compute_metrix(v_cpu_d, source=c.mode, sep='/')
+
+			if int(c.dist.rank)==0 and c.dist.head:
+
+				if not 'dark' in c.mode:
+					wandb.log(v_metrix, step=step)
+				
+				if 'record' in c.mode:
+					log_data = dict(filter(lambda kv: kv[0] in c.log_keys, v_d.items()))
+					log_data = {k:v[None] for k,v in log_data.items()}
+					metrix.log = log_data if rel_step==1 else {k:np.stack(v, log_data[k]) for k,v in log_data.items()}
 
 
 		if int(c.dist.rank)==0 and c.dist.head:
@@ -177,10 +185,10 @@ def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 	torch.cuda.empty_cache()
 
 	if int(c.dist.rank)==0 and c.dist.head:
-		n_param = sum(p.numel() for p in model.parameters())
-		wandb.log(dict(n_param=n_param))
 
 		if not 'dark' in c.mode:
+			n_param = sum(p.numel() for p in model.parameters())
+			wandb.log(dict(n_param=n_param))
 			done = c.record_app(metrix.opt_obj_all)
 
 		if metrix.log:
@@ -209,18 +217,18 @@ if __name__ == "__main__":
 
 		def __call__(ii, c: Pyfig, v_init: dict=None, c_update: dict=None, mode: str=None):
 			c.update(c_update | dict(mode=(mode or {})))
-			fn = getattr(ii, c.mode)
+			fn = getattr(ii, c.mode.split('-')[0])
 			return fn(c=c, v_init=v_init)
 
 		def opt_hypam(ii, c: Pyfig=None, v_init: dict=None):
-			from opt_hypam_utils import opt_hypam, objective
+			from walle.opt_hypam_utils import opt_hypam, objective
    
 			objective = partial(objective, c=c, run=run)
 			v_run = opt_hypam(objective, c)
 			return v_run
 
 		def max_mem(ii, c: Pyfig=None, v_init: dict=None):
-			from torch_utils import get_max_mem_c
+			from walle.torch_utils import get_max_mem_c
 
 			c.mode = 'train'
 			c.n_step = 10*c.log_metric_step
@@ -240,7 +248,7 @@ if __name__ == "__main__":
 			return run(c=c, v_init=v_init)
 
 		def profile(ii, c: Pyfig=None, v_init: dict=None):
-			from torch_utils import gen_profile
+			from walle.torch_utils import gen_profile
 			c.mode = 'train'
 			fn = partial(run, c=c, v_init=v_init)
 			v_run = gen_profile(fn, c)

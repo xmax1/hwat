@@ -2,18 +2,19 @@ import sys
 from typing import Callable
 from pathlib import Path
 import wandb
-from pyfig_utils import PyfigBase, PlugIn 
 from functools import partial 
-
-from utils import dict_to_cmd
-from utils import flat_any
 
 import numpy as np
 
 import torch
-import accelerate
 import optree
-from utils import debug_dict
+
+from .utils import debug_dict, dict_to_cmd, flat_any
+from .pyfig_utils import PyfigBase, PlugIn 
+from .utils import type_check_v
+from .utils import get_max_n_from_filename
+from .pyfig_utils import lo_ve
+
 from torch import nn
 
 
@@ -128,7 +129,6 @@ def get_opt(
 	return opt_for_model
 
 
-from utils import type_check_v
 
 
 def get_scheduler(
@@ -157,8 +157,7 @@ def get_scheduler(
 
 	return scheduler
 
-from utils import get_max_n_from_filename
-from pyfig_utils import lo_ve
+
  
 def load(c: PyfigBase, path: Path=None, **things_to_load):
 

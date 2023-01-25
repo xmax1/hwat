@@ -1,4 +1,4 @@
-from utils import flat_any
+from walle import flat_any
 import inspect
 from typing import Callable, Union
 from functools import reduce, partial
@@ -12,10 +12,10 @@ import numpy as np
 import re
 from time import sleep
 
-from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum
-from utils import mkdir, cmd_to_dict, dict_to_wandb, iterate_n_dir
-from utils import type_me
-from utils import PlugIn 
+from walle import run_cmds, run_cmds_server, count_gpu, gen_alphanum
+from walle import mkdir, cmd_to_dict, dict_to_wandb, iterate_n_dir
+from walle import type_me
+from walle import PlugIn 
 from dump.user import user
 
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'

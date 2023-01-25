@@ -376,7 +376,11 @@ if torch:
 		items = {}
 
 		if isinstance(v, list):
-			v = {str(i): v_item for i, v_item in enumerate(v)}
+			all_scalar = all([np.isscalar(_vi) for _vi in v])
+			if all_scalar:
+				v = np.array(v)
+			else:
+				v = {str(i): v_item for i, v_item in enumerate(v)}
 		
 		if isinstance(v, dict):
 			for k_item, v_item in v.items():

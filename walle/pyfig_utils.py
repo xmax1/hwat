@@ -21,11 +21,10 @@ import yaml
 import json
 from functools import partial
 import numpy as np
-from utils import get_max_n_from_filename
 
-from utils import dict_to_cmd, cmd_to_dict, dict_to_wandb, debug_dict
-from utils import mkdir, iterate_n_dir, gen_time_id, add_to_Path, dump, load
-from utils import get_cartesian_product, type_me, run_cmds, flat_any 
+from .utils import dict_to_cmd, cmd_to_dict, dict_to_wandb, debug_dict
+from .utils import mkdir, iterate_n_dir, gen_time_id, add_to_Path, dump, load
+from .utils import get_cartesian_product, type_me, run_cmds, flat_any 
 
 from torch import nn
 
@@ -268,20 +267,20 @@ class PyfigBase:
 		update = flat_any((c_init or {})) | flat_any((other_arg or {})) | (sys_arg or {})
 
 
-		from distribute_utils import naive, hf_accelerate
-
+		### under construction ###
+		from .distribute_utils import naive, hf_accelerate
 		plugin_repo = dict(
 			dist = dict(
 				hf_accelerate=hf_accelerate,
 				naive = naive,
 			),
 		)
-
 		new_sub_cls = dict(filter(lambda kv: kv[0] in ii._sub_ins.keys(), update.items()))
 		[update.pop(k) for k in new_sub_cls.keys()]
 		for plugin, plugin_version in new_sub_cls.items():
 			sub_cls = plugin_repo[plugin][plugin_version]
 			ii.init_sub_cls(sub_cls=sub_cls, name=plugin)
+		### under construction ###
 		
 		ii.update(update)
 
@@ -310,6 +309,7 @@ class PyfigBase:
 			ii.setup_exp_dir(group_exp= False, force_new_id= False)
 
 			tags = ii.mode.split('-')
+			
 
 			if 'dark' in tags:
 				print('pyfig:start:\n Going dark. wandb not initialised.')
@@ -343,17 +343,7 @@ class PyfigBase:
 
 			run_or_sweep_d = ii.get_run_or_sweep_d()
 
-			# a_z		= 	Param(values=[[i,] for i in range(5, 50)], dtype=int),
-			# get_mem_max 15
-			# python run.py --submit --a_z [16] --dist naive --cudnn_benchmark --exp_name sweep-n_b --mode max_mem --time 12:00:00
-			# python run.py --submit --dist naive --cudnn_benchmark --exp_name sweep-a_z --group_exp --time 00:10:00
-			# python run.py --submit --dist naive --cudnn_benchmark --exp_name hypam_opt --mode hypam_opt --group_exp --time 12:00:00
-			# python run.py --submit --exp_name dist --group_exp --time 01:00:00 --a_z [30] --dist naive --mode max_mem --n_gpu 10
-			# python run.py --submit --exp_name dist --group_exp --time 01:00:00 --a_z [30] --dist hf_accelerate --mode max_mem --n_gpu 10
-			# for a_z in [[i,] for i in range(10, 60, 2)]:
-			# 	run_d = dict(a_z=a_z)
 			for i, run_d in enumerate(run_or_sweep_d):
-
 
 				if ii.run_sweep or ii.wb.wb_sweep:
 					group_exp = not i==0
@@ -361,7 +351,8 @@ class PyfigBase:
 					group_exp = ii.group_exp
 
 				ii.setup_exp_dir(group_exp= group_exp, force_new_id= True)
-				base_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore+['sweep','resource','dist_c','slurm_c'])
+				base_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, 
+							ignore=ii.ignore+['sweep','resource','dist_c','slurm_c'])
 				run_d = base_d | run_d
 
 				ii.debug_log([dict(os.environ.items()), run_d], ['log-submit_env.log', 'log-submit_d.log'])
@@ -423,6 +414,7 @@ class PyfigBase:
 			ii.exp_id = gen_time_id(7)
 
 			exp_name = ii.exp_name or 'junk'
+			group_exp = group_exp or ('~' in exp_name)
 			sweep_dir = 'sweep'*ii.run_sweep
 			exp_group_dir = Path(ii.dump_exp_dir, sweep_dir, exp_name)
 			exp_group_dir = iterate_n_dir(exp_group_dir, group_exp=group_exp) # pyfig:setup_exp_dir does not append -{i} if group allowed
@@ -735,7 +727,7 @@ class Metrix:
 		ii.opt_obj = opt_obj
 		ii.opt_obj_all += [ii.opt_obj,]
 
-		return dict(exp_stats = {k: getattr(ii, k) for k in ii.exp_stats})
+		return dict(exp_stats={k: getattr(ii, k) for k in ii.exp_stats})
 	
 	def to_dict(ii):
 		return {k: getattr(ii, k) for k in ii.exp_stats}

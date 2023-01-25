@@ -2,10 +2,9 @@ from pathlib import Path
 import numpy as np
 from datetime import datetime
 
-from utils.pyfig_utils import PyfigBase, Param, PlugIn, dict_to_cmd
-
-from utils.resource_utils import niflheim
-from utils.distribute_utils import naive, hf_accelerate
+from walle.pyfig_utils import PyfigBase, Param, PlugIn, dict_to_cmd
+from walle.resource_utils import niflheim
+from walle.distribute_utils import naive, hf_accelerate
 
 from dump.systems import systems
 from dump.user_secret import user
@@ -74,10 +73,10 @@ class Pyfig(PyfigBase):
 		terms_s_emb:    list    = ['ra', 'ra_len']
 		terms_p_emb:    list    = ['rr', 'rr_len']
 		ke_method:      str     = 'grad_grad'
-		n_sv:           int     = 64
-		n_pv:           int     = 32
-		n_fb:           int     = 3
-		n_det:          int     = 4
+		n_sv:           int     = 32
+		n_pv:           int     = 16
+		n_fb:           int     = 2
+		n_det:          int     = 2
 		
 		n_fbv:          int     = property(lambda _: _.n_sv*3+_.n_pv*2)
 
@@ -109,18 +108,18 @@ class Pyfig(PyfigBase):
 			# n_fb:           int     = 3
 			# n_det:          int     = 4
 
-			# opt_name		=	Param(values=['AdaHessian',  'RAdam'], dtype=str),
-			# lr				=	Param(domain=(0.0001, 1.), log=True),
-			# sch_max_lr		=	Param(values=[0.1, 0.01, 0.001], dtype=float),
-			# weight_decay	= 	Param(domain=[0.0, 1.], dtype=float, condition=['AdaHessian',]),
-			# hessian_power	= 	Param(values=[0.5, 1.], dtype=float, condition=['AdaHessian',]),
-			# cudnn_benchmark	= 	Param(values=[True, False], dtype=bool),
+			opt_name		=	Param(values=['AdaHessian',  'RAdam'], dtype=str),
+			lr				=	Param(domain=(0.0001, 1.), log=True),
+			sch_max_lr		=	Param(values=[0.1, 0.01, 0.001], dtype=float),
+			weight_decay	= 	Param(domain=[0.0, 1.], dtype=float, condition=['AdaHessian',]),
+			hessian_power	= 	Param(values=[0.5, 1.], dtype=float, condition=['AdaHessian',]),
+			cudnn_benchmark	= 	Param(values=[True, False], dtype=bool),
 
-			n_sv	= 	Param(values=[16, 32, 64], dtype=int),
-			n_pv	= 	Param(values=[16, 32, 64], dtype=int),
-			n_det	= 	Param(values=[1, 2, 4, 8], dtype=int),
-			n_fb	= 	Param(values=[1, 2, 3, 4], dtype=int),
-			n_b		= 	Param(values=[512, 1024, 2048, 4096], dtype=int),
+			# n_sv	= 	Param(values=[16, 32, 64], dtype=int),
+			# n_pv	= 	Param(values=[16, 32, 64], dtype=int),
+			# n_det	= 	Param(values=[1, 2, 4, 8], dtype=int),
+			# n_fb	= 	Param(values=[1, 2, 3, 4], dtype=int),
+			# n_b		= 	Param(values=[512, 1024, 2048, 4096], dtype=int),
 
 		)
 
@@ -143,6 +142,24 @@ class Pyfig(PyfigBase):
 		ii.update(systems.get(ii.data.system, {}))
   
 		ii.run_local_or_submit()
+
+		# python run.py --submit --dist hf_accelerate --n_gpu 2 --exp_name demo~opt_hypam --mode opt_hypam --time 12:00:00 --system O2_neutral_triplet
+		# a_z		= 	Param(values=[[i,] for i in range(5, 50)], dtype=int),
+		# get_mem_max 15
+
+		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist naive
+		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist naive --cudnn_benchmark
+		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist hf_accelerate
+		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist hf_accelerate --cudnn_benchmark
+
+		# python run.py --submit --cudnn_benchmark --exp_name opt_hypam1~O2 --mode opt_hypam-record --time 12:00:00 --n_step 500 --n_b 512
+
+		# python run.py --submit --a_z [16] --dist naive --cudnn_benchmark --exp_name sweep-n_b --mode max_mem --time 12:00:00
+		# python run.py --submit --dist naive --cudnn_benchmark --exp_name sweep-a_z --group_exp --time 00:10:00
+		# python run.py --submit --exp_name dist --group_exp --time 01:00:00 --a_z [30] --dist naive --mode max_mem --n_gpu 10
+		# python run.py --submit --exp_name dist --group_exp --time 01:00:00 --a_z [30] --dist hf_accelerate --mode max_mem --n_gpu 10
+		# for a_z in [[i,] for i in range(10, 60, 2)]:
+		# 	run_d = dict(a_z=a_z)
 
 
 	def init_app(ii, v_init: dict=None):
@@ -189,6 +206,7 @@ class Pyfig(PyfigBase):
 	## pyfig:todo
 	### docs:pyfig:load
 
+	- baseline cmd with pretty table
 	- copy all code to run dir
 	- generalisation refactor 
 

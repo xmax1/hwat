@@ -22,18 +22,17 @@ import yaml
 import json
 from functools import partial
 import numpy as np
-from utils import get_max_n_from_filename
 
-from utils import dict_to_cmd, cmd_to_dict, dict_to_wandb, debug_dict
-from utils import mkdir, iterate_n_dir, gen_time_id, add_to_Path, dump, load
-from utils import get_cartesian_product, type_me, run_cmds, flat_any 
+from .utils import dict_to_cmd, cmd_to_dict, dict_to_wandb, debug_dict
+from .utils import mkdir, iterate_n_dir, gen_time_id, add_to_Path, dump, load
+from .utils import get_cartesian_product, type_me, run_cmds, flat_any 
+from .pyfig_utils import PlugIn, PyfigBase
 
 from torch import nn
 
 this_dir = Path(__file__).parent
 hostname = os.environ['HOSTNAME']
 
-from pyfig_utils import PlugIn, PyfigBase
 
 
 class naive(PyfigBase.dist):

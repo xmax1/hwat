@@ -81,7 +81,7 @@ def train_step(state, r_step):
 
 
 ### init variables ###
-from utils import gen_rng
+from walle import gen_rng
 from hwat import init_r, get_center_points
 from jax import random as rnd
 
@@ -108,7 +108,7 @@ metro_hast = jax.pmap(partial(sample_b, n_corr=c.data.n_corr), in_axes=(0,0,0,0)
 ### train ###
 import wandb
 from hwat import keep_around_points
-from utils import compute_metrix
+from walle import compute_metrix
 
 wandb.define_metric("*", step_metric="tr/step")
 for step in range(1, c.n_step+1):
