@@ -2,7 +2,7 @@ import sys
 from typing import Callable
 from pathlib import Path
 import wandb
-from pyfig_utils import PyfigBase, Sub
+from pyfig_utils import PyfigBase, PlugIn 
 from functools import partial 
 
 from utils import dict_to_cmd
@@ -17,73 +17,16 @@ from utils import debug_dict
 from torch import nn
 
 
-class distribute(PyfigBase.distribute):
-	dist: accelerate.Accelerator = None
-	dist_method: 	str		= 'accelerate'
-	sync_step:		int		= 5
-	_launch_cmd:	str  	= property(lambda _: f'accelerate launch {dict_to_cmd(_.dist_c.d, exclude_false=True)} ')
-
-	class dist_c(Sub):
-		# compute_environment = 'LOCAL_MACHINE'
-		# distributed_type =  'MULTI_GPU'
-		multi_gpu = False
-		machine_rank =  '0'
-		same_network = True
-		main_process_port = str(np.random.randint(30000, 60000))
-		num_processes =  property(lambda _: str(_._p._p.resource.n_gpu))
-		num_machines =  property(lambda _: str(_._p._p.resource.n_node))
-
-	def __init__(ii, parent= None):
-		super().__init__(parent)
-		ii.dist: accelerate.Accelerator = accelerate.Accelerator()
-
-	@torch.no_grad()
-	def sync(ii, step, v_d: dict[str:torch.Tensor]) -> list[torch.Tensor]:
-
-		if ((step/ii.sync_step)==1) and ii._p.debug:
-			[print(k, v.shape) for k,v in v_d.items()]
-
-		v_flat, treespec = optree.tree_flatten(v_d)
-		v_sync_flat: list[torch.Tensor] = ii.dist.gather(v_flat)
-		for i, (v, v_ref) in enumerate(zip(v_sync_flat, v_flat)):
-			if ((step/ii.sync_step)==1) and ii._p.debug:
-				print(v.shape, v_ref.shape)
-			v = v.reshape(-1, *v_ref.shape).mean(dim=0)
-			v_sync_mean = [v] if i==0 else [*v_sync_mean, v]
-		v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync_mean)
-
-		return v_sync
-
-	def backward(ii, loss: torch.Tensor):
-		ii.dist.backward(loss)
-
-	def set_device(ii, device=None):
-		print('getting devices with accelerate ', ii.dist._get_devices())
-		ii.device = ii.dist.device
-		return ii.device
-
-	def set_seed(ii, seed=None):
-		print('setting seed w accelerate ' )
-		from accelerate.utils import set_seed
-		set_seed(seed or ii._p.seed)
-  
-	def prepare(ii, model, opt, **kw):
-		return ii.dist.prepare(model, opt, **kw)  # docs:accelerate
-
 def gen_profile(
 	fn: Callable,
-	profile_dir= './dump/tmp',
+	c: PyfigBase, 
 	wait=1, 
 	warmup=1, 
 	active=1, 
 	repeat=1,
-	**init_d
+	**kw
 ) -> dict:
 	print('profile: ', fn)
-
-	debug_dict(d=init_d, msg='profile')
-
-	fn = partial(fn, init_d=init_d)
 
 	profiler = torch.profiler.profile(
 		activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
@@ -107,7 +50,7 @@ def gen_profile(
 	return init_d
 
 
-def get_max_mem_c(fn: Callable, max_mem_min=6, max_max_mem=15, **kw) -> dict:
+def get_max_mem_c(fn: Callable, c: PyfigBase, max_mem_min=8, max_max_mem=20, **kw) -> dict:
 	import traceback
 	t = torch.cuda.get_device_properties(0).total_memory // 1024 // 1024
 	r = torch.cuda.memory_reserved(0)
@@ -118,22 +61,39 @@ def get_max_mem_c(fn: Callable, max_mem_min=6, max_max_mem=15, **kw) -> dict:
 		try:
 			
 			n_b = n_b=2**n_b_power
-			v_d = fn(n_b=n_b, **kw)
+			c.update(dict(n_b = n_b))
 
-			mem_used = v_d['max_mem_alloc']
+			v_run = fn(c=c)
+
+			mem_used = v_run['max_mem_alloc']
 			print(f'n_b {n_b} used {mem_used} out of {t}')
 
 			torch.cuda.empty_cache()
 			if mem_used > t/2:
 				print('get_max_mem: b_s is ', n_b)
-				return dict(n_b=n_b, n_b_max=n_b, max_mem_alloc=mem_used)
+				return dict(n_b_max=n_b, max_mem_alloc=mem_used)
 
 		except Exception as e:
 			print(traceback.format_exc())
-			print('v_run max_mem: ', v_d)
+			print('v_run max_mem: ', v_run)
 			raise Exception
 
+
+def detach_tree(v_d: dict):
+	items = []
+	for k, v in v_d.items():
+
+		if isinstance(v, list):
+			v = {k + '_' + str(i): sub_i for i, sub_i in enumerate(v)}
+		
+		if isinstance(v, dict):
+			v = {k: detach_tree(v)}
+		elif isinstance(v, torch.Tensor):
+			v = v.detach()
+		
+		items += [(k, v),]
 	
+	return dict(items)
 
   
 def get_opt(
@@ -172,9 +132,9 @@ from utils import type_check_v
 
 
 def get_scheduler(
-	scheduler_name: str = None,
-	max_lr: float = None,
-	epochs: int = None, 
+	sch_name: str = None,
+	sch_max_lr: float = None,
+	sch_epochs: int = None, 
 	n_step: int = None,
 	default: str = 'OneCycleLR',
 	**kw,
@@ -186,14 +146,14 @@ def get_scheduler(
 	# scheduler_name = type_check_v('scheduler_name', scheduler_name, str, '')
 	# epochs = epochs if epochs else 1
 
-	if scheduler_name.lower() == 'OneCycleLR'.lower():
+	if sch_name.lower() == 'OneCycleLR'.lower():
 		scheduler = partial(
-			torch.optim.lr_scheduler.OneCycleLR, max_lr=max_lr, steps_per_epoch=n_step, epochs=epochs
+			torch.optim.lr_scheduler.OneCycleLR, max_lr=sch_max_lr, steps_per_epoch=n_step, epochs=sch_epochs
 		)
 
 	else:
-		print(f'!!! Scheduler {scheduler_name} not available, returning OneCycleLR ')
-		return get_scheduler(scheduler_name=default, max_lr=max_lr, epochs=epochs, n_step=n_step)
+		print(f'!!! Scheduler {sch_name} not available, returning OneCycleLR ')
+		return get_scheduler(scheduler_name=default, max_lr=sch_max_lr, epochs=sch_epochs, n_step=n_step)
 
 	return scheduler
 
@@ -207,7 +167,7 @@ def load(c: PyfigBase, path: Path=None, **things_to_load):
 	
 	if path.suffix == '':
 		step = c.step or get_max_n_from_filename(path)
-		path = c.lo_ve_path / '{mode}_{group_i}_i{step}.state'.format(c.mode, c.group_i, c.step)
+		path = c.lo_ve_path / '{mode}_{group_i}_i{step}.state'.format(c.mode, c.group_i, step)
 
 	state: dict = lo_ve(path=path)
 	state_keys = state.keys()
@@ -216,7 +176,7 @@ def load(c: PyfigBase, path: Path=None, **things_to_load):
 
 	new_state = {}
 	for k,v in things_to_load.items():
-		if k in ['model', 'opt'] :
+		if k in ['model', 'opt',] :
 			v: nn.Module
 			new_state[k] = v.load_state_dict(state[k])
 		else:

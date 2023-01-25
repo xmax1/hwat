@@ -158,7 +158,7 @@ def run(c: Pyfig):
 
             if not (step % c.log_metric_step):
 
-                    if c.distribute.head:
+                    if c.dist.head:
                         metrix = compute_metrix(v_tr)
                         wandb.log(metrix, step=step)
         

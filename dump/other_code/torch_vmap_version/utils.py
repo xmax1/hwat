@@ -52,7 +52,7 @@ def collect_stats(k, v, new_d, p='tr', suf='', sep='/', sep_long='-'):
         sep = sep_long
     if isinstance(v, dict):
         for k_sub,v_sub in v.items():
-            collect_stats(k, v_sub, new_d, p=(p+sep+k_sub))
+            collect_stats(k, v_sub, new_d, p=(p+sep+k_PlugIn))
     elif isinstance(v, list):
         for i, v_sub in enumerate(v):
             collect_stats(k, v_sub, new_d, p=(p+sep+k+str(i)))

@@ -9,6 +9,7 @@ systems = dict(
         a_z = [4.,],
         info = 'I have wanted to simulate this system since I learned about beryllium in chemistry at school :)',
     ),
+
     Ne = dict(
         nametag = 'Neon',
         precision = '+',
@@ -18,6 +19,7 @@ systems = dict(
         a_z = [10.,],
         info = 'Baseline',
     ),
+
     O2_neutral_triplet = dict(
         nametag = 'O2_Triplet',
         precision = '+',
@@ -27,6 +29,7 @@ systems = dict(
         a_z = [8.,8.],
         info = 'The ground state of oxygen with two unpaired electrons, i.e. spin multiplicity of 3',
     ),
+
     O2_neutral_singlet = dict(
         nametag = 'O2_Singlet',
         precision = '+',
@@ -36,6 +39,7 @@ systems = dict(
         a_z = [8,8],
         info = 'The first excited state of oxygen with no overall spin, i.e. spin multiplicity of 1',
     ),
+
     O2_oxidized_doublet = dict(
         nametag = 'O2_Oxidized_Doublet',
         precision = '+',

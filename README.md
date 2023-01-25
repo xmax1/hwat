@@ -22,6 +22,36 @@ changed to number of submissions ( into pyfig.__init__, is positive 1 or n_sweep
 changed to zero (on cluster submit)
 
 
+- hypam opt
+    - opt: adahess, radam
+    - cudnn: T, F
+    - lr: sample
+    - hessian_power: sample
+    - n_b: 1024
+
+- hypam opt
+    - n_sv
+    - n_pv
+    - n_fb
+    - n_det
+
+
+https://wandb.ai/hwat/hwat/groups/dist/workspace
+https://wandb.ai/hwat/hwat/groups/sweep-a_z/workspace
+https://wandb.ai/hwat/hwat/groups/sweep-n_b/workspace
+https://wandb.ai/hwat/hwat/groups/hypam_opt/workspace
+
+baselines :exclamation:
+memory scaling and gpu usage scaling (1 gpu)
+thread testing pytorch :exclamation:
+optimise hyperparams
+scale across 1 gpu n_e max_mem opt
+scaling across gpus (naive)
+scaling across gpus (accelerate)
+(including nodes)
+take those wandb reports and copy the application and send to eske
+message Steen 8 node 4h block
+
 
 
 

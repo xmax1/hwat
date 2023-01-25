@@ -15,14 +15,13 @@ from time import sleep
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum
 from utils import mkdir, cmd_to_dict, dict_to_wandb, iterate_n_dir
 from utils import type_me
-from utils import Sub
-
+from utils import PlugIn 
 from dump.user import user
 
 docs = 'https://www.notion.so/5a0e5a93e68e4df0a190ef4f6408c320'
 
 class Pyfig:
-    # SUB CLASSES CANNOT CALL EACH OTHER
+    # PlugIn CLASSES CANNOT CALL EACH OTHER
 
     run_name:       Path        = 'run.py'
     sweep_id:       str         = ''
@@ -33,7 +32,7 @@ class Pyfig:
     log_metric_step:int         = 10
     log_state_step: int         = 10          
 	
-    class data(Sub):
+    class data(PlugIn):
         """
         n_e = \sum_i charge_nuclei_i - charge = n_e
         spin = n_u - n_d
@@ -54,7 +53,7 @@ class Pyfig:
         n_equil:    int         = 10000
         acc_target: int         = 0.5
 
-    class model(Sub):
+    class model(PlugIn):
         with_sign:      bool    = False
         n_sv:           int     = 32
         n_pv:           int     = 16
@@ -65,7 +64,7 @@ class Pyfig:
         terms_p_emb:    list    = ['rr', 'rr_len']
         ke_method:      str     = 'vjp'
 
-    class sweep(Sub):        
+    class sweep(PlugIn):        
         # program         = property(lambda _: _._p.run_name)
         name            = 'demo'
         method          = 'grid'
@@ -73,13 +72,13 @@ class Pyfig:
             n_b  = {'values' : [16, 32, 64]},
         ) 
         
-    class wandb_c(Sub):
+    class wandb_c(PlugIn):
         job_type        = 'training'
         entity          = property(lambda _: _._p.project)
         name            = property(lambda _: _._p.exp_name)
         program         = property(lambda _: _._p.run_dir/_._p.run_name)
         
-    class slurm(Sub):
+    class slurm(PlugIn):
         mail_type       = 'FAIL'
         partition       ='sm3090'
         nodes           = 1                # n_node
@@ -143,7 +142,7 @@ class Pyfig:
         
         init_arg = dict(run_sweep=run_sweep, submit=submit, debug=debug, wb_mode=wb_mode, cap=cap) | kw
         
-        print('init sub classes')
+        print('init PlugIn classes')
         for k,v in Pyfig.__dict__.items():
             if isinstance(v, type):
                 v = v(parent=ii)
@@ -168,7 +167,7 @@ class Pyfig:
             print('running script')
             ii._run = wandb.init(
                     entity      = ii.wandb_c.entity,  # team name is hwat
-                    project     = ii.project,         # sub project in team
+                    project     = ii.project,         # PlugIn project in team
                     group       = 'bjarke_debug',
                     dir         = ii.exp_path,
                     config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
@@ -209,7 +208,7 @@ class Pyfig:
             # if ii._n_job_running < cap:
             if 0 < cap:
                 ii.log(dict(slurm_init=dict(sbatch=ii.sbatch, run_cmd=ii._run_cmd)), create=True, log_name='slurm_init.log')
-                for sub in range(1, n_job+1):
+                for PlugIn in range(1, n_job+1):
                     print(ii.sbatch + '\n' + ii._run_cmd)
                     d = cmd_to_dict(ii._run_cmd.lstrip('python run.py'), flat_any(ii.d))
                     ii.exp_id = gen_alphanum(n=7)
@@ -273,7 +272,7 @@ class Pyfig:
                         
     @property
     def _sub_cls(ii) -> dict:
-        return {k:v for k,v in ii.__dict__.items() if isinstance(v, Sub)}
+        return {k:v for k,v in ii.__dict__.items() if isinstance(v, PlugIn)}
     
     def save(ii, data, file_name):
         path:Path = ii.exp_path / file_name
@@ -327,7 +326,7 @@ def get_cls_dict(
     
                 v = getattr(cls, k)
                 
-                if sub_cls and isinstance(v, Sub) or (k in ref if ref else False):
+                if sub_cls and isinstance(v, PlugIn) or (k in ref if ref else False):
                     v = get_cls_dict(
                         v, ref=ref, sub_cls=False, fn=fn, prop=prop, hidn=hidn, ignore=ignore, to_cmd=to_cmd, add=add)
                     if flat:
@@ -426,7 +425,7 @@ def cls_filter(
     
     if not (is_builtin or should_ignore or not_in_ref):
         keep |= is_hidn and k.startswith('_')
-        keep |= is_sub and isinstance(v, Sub)
+        keep |= is_sub and isinstance(v, PlugIn)
         keep |= is_fn and isinstance(v, partial)
         keep |= is_prop and isinstance(cls.__class__.__dict__[k], property)
     return keep

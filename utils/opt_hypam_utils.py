@@ -26,7 +26,7 @@ parameters: 	dict 	= dict(
 
 	lr			=	Param(domain=(0.0001, 1.), log=True),
 	opt_name	=	Param(values=['AdaHessian',  'RAdam'], dtype=str),
-	max_lr		=	Param(values=[0.1, 0.01, 0.001], dtype=str, conditional=dict(opt_name='AdaHessian')),
+	max_lr		=	Param(values=[0.1, 0.01, 0.001], dtype=str, condition=dict(opt_name='AdaHessian')),
 	ke_method	=	Param(values=['ke_grad_grad_method', 'ke_vjp_method',  'ke_jvp_method'], dtype=str),
 	n_step		=	Param(values=[1000, 2000, 4000], dtype=int),
 
@@ -39,12 +39,14 @@ def str_lower_eq(a: str, b:str):
 	return a.lower()==b.lower()
 
 def objective(trial: Trial, c: Pyfig, run: Callable):
-	c_update = get_hypam_from_study(trial, c.sweep.parameters)
+	c_update_next = get_hypam_from_study(trial, c.sweep.parameters)
+	print('trial')
+	pprint.pprint(c_update_next)
 	c.mode = 'train'
-	v_tr = run(c=c, init_d=c_update)
-	c.mode = 'eval'
-	v_eval = run(c=c, **v_tr)
-	return np.stack(v_eval['opt_obj_all']).mean()
+	v_run = run(c=c, c_update=c_update_next)
+	c.mode = 'eval-dark'
+	v_run = run(c=c, v_init=v_run['v_init_next'])
+	return np.stack(v_run['opt_obj_all']).mean()
 
 
 def suggest_hypam(trial: optuna.Trial, name: str, v: Param):
@@ -73,13 +75,15 @@ def suggest_hypam(trial: optuna.Trial, name: str, v: Param):
 	
 	raise Exception(f'{v} not supported in hypam opt')
 
-def order_conditionals(sweep_p: dict, order: list=None):
+
+def order_conditions(sweep_p: dict):
 	from collections import OrderedDict
 	wait = []
 	order = []
 	for name, v in sweep_p.items():
-		if v.conditional:
-			if any([k_cond in order for k_cond in v.conditional]):
+		if v.condition:
+			print(v.condition)
+			if any([k_cond in order for k_cond in v.condition]):
 				order += [name,]
 			else:
 				wait += [(name, v),]
@@ -87,25 +91,38 @@ def order_conditionals(sweep_p: dict, order: list=None):
 			order += [name,]
 	if wait:
 		wait = OrderedDict(reversed(wait))
-		order += order_conditionals(wait, order)
+		order += order_conditions(wait)
 	return order
 
+x = {'x':1, 'y':2}
+y = x.pop('y')
+print(y)
+
+from copy import deepcopy
+
 def get_hypam_from_study(trial: optuna.Trial, sweep_p: dict) -> dict:
-	print('trialing hypam:sweep')
-	debug_dict(d=sweep_p, msg='get_hypam_from_study')
-	sweep_p_order = order_conditionals(sweep_p)
-	for i, name in enumerate(sweep_p_order):
-		v = sweep_p[name]
-		v = suggest_hypam(trial, name, v)
-		c_update = {name:v} if i==0 else {**c_update, name:v}
-	debug_dict(d=c_update, msg='get_hypam_from_study:c_update')
+
+	c_update = {}
+	for name, param in sweep_p.items():
+		v = suggest_hypam(trial, name, param)
+		c_update[name] = v
+	
+	for k,v in deepcopy(c_update).items():
+		condition = sweep_p[k].condition
+		if condition:
+			if any([cond in c_update.values() for cond in condition]):
+				c_update.pop(k)
+
+	print('optuna:get_hypam_from_study \n')
+	pprint.pprint(c_update)
+
 	return c_update
 
 
 def opt_hypam(objective: Callable, c: PyfigBase):
 	print('hypam opt create/get study')
  
-	if c.distribute.head:
+	if c.dist.head:
 		study = optuna.create_study(
 			study_name		= c.sweep.sweep_name,
 			load_if_exists 	= True, 

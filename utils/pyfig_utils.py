@@ -1,3 +1,5 @@
+from time import time
+
 from pathlib import Path
 from itertools import islice
 from time import sleep
@@ -24,17 +26,17 @@ from utils import get_max_n_from_filename
 from utils import dict_to_cmd, cmd_to_dict, dict_to_wandb, debug_dict
 from utils import mkdir, iterate_n_dir, gen_time_id, add_to_Path, dump, load
 from utils import get_cartesian_product, type_me, run_cmds, flat_any 
-from dump.systems import systems
 
 from torch import nn
 
 this_dir = Path(__file__).parent
 hostname = os.environ['HOSTNAME']
 
-class Sub:
+class PlugIn:
 	_p = None
-	_sub_ins_tag = '_p'
-	ignore = ['d', 'd_flat', 'ignore']
+	_prefix = None
+	ignore = ['d', 'd_flat', 'ignore', 'plugin_ignore'] # applies to every plugin
+	plugin_ignore: list = [] # can be used in the plugin versions
 
 	def __init__(ii, parent=None):
 		ii._p: PyfigBase
@@ -49,30 +51,44 @@ class Sub:
 
 	@property
 	def d(ii):
-		return ins_to_dict(ii, sub_ins=True, prop=True, attr=True, ignore=ii.ignore)
+		d = ins_to_dict(ii, sub_ins=True, prop=True, attr=True, ignore=ii.ignore+ii.plugin_ignore)
+		if getattr(ii, '_prefix', None):
+			_ = {k.lstrip(ii._prefix):v for k,v in d.items()}
+		return d
 
 	@property
 	def d_flat(ii):
 		return flat_any(ii.d)
 
-class Param(Sub): 
-	# docs:todo all wb sweep structure
+class Param(PlugIn): 
 	values: list = None
 	domain: tuple = None
 	dtype: type = None
 	log: bool = False
 	step_size: float|int = None
 	sample: str = None # docs:Param:sample from ('uniform', )
-	conditional: list = None
+	condition: list = None
 
-	def __init__(ii, values=None, domain=None, dtype=None, log=None, step_size=None, sample=None, parent=None) -> None: # docs:Param:init needed so can use kw arg to init
+	def __init__(ii, 
+		values=None, 
+		domain=None, 
+		dtype=None, 
+		log=None, 
+		step_size=None, 
+		sample=None, 
+		condition=None, 
+		parent=None
+
+	) -> None: # docs:Param:init needed so can use kw arg to init
 		super().__init__(parent=parent)
+
 		ii.values = values
 		ii.domain = domain
 		ii.dtype = dtype
 		ii.log = log
 		ii.sample = sample
 		ii.step_size = step_size
+		ii.condition = condition
 
 class PyfigBase:
 
@@ -92,6 +108,7 @@ class PyfigBase:
 	
 	seed:           	int   	= 0
 	dtype:          	str   	= ''
+	device: 		int|str 	= ''
 
 	n_step:         	int   	= 0
 	n_eval_step:        int   	= 0
@@ -104,7 +121,7 @@ class PyfigBase:
 
 	group_i: 			int 	= property(lambda _: _._group_i)
 	
-	class data(Sub):
+	class data(PlugIn):
 		system: 	str = ''
 		n_b:        int         = 0
 
@@ -121,7 +138,7 @@ class PyfigBase:
 		n_u:        int         = property(lambda _: (_.spin + _.n_e)//2)
 		n_d:        int         = property(lambda _: _.n_e - _.n_u)
 
-	class model(Sub):
+	class model(PlugIn):
 		with_sign:      bool    = False
 		terms_s_emb:    list    = ['ra', 'ra_len']
 		terms_p_emb:    list    = ['rr', 'rr_len']
@@ -133,7 +150,7 @@ class PyfigBase:
   
 		n_fbv:          int     = property(lambda _: _.n_sv*3+_.n_pv*2)
 
-	class opt(Sub):
+	class opt(PlugIn):
 		opt_name: 		str		= None
 		lr:  			float 	= None
 		betas:			list	= None
@@ -141,14 +158,14 @@ class PyfigBase:
 		weight_decay: 	float 	= None
 		hessian_power: 	float 	= None
   
-	class sweep(Sub):
+	class sweep(PlugIn):
 		storage: 		Path = property(lambda _: 'sqlite:///' + str(_._p.exp_dir / 'hypam_opt.db'))
 		sweep_name: 	str				= '' 
 		sweep_method: 	str				= '' # wb name of alg: grid,bayes, ... 
 		parameters: 	dict[Param]		= {}
 		n_trials: 		int				= 10
   
-	class wb(Sub):
+	class wb(PlugIn):
 		run = None
 		job_type:		str		= ''		
 		wb_mode: 		str		= ''
@@ -162,13 +179,18 @@ class PyfigBase:
 		wb_type: 		str		= property(lambda _: _.wb_sweep*f'sweeps/{_.sweep_id}' or f'groups/{_._p.exp_name}/workspace') #  or f'runs/{_._p.exp_id} _._p.group_exp*f'groups' or 'runs') # or _._p.run_sweep*f'groups/{_._p.exp_name}'
 		run_url: 		str		= property(lambda _: f'https://wandb.ai/{_.entity}/{_._p.project}/{_.wb_type}')
 		_wb_agent: 		bool	= False
-  
-	class distribute(Sub):
+
+
+	class dist(PlugIn):
 		head:			bool	= True
-		device: 		str		= 'cpu'
 		dist_method: 	str		= 'pyfig'  # options: accelerate
-		sync_step:		int		= 5
-  
+		sync_step:		int		= None
+
+		dist_set_seed: Callable = None
+		dist_set_device: Callable = None
+		dist_set_dtype: Callable = None
+
+		_device: 		str		= 'cpu'
 		_srun_cmd: 		str		= 'srun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label '
 		_gpu_id_cmd:		str	= 'nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'
 
@@ -177,103 +199,31 @@ class PyfigBase:
 		gpu_id: 		str		= property(lambda _: ''.join(run_cmds(_._gpu_id_cmd, silent=True)).split('.')[0])
 		dist_id: 		str 	= property(lambda _: _.gpu_id + '-' + hostname.split('.')[0])
 
-		class dist_c(Sub):
+		class dist_c(PlugIn):
 			pass
 
 		def __init__(ii, parent=None):
-			super().__init__(parent)
+			super().__init__(parent=parent)
 
 			def debug_sync(v_d: dict, step: int):
-				if ((step/ii.sync_step)==1) and ii._p.debug:
-					[print(k, v.shape) for k,v in v_d.items()]
 				v_sync = ii.sync(v_d, step)
-				if ((step/ii.sync_step)==1) and ii._p.debug:
-					[print(k, v.shape) for k,v in v_sync.items()]
 				return v_sync
 				
 			ii.sync = debug_sync
 
+		@torch.no_grad()
 		def sync(ii, step: int, v_d: dict) -> dict:
-			v_path = (ii._p.exchange_dir / f'{step}_{ii._p.distribute.dist_id}').with_suffix('.pk')
-			v_mean_path = add_to_Path(v_path, '-mean')
-			
-			try:
-				gc.disable()
-
-				v_ref_leaves, treespec = optree.tree_flatten(v_d)
-				v_sync_save = [v.detach().cpu().numpy() if isinstance(v, torch.Tensor) else v for v in v_ref_leaves]
-				dump(v_path, v_sync_save)
-
-			except Exception as e:
-				print(e)
-			finally:
-				gc.enable()
-			
-			if ii._p.distribute.head:
-
-				n_ready = 0
-				while n_ready < ii._p.resource.n_gpu:
-					k_path_all = list(ii._p.exchange_dir.glob(f'{step}_*'))
-					n_ready = len(k_path_all)
-
-				for i, p in enumerate(k_path_all):
-					leaves = [load(p),] if i==0   else [*leaves, load(p)]
-
-				v_mean = [np.stack(l).mean(axis=0) for l in zip(*leaves)]
-
-				try:
-					gc.disable()
-					for p in k_path_all:
-						dump(add_to_Path(p, '-mean'), v_mean)
-				except Exception as e:
-					print(e)
-				finally:
-					sleep(0.01)
-					[p.unlink() for p in k_path_all]
-					gc.enable()
-
-			while v_path.exists():
-				sleep(0.02)
-			sleep(0.02)
-
-			gc.disable()
-			try:
-				v_sync_leaves = load(v_mean_path)  # Speed: Only load sync vars
-				v_sync_leaves = [torch.tensor(data=v, device=ref.device, dtype=ref.dtype, requires_grad=False) 
-					if isinstance(ref, torch.Tensor) else v 
-					for v, ref in zip(v_sync_leaves, v_ref_leaves)]
-				v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync_leaves)
-				
-			except Exception as e:
-				v_sync = v_d
-				print(e)
-			finally: # ALWAYS EXECUTED
-				v_mean_path.unlink()
-				gc.enable()
-			return v_sync
+			return {}
 
 		def backward(ii, loss: torch.Tensor):
-			opt_is_adahess = ii._p.opt.opt_name.lower() == 'AdaHessian'.lower()
+			opt_is_adahess = ii._p.opt.opt_name.lower()=='AdaHessian'.lower()
 			loss.backward(create_graph=opt_is_adahess)
-
-		def set_device(ii, device=None):
-			ii.device = 'cpu'
-			is_cuda = torch.cuda.is_available()
-			if is_cuda:
-				torch_curr_device = torch.cuda.current_device()
-				torch_n_device = torch.cuda.device_count()
-				cuda_visible_devices = os.environ['CUDA_VISIBLE_DEVICES']
-				ii.device = 'cuda' # default is cpu
-			return ii.device
-
-		def set_seed(ii, seed=None):
-			print('setting seed w torch manually ' )
-			torch.random.manual_seed(seed or ii._p.seed)
 
 		def prepare(ii, *arg, **kw):
 			return list(arg) + list(kw.values())
  
-	class resource(Sub):
+
+	class resource(PlugIn):
 		submit: 		bool	= False
 		cluster_submit: Callable= None
 		script:			Callable= None
@@ -292,11 +242,12 @@ class PyfigBase:
 	exp_data_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exp_data'))
 	log_dir: 			Path    = property(lambda _: _.cluster_dir)
 
-	_ignore_f = ['commit', 'pull', 'backward']
+	_ignore_f = ['commit', 'pull', 'backward', 'controller', 'plugin_ignore']
 	_ignore_c = ['sweep',]
 	ignore: list = ['ignore', 'd', 'cmd', 'sub_ins', 'd_flat'] + _ignore_f + _ignore_c
-	_sub_ins_tag: str = '_p'
 	_group_i: int = 0
+	_sub_ins: dict = {}
+	step: int = -1
 
 	def __init__(ii, 
 		notebook:bool=False,  # removes sys_arg for notebooks
@@ -315,6 +266,23 @@ class PyfigBase:
 			sys_arg = cmd_to_dict(sys.argv[1:], ref_d)
 
 		update = flat_any((c_init or {})) | flat_any((other_arg or {})) | (sys_arg or {})
+
+
+		from distribute_utils import naive, hf_accelerate
+
+		plugin_repo = dict(
+			dist = dict(
+				hf_accelerate=hf_accelerate,
+				naive = naive,
+			),
+		)
+
+		new_sub_cls = dict(filter(lambda kv: kv[0] in ii._sub_ins.keys(), update.items()))
+		[update.pop(k) for k in new_sub_cls.keys()]
+		for plugin, plugin_version in new_sub_cls.items():
+			sub_cls = plugin_repo[plugin][plugin_version]
+			ii.init_sub_cls(sub_cls=sub_cls, name=plugin)
+		
 		ii.update(update)
 
 		if ii.debug:
@@ -322,51 +290,70 @@ class PyfigBase:
 
 		ii.debug_log([sys_arg, dict(os.environ.items()), ii.d], ['log_sys_arg.log', 'log_env_run.log', 'log_d.log'])
 
-	def start(ii):
+	def start(ii, dark=False):
 
-		if ii.distribute.head and int(ii.distribute.rank)==0:
+		if ii.dist.head and int(ii.dist.rank)==0 and not dark:
 			assert ii.resource.submit == False
 
 			print('start:wb:init creating the group')
 			ii.setup_exp_dir(group_exp= ii.group_exp, force_new_id= False)
 
 			ii._group_i += 1
-			if ii._group_i==1:
-				ii.run_id = ii.exp_id
-			
+		
 			ii.run_id = ii.exp_id + '.' + ii.mode + '.' + str(ii._group_i)
-			ii.wb.wb_run_path = f'{ii.wb.entity}/{ii.project}/{ii.run_id}'
-			ii.run_id = '.'.join(ii.run_id.split('.'))  # no / no : - in mode _ in names try \ + | .
+			ii.wb.wb_run_path = f'{ii.wb.entity}/{ii.project}/{ii.run_id}'  # no / no : - in mode _ in names try \ + | .
+			# ii.run_id = '.'.join(ii.run_id.split('.'))  
 			
 			print('start:wb:init:exp_dir = \n ***', ii.exp_dir, '***')
 			print('start:wb:init:wb_run_path = \n ***', ii.wb.wb_run_path, '***')
 			print('start:wb:init:run_id = \n ***', ii.run_id, '***')
 			ii.setup_exp_dir(group_exp= False, force_new_id= False)
 
-			ii.wb.run = wandb.init(
-				project     = ii.project, 
-				group		= ii.exp_name,
-				dir         = ii.exp_data_dir,
-				entity      = ii.wb.entity,	
-				mode        = ii.wb.wb_mode,
-				config      = dict_to_wandb(ii.d_flat),
-				id			= ii.run_id,
-				tags 		= [ii.mode,],
-				reinit 		= not (ii.wb.run is None)
-			)
+			tags = ii.mode.split('-')
 
-			print('c', ii.d)
+			if 'dark' in tags:
+				print('pyfig:start:\n Going dark. wandb not initialised.')
 
-	def pf_submit(ii):
+			else:
+				print(f'pyfig:wb: tags- {tags}')
+				# os.environ['WANDB_START_METHOD'] = "thread"
+				ii.wb.run = wandb.init(
+					project     = ii.project, 
+					group		= ii.exp_name,
+					dir         = ii.exp_data_dir,
+					entity      = ii.wb.entity,	
+					mode        = ii.wb.wb_mode,
+					config      = dict_to_wandb(ii.d_flat),
+					id			= ii.run_id,
+					tags 		= tags,
+					reinit 		= not (ii.wb.run is None)
+				)
+
+	def end(ii):
+		try: 
+			ii.wb.run.finish()
+		except:
+			pass
+
+	def run_local_or_submit(ii):
 
 		if ii.resource.submit:
-			print('submitting')
+			print('submitting to cluster')
 			ii.resource.submit = False # docs:submit
-			ii.debug_log([ii.d,], ['pf_submit.log',])
 
 			run_or_sweep_d = ii.get_run_or_sweep_d()
 
+			# a_z		= 	Param(values=[[i,] for i in range(5, 50)], dtype=int),
+			# get_mem_max 15
+			# python run.py --submit --a_z [16] --dist naive --cudnn_benchmark --exp_name sweep-n_b --mode max_mem --time 12:00:00
+			# python run.py --submit --dist naive --cudnn_benchmark --exp_name sweep-a_z --group_exp --time 00:10:00
+			# python run.py --submit --dist naive --cudnn_benchmark --exp_name hypam_opt --mode hypam_opt --group_exp --time 12:00:00
+			# python run.py --submit --exp_name dist --group_exp --time 01:00:00 --a_z [30] --dist naive --mode max_mem --n_gpu 10
+			# python run.py --submit --exp_name dist --group_exp --time 01:00:00 --a_z [30] --dist hf_accelerate --mode max_mem --n_gpu 10
+			# for a_z in [[i,] for i in range(10, 60, 2)]:
+			# 	run_d = dict(a_z=a_z)
 			for i, run_d in enumerate(run_or_sweep_d):
+
 
 				if ii.run_sweep or ii.wb.wb_sweep:
 					group_exp = not i==0
@@ -377,7 +364,7 @@ class PyfigBase:
 				base_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore+['sweep','resource','dist_c','slurm_c'])
 				run_d = base_d | run_d
 
-				ii.debug_log([dict(os.environ.items()), run_d], ['env_submit.log', 'd_submit.log'])
+				ii.debug_log([dict(os.environ.items()), run_d], ['log-submit_env.log', 'log-submit_d.log'])
 
 				ii.resource.cluster_submit(run_d)
 
@@ -387,7 +374,6 @@ class PyfigBase:
 
 	@staticmethod
 	def pr(d: dict):
-		""" pretty print and return dict """
 		pprint.pprint(d)
 		return d
 
@@ -419,17 +405,17 @@ class PyfigBase:
 	def d_flat(ii):
 		return flat_any(ii.d)
 
-	@property
-	def sub_ins(ii):
-		return dict()
-
-	def init_sub_cls(ii,) -> dict:
-		sub_cls = ins_to_dict(ii, sub_cls=True)
-		for sub_k, sub_v in sub_cls.items():
-			sub_ins = sub_v(parent=ii)
-			setattr(ii, sub_k, sub_ins)
-			if sub_k not in ii.sub_ins:
-				ii.sub_ins[sub_k] = sub_ins
+	def init_sub_cls(ii, sub_cls: type=None, name: str=None) -> dict:
+		if name and not (sub_cls is None):
+			sub_ins = sub_cls(parent=ii)
+			setattr(ii, name, sub_ins)
+			ii._sub_ins[name] = sub_ins
+		else:
+			sub_cls = ins_to_dict(ii, sub_cls=True)
+			for sub_k, sub_cls_i in sub_cls.items():
+				sub_ins = sub_cls_i(parent=ii)
+				setattr(ii, sub_k, sub_ins)
+				ii._sub_ins[sub_k] = sub_ins
 
 	def setup_exp_dir(ii, group_exp=False, force_new_id=False):
 
@@ -531,16 +517,47 @@ class PyfigBase:
 		with open(path, 'w') as f:
 			f.writelines(info)
 
-	def to(ii, device, dtype):
+	def to(ii, framework='torch'):
 		base_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore+['sweep'])
 		d = {k:v for k,v in base_d.items() if isinstance(v, (np.ndarray, np.generic))}
-		d = {k:torch.tensor(v, requires_grad=False).to(device=device, dtype=dtype) for k,v in d.items()}
+		if 'torch' in framework.lower():
+			d = {k:torch.tensor(v, requires_grad=False).to(device=ii.device, dtype=ii.dtype) for k,v in d.items()}
+		if 'numpy' in framework.lower():
+			d = {k:v.detach().cpu().numpy() for k,v in d.items() if isinstance(v, torch.Tensor)}
 		ii.update(d)
-			
+
 	def set_dtype(ii, dtype=torch.DoubleTensor):
 		print('setting default dtype: ', dtype)
-		torch.set_default_tensor_type(dtype) 
+		ii.dtype = dtype or ii.dtype
+		torch.set_default_tensor_type(ii.dtype) 
 		ii.dtype = torch.randn((1,)).dtype
+		print('pyfig: dtype is ', ii.dtype)
+		return ii.dtype
+
+	def set_device(ii, device: str=None):
+		ii.device = 'cpu'
+		if device: 
+			ii.device = device
+		elif not getattr(ii.dist, 'dist_set_device') is None:
+			ii.device = ii.dist.dist_set_device(ii.device)
+		else:
+			device_int = torch.cuda.current_device()
+			torch_n_device = torch.cuda.device_count()
+			cuda_visible_devices = os.environ['CUDA_VISIBLE_DEVICES']
+			ii.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+		print('pyfig: Device is ', ii.device)
+		return ii.device
+
+	def set_seed(ii, seed=None):
+		ii.seed = seed or ii.seed
+		if not getattr(ii.dist, 'dist_set_seed') is None:
+			print(f'plugin:dist: \"dist plugin setting seed.\"')
+			ii.seed = ii.dist.dist_set_seed(ii.seed)
+		else:
+			print(f'pyfig: \"Setting seed {ii.seed} w torch manually.\"')
+			torch.random.manual_seed(ii.seed)
+		print('pyfig: Seed is ', ii.seed)
+		return ii.seed
 
 def walk_ins_tree(
 	ins: type, 
@@ -565,138 +582,7 @@ def walk_ins_tree(
 	except Exception as e:
 		print(f'pyfig:walk_ins_tree k={k_update} v={v_update} v_ref={v_ref} ins={ins}')
 	return False
-	
- 
-# slurm things
-class niflheim_resource(PyfigBase.resource):
-	_p: PyfigBase = None
- 
-	env: str     	= ''
-	n_gpu: int 		= 1
-	n_node: int		= 1
 
-	architecture:   str 	= 'cuda'
-	nifl_gpu_per_node: int  = property(lambda _: 10)
-	device_log_path: str 	= '' 
-
-	job_id: 		str  	= property(lambda _: os.environ.get('SLURM_JOBID', 'No SLURM_JOBID available.'))  # slurm only
-
-	_pci_id_cmd:	str		= 'nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'
-	pci_id:			str		= property(lambda _: ''.join(run_cmds(_._pci_id_cmd, silent=True)))
-
-	n_device_env:	str		= 'CUDA_VISIBLE_DEVICES'
-	# n_device:       int     = property(lambda _: sum(c.isdigit() for c in os.environ.get(_.n_device_env, '')))
-	n_device:       int     = property(lambda _: len(os.environ.get(_.n_device_env, '').replace(',', '')))
-
-	class slurm_c(Sub):
-		export			= 'ALL'
-		nodes           = '1' 			# (MIN-MAX) 
-		cpus_per_gpu   = 8				# 1 task 1 gpu 8 cpus per task 
-		partition       = 'sm3090'
-		time            = '0-00:10:00'  # D-HH:MM:SS
-		gres            = property(lambda _: 'gpu:RTX3090:' + (str(_._p.n_gpu) if int(_.nodes) == 1 else '10'))
-		ntasks          = property(lambda _: _._p.n_gpu)
-		job_name        = property(lambda _: _._p._p.exp_name)
-		output          = property(lambda _: _._p._p.cluster_dir/'o-%j.out')
-		error           = property(lambda _: _._p._p.cluster_dir/'e-%j.err')
-
-	# mem_per_cpu     = 1024
-	# mem				= 'MaxMemPerNode'
-	# n_running_cmd:	str		= 'squeue -u amawi -t pending,running -h -r'
-	# n_running:		int		= property(lambda _: len(run_cmds(_.n_running_cmd, silent=True).split('\n')))	
-	# running_max: 	int     = 20
-
-	def cluster_submit(ii, job: dict):
-		
-		if job['head']:
-			print(ii._slurm)
-
-		body = []
-		body = f"""
-		module purge
-		module load foss
-		source ~/.bashrc
-  		conda activate {ii.env}
-		export exp_id="{job["exp_id"]}"
-		echo exp_id-${{exp_id}}
-		"""
-		extra = """
-		module load CUDA/11.7.0'
-		module load OpenMPI'
-		export MKL_NUM_THREADS=1
-		export NUMEXPR_NUM_THREADS=1
-		export OMP_NUM_THREADS=8
-		export OPENBLAS_NUM_THREADS=1
-		"""
-		debug_body = f""" \
-  		export $SLURM_JOB_ID
-		echo all_gpus-${{SLURM_JOB_GPUS}}', 'echo nodelist-${{SLURM_JOB_NODELIST}}', 'nvidia-smi']
-		echo api-${{WANDB_API_KEY}}
-		echo project-${{WANDB_PROJECT}}
-		echo entity-${{WANDB_ENTITY}}
-		echo ${{PWD}}
-		echo ${{CWD}}
-		echo ${{SLURM_EXPORT_ENV}}
-		scontrol show config
-		srun --mpi=list
-		export WANDB_DIR="{ii._p.exp_dir}"
-		printenv']
-		curl -s --head --request GET https://wandb.ai/site
-		ping api.wandb.ai
-		"""
-		if ii._p.wb.wb_sweep:
-			body += [f'wandb controller {ii._p.wb.sweep_id}'] # {ii._p.wb.sweep_path_id}
-			body += [f'wandb agent {ii._p.wb.sweep_id} 1> {ii.device_log_path(rank=0)} 2>&1 ']
-			body += ['wait',]
-
-		elif ii._p.distribute.dist_method == 'accelerate':
-			print('\n accelerate distribution')
-			# ! backslash must come between run.py and cmd
-			cmd = dict_to_cmd(job, exclude_none=True)
-			body += f'{ii._p.distribute._launch_cmd} {job["run_name"]} \ {cmd} 1> {ii.device_log_path(rank=0)} 2>&1 \n'  
-   
-		elif ii._p.distribute.dist_method == 'pyfig':
-			print('\n pyfig distribution')
-			for i in range(ii.n_gpu):
-				job.update(dict(head= i==0))
-				cmd = dict_to_cmd(job)
-				cmd = f'python -u {job["run_name"]} {cmd}'
-				body += f'\n{ii._p.distribute._launch_cmd} {cmd} 1> {ii.device_log_path(rank=i)} 2>&1 & \n'
-			body += '\nwait \n'
-		
-		body += '\necho End \n'
-
-		if ii._p.debug:
-			print(body)
-
-		ii._p.log([body,], ii._p.cluster_dir/'sbatch.log')
-		job_id = ii._slurm.sbatch(body, verbose=True)
-		print('slurm out: ', job_id)
-  
-	@property
-	def _slurm(ii,) -> Slurm:
-		if ii._p.debug:
-			ii._p.pr(ii.slurm_c.d)
-		return Slurm(**ii.slurm_c.d)
-
-	def device_log_path(ii, rank=0):
-		return ii._p.exp_dir/(str(rank)+"_device.log") # + ii._p.hostname.split('.')[0])
-
-def setup_distribute(
-		ii, 
-		model: nn.Module, 
-		opt, 
-		tr_loader=None, 
-		scheduler=None
-) -> tuple:
-		ii.dist = Accelerator()
-		model, opt, tr_loader, scheduler = \
-			ii.dist.prepare(model, opt, tr_loader, scheduler)
-		
-		return [model, opt] + (tr_loader or []) + (scheduler or [])
-
-def backward(ii, loss: torch.Tensor, sync: dict):
-	loss.backward()
 
 def lo_ve(path:Path=None, data: dict=None):
 	""" loads anything you want (add other interfaces as needed) 
@@ -707,6 +593,7 @@ def lo_ve(path:Path=None, data: dict=None):
 	4- if data is present, decide to save
 	5- from filetype, encoding, save or load, get or dump the data 
 	"""
+
 	file_interface_all = dict(
 		pk = dict(
 			rb = pk.load,
@@ -729,8 +616,12 @@ def lo_ve(path:Path=None, data: dict=None):
 			w = lambda x, f: f.writelines(x),
 		),
 		npy = dict(
-			rb = np.load,
-			wb = np.save,
+			r = np.load,
+			w = np.save,
+		),
+		npz = dict(
+			r = np.load,
+			w = np.savez_compressed,
 		)
 	)
 	path = Path(path)
@@ -745,7 +636,7 @@ def lo_ve(path:Path=None, data: dict=None):
 	if 'r' in mode and not path.exists():
 		return print('path: ', str(path), 'n\'existe pas- returning None')
 
-	if 'state' in file_type:
+	if 'state' in file_type or 'npz' in file_type:
 		data = interface(data, path) if not data is None else interface(path)
 	else:
 		with open(path, mode) as f:
@@ -753,8 +644,10 @@ def lo_ve(path:Path=None, data: dict=None):
 
 	return data
 
+
 def get_cls_d(ins: type, cls_k: list):
 	return {k:getattr(ins.__class__, k) for k in cls_k}
+
 
 def ins_to_dict( # docs:pyfig:ins_to_dict can only be used when sub_ins have been init 
 	ins: type, 
@@ -806,6 +699,47 @@ def ins_to_dict( # docs:pyfig:ins_to_dict can only be used when sub_ins have bee
 		ins_kv += [(k, getattr(ins, k)) for k in cls_attr_k]
 
 	return flat_any(dict(ins_kv)) if flat else dict(ins_kv) 
+
+
+class Metrix:
+	step: 		   int 	 = 0
+	t0: 		   float = time()
+	max_mem_alloc: float = None
+	t_per_it: 	   float = None
+	opt_obj: 	   float = None
+	opt_obj_all:    list = None
+	eval_keys: 	   list  = None
+	
+	log: 			dict = None
+
+	exp_stats: 		list = ['max_mem_alloc', 't_per_it', 'opt_obj', 'opt_obj_all']
+	source: 		str  = 'exp_stats/'
+
+	def __init__(ii, eval_keys: list=None):
+		
+		ii.eval_keys = eval_keys
+		ii.opt_obj_all = []
+
+		torch.cuda.reset_peak_memory_stats()
+
+	def tick(ii, step: int, opt_obj: float=None, **kw) -> dict:
+		dstep = step - ii.step 
+
+		t1 = time()
+		ii.t_per_it = (t1 - ii.t0) / float(dstep)
+		ii.t0 = time()
+
+		ii.max_mem_alloc = torch.cuda.max_memory_allocated() // 1024 // 1024
+		torch.cuda.reset_peak_memory_stats()
+
+		ii.opt_obj = opt_obj
+		ii.opt_obj_all += [ii.opt_obj,]
+
+		return dict(exp_stats = {k: getattr(ii, k) for k in ii.exp_stats})
+	
+	def to_dict(ii):
+		return {k: getattr(ii, k) for k in ii.exp_stats}
+
 
 # prefix components:
 draw_space =  '    '
@@ -872,7 +806,7 @@ def draw_tree():
  
 """ 
 
-class distribute_pyfig(Sub):
+class dist_pyfig(PlugIn):
  
 	def __init__(ii, parent=None):
 		super().__init__(parent)
@@ -882,7 +816,7 @@ class distribute_pyfig(Sub):
 		from accelerate import Accelerator
 		from torch.utils.data import DataLoader
  
-	# class git(Sub):
+	# class git(PlugIn):
 	# 	branch:     str     = 'main'
 	# 	remote:     str     = 'origin' 
 

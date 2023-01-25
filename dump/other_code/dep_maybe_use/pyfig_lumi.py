@@ -13,8 +13,7 @@ import optree
 from copy import deepcopy
 from pyfig_util import cluster_options, PyfigBase
 
-from utils import Sub
-from utils import get_cartesian_product
+from utils import PlugIn from utils import get_cartesian_product
 from utils import run_cmds, run_cmds_server, count_gpu, gen_alphanum
 from utils import mkdir, cmd_to_dict, dict_to_wandb, iterate_n_dir
 from utils import type_me
@@ -89,7 +88,7 @@ Examples:
 ### What can you do 
 
 ### Issues 
-- sub classes can NOT call each other
+- PlugIn classes can NOT call each other
 - properties can NOT recursively call each other
 
 ### TODO
@@ -110,7 +109,7 @@ class Pyfig(PyfigBase):
 	log_metric_step:int         = 10
 	log_state_step: int         = 10          
 	
-	class data(Sub):
+	class data(PlugIn):
 		charge:     int         = 0
 		spin:       int         = 0
 		a:          np.ndarray  = np.array([[0.0, 0.0, 0.0],])
@@ -125,7 +124,7 @@ class Pyfig(PyfigBase):
 		n_equil:    int         = 10000
 		acc_target: int         = 0.5
 
-	class model(Sub):
+	class model(PlugIn):
 		with_sign:      bool    = False
 		n_sv:           int     = 32
 		n_pv:           int     = 16
@@ -136,18 +135,18 @@ class Pyfig(PyfigBase):
 		terms_p_emb:    list    = ['rr', 'rr_len']
 		ke_method:      str     = 'vjp'
 
-	class sweep(Sub):
+	class sweep(PlugIn):
 		method          = 'grid'
 		parameters = dict(
 			n_b  = {'values' : [16, 32, 64]},
 		)
   
-	class wandb_c(Sub):
+	class wandb_c(PlugIn):
 		job_type        	= 'debug'
 		entity          	= property(lambda _: _._p.project)
 		program         	= property(lambda _: Path(_._p.run_dir,_._p.run_name))
 
-	class dist(Sub):
+	class dist(PlugIn):
 		_dist_id 			= ''
 		_sync 				= ['grads',]
 		accumulate_step		= 5
@@ -156,7 +155,7 @@ class Pyfig(PyfigBase):
 			''.join(run_cmds('nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader')).split('.')[0]
 		)
 
-	class cluster(Sub):
+	class cluster(PlugIn):
 		pass
 
 	project:            str     = property(lambda _: 'hwat')
@@ -229,7 +228,7 @@ class Pyfig(PyfigBase):
 		### unstable ###
 		slurm = cluster_options[ii.cluster_name]
 		print(slurm)
-		print('init sub classes')
+		print('init PlugIn classes')
 		for k, v in Pyfig.__dict__.items():
 			if isinstance(v, type):
 				if 'cluster' in k:
@@ -256,7 +255,7 @@ class Pyfig(PyfigBase):
 				else:
 					ii._run = wandb.init(
 						entity      = ii.wandb_c.entity,  # team name is hwat
-						project     = ii.project,         # sub project in team
+						project     = ii.project,         # PlugIn project in team
 						dir         = ii.exp_dir,
 						config      = dict_to_wandb(ii.d, ignore=ii._wandb_ignore),
 						mode        = wb_mode,
@@ -304,7 +303,7 @@ class Pyfig(PyfigBase):
 
 	@property
 	def sub_cls(ii) -> dict:
-		return {k:v for k,v in ii.__dict__.items() if isinstance(v, Sub)}
+		return {k:v for k,v in ii.__dict__.items() if isinstance(v, PlugIn)}
 
 	def setup_exp(ii, group_exp=False, force_new=False):
 		if ii.exp_dir and not force_new:
@@ -485,7 +484,7 @@ wandb sync wandb/dryrun-folder-name    # to sync data stored offline
 
 """ Bone Zone
 
-		# if ii.distribute:
+		# if ii.dist:
 			# https://groups.google.com/g/cluster-users/c/VpdG0IFZ4n4
 		# else:
 		# 	s += [submit_cmd + ' --head True']
@@ -591,7 +590,7 @@ def cls_filter(
 	
 	if not (is_builtin or should_ignore or not_in_ref):
 		keep |= is_hidn and k.startswith('_')
-		keep |= is_sub and isinstance(v, Sub)
+		keep |= is_sub and isinstance(v, PlugIn)
 		keep |= is_fn and isinstance(v, partial)
 		keep |= is_prop and isinstance(cls.__class__.__dict__[k], property)
 	return keep

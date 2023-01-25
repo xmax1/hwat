@@ -5,7 +5,7 @@ from torch.jit import Final
 from functorch import grad
 import functorch
 import pprint
-from utils import debug_dict
+from utils.utils import debug_dict
 from copy import deepcopy
 import numpy as np
 
@@ -305,6 +305,7 @@ def compute_ke_b(
 	e_jvp = gg + g**2
 	return -0.5 * e_jvp.sum(-1)
 
+
 ### sampling ###
 def keep_around_points(r, points, l=1.):
 	""" points = center of box each particle kept inside. """
@@ -389,4 +390,3 @@ def sample_b(
 		deltar = a_larger*dr_test + b_larger*deltar
 	
 	return r, acc_all/2., deltar
-	# return dict(r=r, acc=acc_all/2., deltar=deltar)

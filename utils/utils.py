@@ -20,6 +20,7 @@ import optree
 import paramiko
 import torch
 import yaml
+import torch
 
 ### load (lo) and save (ve) lo_ve things 
 
@@ -158,7 +159,16 @@ def dict_to_cmd(d: dict, sep=' ', exclude_false=False, exclude_none=True):
 	if exclude_none:
 		items = [(k, v) for (k,v) in items if not (d[k] is None)]
   
-	return ' '.join([(f'--{k}' if v is True else f'--{k + sep + v}') for k,v in items if v])
+	items = [(k, v) for (k,v) in items if v]
+
+	return ' '.join([(f'--{k}' if ((v=='True') or (v is True)) else f'--{k + sep + v}') for k,v in items])
+
+base_ref_dict = dict(
+	dtype = dict(
+		to_d = {'torch.float64':torch.float64, 'torch.float32':torch.float32},
+		to_cmd=None,
+	),
+)
 
 def cmd_to_dict(cmd:Union[str, list], ref:dict, delim:str=' --', d=None):
 	"""
@@ -177,15 +187,23 @@ def cmd_to_dict(cmd:Union[str, list], ref:dict, delim:str=' --', d=None):
 	for k,v in cmd:
 		v = format_cmd_item(v)
 		k = k.replace(' ', '')
+
+		if k in base_ref_dict:
+			d[k] = base_ref_dict[k]['to_d']
+			continue
+
 		v_ref = ref.get(k, None)
 		if v_ref is None:
 			print(f'{k} not in ref')
+		
 		d[k] = type_me(v, v_ref, is_cmd_item=True)
 	return d
+
 
 def format_cmd_item(v):
 	v = v.replace('(', '[').replace(')', ']')
 	return v.replace(' ', '')
+
 
 def type_me(v, v_ref=None, is_cmd_item=False):
 	""" cmd_items: Accepted: bool, list of list (str, float, int), dictionary, str, explicit str (' "this" '), """
@@ -211,7 +229,9 @@ def type_me(v, v_ref=None, is_cmd_item=False):
 			print('type me issue: ', v, v_ref, is_cmd_item, e)
 	
 	if v_ref is not None:
+		
 		type_ref = type(v_ref)
+
 		if isinstance(v, str):
 			v = v.strip('\'\"')
 
