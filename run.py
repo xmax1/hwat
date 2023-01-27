@@ -1,13 +1,6 @@
-import pprint
-import time
-import wandb
-from datetime import datetime
-from pathlib import Path
 
 from walle.pyfig_utils import Metrix
-from walle.torch_utils import detach_tree
 
-import traceback
 from typing import Callable
 
 import torch
@@ -27,6 +20,7 @@ from hwat import keep_around_points, sample_b
 from hwat import compute_ke_b, compute_pe_b
 import numpy as np
 from copy import deepcopy
+import pprint
 
 
 def init_exp(c: Pyfig, c_update: dict=None, **kw):
@@ -51,7 +45,9 @@ def init_exp(c: Pyfig, c_update: dict=None, **kw):
 	scheduler = get_scheduler(n_step=c.n_step, **c.opt.scheduler.d_flat)(opt)
 
 	if c.lo_ve_path:
+		print('init: loading config, modelm and opt \n', )
 		c, model, opt = load(c, path=c.lo_ve_path, things_to_load=dict(model=model, opt=opt))
+		pprint.pprint(c.d)
 
 	model, opt, scheduler = c.dist.prepare(model, opt, scheduler)
 
@@ -75,23 +71,18 @@ def loss_fn(
 	**kw, 
 ):
 
-
 	with torch.no_grad():
-		
-		if step < c.n_pre_step:
-			center_points = get_center_points(c.data.n_e, c.data.a)
-			r = center_points + 2*torch.randn_like(r)
-			min_step = max(4, 2*round( (c.n_pre_step * (step/c.n_pre_step)) /2.))
-			n_corr = int(min(min_step, c.data.n_corr))
-			
-			r, acc, deltar = sample_b(model, r, deltar, n_corr=n_corr)
 
-			r = keep_around_points(r, center_points, l=5.+50.*step/c.n_pre_step)
+		if step < 0: # c.n_pre_step:
+			r = center_points + 10*torch.randn_like(r)
 
-		else:
-			r, acc, deltar = sample_b(model, r, deltar, n_corr=c.data.n_corr)
-		
-		pe = compute_pe_b(r, c.data.a, c.data.a_z)	
+		min_step = max(4, 2*round( (c.n_pre_step * (step/c.n_pre_step)) /2.))
+		n_corr = int(min(min_step, c.data.n_corr))
+		center_points = get_center_points(c.data.n_e, c.data.a)
+		r, acc, deltar = sample_b(model, r, deltar, n_corr=n_corr)
+
+		r = keep_around_points(r, center_points, l=5.+10.*step**1.02/c.n_pre_step)
+		pe = compute_pe_b(r, c.data.a, c.data.a_z) 
 	
 	ke = compute_ke_b(model, model_fn, r, ke_method=c.model.ke_method)
 
@@ -104,17 +95,15 @@ def loss_fn(
 	loss, grads, params = None, None, None
 
 	if 'train' in mode:
-		loss = (energy * model(r)).mean()
-	
+		loss = ((energy / c.data.a_z.sum()) * model(r)).mean() 
+
 	v_init = dict(r=r, deltar=deltar)
 
 	return loss, v_init, dict(r=r, deltar=deltar, e=e, pe=pe, ke=ke, acc=acc, loss=loss)
 
+import wandb
 
 def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
-
-	### !!! under construction
-	# c.update((v_init.get('c_update', {}))
 
 	compute_loss, model, opt, scheduler = init_exp(c, c_update, **kw)
 	
@@ -123,33 +112,30 @@ def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 	metrix = Metrix(eval_keys=c.eval_keys)
 	
 	c.start(dark='dark' in c.mode)
-	
+
+	c.log_metric_step = min(c.log_metric_step, c.n_step//2)
+
+	v_cpu_d = {}
+
+	print('running: ', c.mode, 'run: \n', compute_loss, 'c_update: \n', c_update)
 	for rel_step, step in enumerate(range(1, (c.n_step if 'train' in c.mode else c.n_eval_step) + 1)):
 
 		model.zero_grad(set_to_none=True)
 
-
 		loss, v_init, v_d = compute_loss(step, **v_init)
-
 
 		if 'train' in c.mode:
 			c.dist.backward(loss)
 			v_d['grads'] = {k:p.grad.detach() for k,p in model.named_parameters()}
 		
-
 		if (not (step % c.dist.sync_step)) and (c.resource.n_gpu > 1):
 			v_d = c.dist.sync(step, v_d)
 
 
 		if 'train' in c.mode:
 			with torch.no_grad():
-				is_pretraining = step<c.n_pre_step
-				max_update = 0.001
-				max_g = max([p.grad.max().item() for p in model.parameters()]) * 1./max_update
 				for k, p in model.named_parameters():
-					g = v_d.get('grads').get(k)
-					if is_pretraining:
-						g /= max_g
+					g = v_d.get('grads').get(k) * (0.01 * step < c.n_pre_step)
 					p.grad.copy_( g )
 				opt.step()
 				scheduler.step()
@@ -179,12 +165,11 @@ def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 
 				if not 'dark' in c.mode:
 					wandb.log(v_metrix, step=step)
-				
+
 				if 'record' in c.mode:
 					log_data = dict(filter(lambda kv: kv[0] in c.log_keys, v_d.items()))
 					log_data = {k:v[None] for k,v in log_data.items()}
 					metrix.log = log_data if rel_step==1 else {k:np.stack(v, log_data[k]) for k,v in log_data.items()}
-
 
 		if int(c.dist.rank)==0 and c.dist.head:
 			if not (step % c.log_state_step) and '-record' in c.mode:
@@ -207,7 +192,8 @@ def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 		if metrix.log:
 			lo_ve(path=(c.exp_dir/c.run_id).with_suffix('.npz'), data=metrix.log)  # ! mean gather used by core loop, need sth else
 
-	v_run |= v_cpu_d | metrix.to_dict()
+	if v_run and v_cpu_d and metrix.to_dict():
+		v_run |= v_cpu_d | metrix.to_dict()
 
 	c.end()
 
@@ -230,7 +216,9 @@ if __name__ == "__main__":
 
 		def __call__(ii, c: Pyfig, v_init: dict=None, c_update: dict=None, mode: str=None):
 			c.update(c_update | dict(mode=(mode or {})))
+			next_mode = v_init.get('next', 'evaluate')
 			fn = getattr(ii, c.mode.split('-')[0])
+
 			return fn(c=c, v_init=v_init)
 
 		def opt_hypam(ii, c: Pyfig=None, v_init: dict=None):
@@ -238,20 +226,40 @@ if __name__ == "__main__":
    
 			objective = partial(objective, c=c, run=run)
 			v_run = opt_hypam(objective, c)
+
+			#
+			# Create the summary run.
+			# summary = wandb.init(project="optuna",
+			# 					name="summary",
+			# 					job_type="logging")
+
+			# Getting the study trials.
+			# trials = study.trials
+
+			# WandB summary.
+			# for step, trial in enumerate(trials):
+			# 	# Logging the loss.
+			# 	summary.log({"mse": trial.value}, step=step)
+
+			# 	# Logging the parameters.
+			# 	for k, v in trial.params.items():
+			# 		summary.log({k: v}, step=step)
+
+
 			return v_run
 
 		def max_mem(ii, c: Pyfig=None, v_init: dict=None):
+
 			from walle.torch_utils import get_max_mem_c
 
-			c.mode = 'train'
-			c.n_step = 10*c.log_metric_step
 			v_run = get_max_mem_c(run, c=c)
-			
-			now = datetime.now().strftime("%d-%m-%y:%H-%M-%S")
-			line = now + ',' + ','.join([str(v) for v in 
-				[v_run['max_mem_alloc'], c.data.n_b, c.data.n_e, c.model.n_fb, c.model.n_sv, c.model.n_pv]])
-			with open('./dump/max_mem.csv', 'a+') as f:
-				f.writelines([line])
+			# dict(n_b_max=n_b, max_mem_alloc=mem_used)
+			# now = datetime.now().strftime("%d-%m-%y:%H-%M-%S")
+			# line = now + ',' + ','.join([str(v) for v in 
+			# 	[v_run['max_mem_alloc'], c.data.n_b, c.data.n_e, c.model.n_fb, c.model.n_sv, c.model.n_pv]])
+			# with open('./dump/max_mem.csv', 'a+') as f:
+			# 	f.writelines([line])
+			v_run['v_init_next'] = v_run
 			return v_run
 
 		def train(ii, c: Pyfig=None, v_init: dict=None):
@@ -269,13 +277,13 @@ if __name__ == "__main__":
 
 	run_mode = RunMode()
 
-	res, v_run = dict(), dict()
+	res, v_run = dict(), dict(v_init_next=dict())
 
-	run_mode_all = [c.mode,] if c.mode else c.multimode.split(':')
+	run_mode_all = [c.mode,] or c.multimode.split(':')
+	print('run.py:mode = \n ***', run_mode_all, '***')
 	for mode_i, mode in enumerate(run_mode_all):
-		print('run.py:mode = \n ***', mode, '***')
 
-		next_i = mode_i+2
+		next_i = mode_i+1
 		if next_i < len(run_mode_all):
 			v_run['v_init_next']['next'] = run_mode_all[next_i]
 

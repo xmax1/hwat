@@ -28,7 +28,7 @@ from .utils import get_cartesian_product, type_me, run_cmds, flat_any
 
 from torch import nn
 
-this_dir = Path(__file__).parent
+this_file_path = Path(__file__) 
 hostname = os.environ['HOSTNAME']
 
 class PlugIn:
@@ -58,6 +58,7 @@ class PlugIn:
 	@property
 	def d_flat(ii):
 		return flat_any(ii.d)
+
 
 class Param(PlugIn): 
 	values: list = None
@@ -158,7 +159,7 @@ class PyfigBase:
 		hessian_power: 	float 	= None
   
 	class sweep(PlugIn):
-		storage: 		Path = property(lambda _: 'sqlite:///' + str(_._p.exp_dir / 'hypam_opt.db'))
+		storage: 		Path = property(lambda _: 'sqlite:///'+str(_._p.exp_dir / 'hypam_opt.db'))
 		sweep_name: 	str				= '' 
 		sweep_method: 	str				= '' # wb name of alg: grid,bayes, ... 
 		parameters: 	dict[Param]		= {}
@@ -182,7 +183,7 @@ class PyfigBase:
 
 	class dist(PlugIn):
 		head:			bool	= True
-		dist_method: 	str		= 'pyfig'  # options: accelerate
+		dist_method: 	str		= 'naive'  # options: accelerate
 		sync_step:		int		= None
 
 		dist_set_seed: Callable = None
@@ -212,7 +213,7 @@ class PyfigBase:
 
 		@torch.no_grad()
 		def sync(ii, step: int, v_d: dict) -> dict:
-			return {}
+			return v_d
 
 		def backward(ii, loss: torch.Tensor):
 			opt_is_adahess = ii._p.opt.opt_name.lower()=='AdaHessian'.lower()
@@ -306,9 +307,10 @@ class PyfigBase:
 			print('start:wb:init:exp_dir = \n ***', ii.exp_dir, '***')
 			print('start:wb:init:wb_run_path = \n ***', ii.wb.wb_run_path, '***')
 			print('start:wb:init:run_id = \n ***', ii.run_id, '***')
+
 			ii.setup_exp_dir(group_exp= False, force_new_id= False)
 
-			tags = ii.mode.split('-')
+			tags = [str(s) for s in [*ii.mode.split('-'), ii.exp_id, ii._group_i]]
 			
 
 			if 'dark' in tags:
@@ -329,6 +331,14 @@ class PyfigBase:
 					reinit 		= not (ii.wb.run is None)
 				)
 
+				print(ii.wb.run_url)
+			
+			import shutil
+			shutil.copyfile(this_file_path, ii.exp_dir/this_file_path.name)
+			
+			with open(ii.exp_dir/'c.pyfig', 'w') as f:
+				f.writelines([ii.cmd])
+
 	def end(ii):
 		try: 
 			ii.wb.run.finish()
@@ -345,7 +355,7 @@ class PyfigBase:
 
 			for i, run_d in enumerate(run_or_sweep_d):
 
-				if ii.run_sweep or ii.wb.wb_sweep:
+				if ii.run_sweep or ii.wb.wb_sweep or ii.zweep:
 					group_exp = not i==0
 				else:
 					group_exp = ii.group_exp
@@ -427,7 +437,14 @@ class PyfigBase:
 		
 		if not (ii.run_sweep or ii.wb.wb_sweep):
 			""" single run takes c from base in submit loop """
-			return [dict(),] 
+			c = [dict(),] 
+			if ii.zweep: 
+				ii.run_sweep = True
+				# param-start-end-if anything  id-n_step-  i/a + c in range()
+				# else categorical tuple
+				zweep = ii.zweep.split('-')
+				c = [{zweep[0]: [i]} for i in zweep[1:]] 
+			return c
 	
 		if ii.wb.wb_sweep:
 			param = ii.sweep.parameters
@@ -489,9 +506,13 @@ class PyfigBase:
 		return f(**d)
 
 	def update(ii, _arg: dict=None, c_update: dict=None, **kw):
+
 		c_update = (_arg or {}) | (c_update or {}) | (kw or {})
+		
 		arg = flat_any(c_update)
+		
 		c_keys = list(ii.d_flat.keys())
+		
 		arg = dict(filter(lambda kv: kv[0] in c_keys, arg.items()))
 
 		for k_update, v_update in deepcopy(arg).items():

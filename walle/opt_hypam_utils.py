@@ -121,19 +121,20 @@ def get_hypam_from_study(trial: optuna.Trial, sweep_p: dict) -> dict:
 def opt_hypam(objective: Callable, c: PyfigBase):
 	print('hypam opt create/get study')
  
-	if c.dist.head:
-		study = optuna.create_study(
-			study_name		= c.sweep.sweep_name,
-			load_if_exists 	= True, 
-			direction 		= "minimize",
-			storage			= c.sweep.storage,
-			sampler 		= lo_ve(c.exp_dir/'sampler.pk') or optuna.samplers.TPESampler(seed=c.seed),
-			pruner			= optuna.pruners.MedianPruner(n_warmup_steps=10),
-		)
-	else:
-		while not c.sweep.storage.exists():
+	print(c.sweep.storage)
+	if not c.dist.head:
+		while not Path(c.sweep.storage.split(':')[-1]).exists():
 			print('waiting for opt storage...')
 			sleep(3)
+
+	study = optuna.create_study(
+		direction 		= "minimize",
+		study_name		= c.sweep.sweep_name,
+		load_if_exists 	= True, 
+		storage			= c.sweep.storage,
+		sampler 		= lo_ve(c.exp_dir/'sampler.pk') or optuna.samplers.TPESampler(seed=c.seed),
+		pruner			= optuna.pruners.MedianPruner(n_warmup_steps=10),
+	)
 
 	study.optimize(
 		objective, 

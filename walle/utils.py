@@ -396,7 +396,10 @@ if torch:
 		elif isinstance(v, (np.ndarray, np.generic)):
 			
 			items[source + r'_\mu$'] = v.mean()
-			items['std' + sep + source + r'_\sigma$'] = v.std()
+			std_name = 'std' + sep + source + r'_\sigma$' if v.std() else 'trash/std' + sep + source + r'_\sigma$' 
+			items[std_name] = v.std()
+			
+			
 
 		return flat_any(items)
 		

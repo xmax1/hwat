@@ -24,8 +24,9 @@ class Pyfig(PyfigBase):
 	exp_id: 			str		= ''
 	group_exp: 			bool	= False
 
-	multimode: 			str		= 'train:eval' # 'max_mem:profile:opt_hypam:train:eval' -record -dark
 	mode: 				str		= ''
+	multimode: 			str		= 'train:eval'
+
 	debug: 				bool    = False
 	run_sweep:      	bool    = False
 	
@@ -33,8 +34,8 @@ class Pyfig(PyfigBase):
 	dtype:          	str   	= torch.float32 # torch.float32
 	cudnn_benchmark: 	bool 	= False
 
-	n_step:         	int   	= 2000
-	n_pre_step:    		int   	= 100
+	n_step:         	int   	= 1000
+	n_pre_step:    		int   	= 250
 
 	step: 				int 	= None
 	log_metric_step:	int   	= 50
@@ -45,14 +46,14 @@ class Pyfig(PyfigBase):
 	log_keys: 			list 	= ['r', 'e', 'pe', 'ke']
 	
 	class data(PyfigBase.data):
-		system: 	str			= '' # overwrites base
+		system: 	str			= ''
 
 		charge:     int         = 0
 		spin:       int         = 0
 		a:          np.ndarray  = np.array([[0.0, 0.0, 0.0],])
 		a_z:        np.ndarray  = np.array([16.,])
 
-		n_b:        int         = 1024
+		n_b:        int         = 512
 		n_corr:     int         = 20
 		acc_target: int         = 0.5
 
@@ -74,9 +75,9 @@ class Pyfig(PyfigBase):
 		terms_p_emb:    list    = ['rr', 'rr_len']
 		ke_method:      str     = 'grad_grad'
 		n_sv:           int     = 32
-		n_pv:           int     = 16
-		n_fb:           int     = 2
-		n_det:          int     = 2
+		n_pv:           int     = 32
+		n_fb:           int     = 3
+		n_det:          int     = 4
 		
 		n_fbv:          int     = property(lambda _: _.n_sv*3+_.n_pv*2)
 
@@ -113,7 +114,6 @@ class Pyfig(PyfigBase):
 			sch_max_lr		=	Param(values=[0.1, 0.01, 0.001], dtype=float),
 			weight_decay	= 	Param(domain=[0.0, 1.], dtype=float, condition=['AdaHessian',]),
 			hessian_power	= 	Param(values=[0.5, 1.], dtype=float, condition=['AdaHessian',]),
-			cudnn_benchmark	= 	Param(values=[True, False], dtype=bool),
 
 			# n_sv	= 	Param(values=[16, 32, 64], dtype=int),
 			# n_pv	= 	Param(values=[16, 32, 64], dtype=int),
@@ -133,6 +133,8 @@ class Pyfig(PyfigBase):
 	class wb(PyfigBase.wb):
 		wb_mode = 'online'
 
+	zweep: str = ''
+
 	def __init__(ii, notebook: bool=False, sweep: dict={}, c_init: dict={}, **other_arg) -> None:
 
 		print('pyfig:init')
@@ -143,12 +145,58 @@ class Pyfig(PyfigBase):
   
 		ii.run_local_or_submit()
 
+		"""
+		1- Fix the batch size for O2_neutral by mem_maxing 5-25 on base model
+
+		2- Base model
+		base = dict(
+			n_sv=32,
+			n_pv=32,
+			n_fb=3,
+			n_det=4,
+		)
+
+		3- 
+		"""
+
+		# fit the line 
+		# estimate max
+		# scale 
+
+		""" dummy to real ones
+		python run.py --time 03:00:00 --submit --multimode train-record:eval --system O2_neutral_triplet \
+		--exp_name gpuscale~test --n_step 1000 --n_pre_step 100 --dist hf_accelerate --n_gpu 2 --n_b 512
+
+		python run.py --time 03:00:00 --submit --multimode train-record:eval --n_step 10000 --system O2_neutral_triplet --exp_name gpuscale~v0 --n_pre_step 1000 --dist hf_acclerate --zweep n_gpu-2-4-6-8-10
+		python run.py --time 03:00:00 --submit --multimode train-record:eval --n_step 10000 --system O2_neutral_triplet --exp_name gpuscale~v0 --n_pre_step 1000 --dist naive --zweep n_gpu-2-4-6-8-10 --n_b 4096
+
+		# opt_hypam system O2
+		python run.py --submit --time 00:05:00 --mode opt_hypam \
+		--system O2_neutral_triplet --exp_name gpuscale~v0 --dist naive --n_gpu 2 \
+		--n_step 100  --n_pre_step 50  --n_b 512 --sync_step -1
+
+
+		"""
+
+
+
+		# 
+		# )
+
+		# python run.py --time 03:00:00 --submit --multimode max_mem:opt_hypam --exp_name sweep~memopt --zweep a_z-16-17
+		# python run.py --time 03:00:00 --submit --multimode max_mem:opt_hypam --exp_name sweep~memopt --zweep "[[16],[17]]"
+		# python run.py --time 03:00:00 --submit --multimode max_mem:opt_hypam --exp_name sweep~memopt --zweep a_z-5-6-7-8-9-10-11-12-13-14-15-16-17-18-19-20-21-22-23-24-25-26-27-28-29-30
+
+
 		# python run.py --submit --mode train --n_det 1 --n_step 10000 --a_z [4] --exp_name stab~4 --n_pre_step 1000
 		# python run.py --submit --mode train --n_det 1 --n_step 10000 --a_z [16] --exp_name stab~16 --n_pre_step 1000
 		# python run.py --submit --dist hf_accelerate --n_gpu 2 --exp_name demo~opt_hypam --mode opt_hypam --time 12:00:00 --system O2_neutral_triplet
 		# a_z		= 	Param(values=[[i,] for i in range(5, 50)], dtype=int),
 		# get_mem_max 15
 
+		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 01:00:00 --mode --max_mem
+
+		# 26 / 1 / 23
 		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist naive
 		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist naive --cudnn_benchmark
 		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist hf_accelerate
@@ -173,7 +221,13 @@ class Pyfig(PyfigBase):
 		deltar			= torch.tensor([0.02,], device=ii.device, dtype=ii.dtype)
 
 		v_init_0 = dict(r=r, deltar=deltar, center_points=center_points) 
-		v_init = v_init_0 | (v_init or {})
+
+		n_b_prev = len((v_init or {}).get('r', []))
+
+		new_init = not n_b_prev == ii.data.n_b 
+
+		v_init = v_init_0 if new_init else v_init
+
 		v_init = {k:torch.tensor(v).detach().to(device=ii.device, dtype=ii.dtype).requires_grad_(False) for k,v in v_init.items()
 					if isinstance(v, (torch.Tensor, np.ndarray, np.generic))}
 		return v_init
@@ -203,135 +257,135 @@ class Pyfig(PyfigBase):
 		# history = run.scan_history(keys=['e',])
 		# opt_obj = np.asarray([row['e'] for row in history])
 
-	"""  
-	# pyfig
-	## pyfig:todo
-	### docs:pyfig:load
+"""  
+# pyfig
+## pyfig:todo
+### docs:pyfig:load
 
-	- baseline cmd with pretty table
-	- copy all code to run dir
-	- generalisation refactor 
+- baseline cmd with pretty table
+- copy all code to run dir
+- generalisation refactor 
 
-	- https://jvmc.readthedocs.io/en/latest/index.html
-	
-	- normalised pretraining
-	- save eval r and stats compressed (5 min)
+- https://jvmc.readthedocs.io/en/latest/index.html
 
-	- estimated time until finished from # electrons, batch size 
-	- wandb reports
-	- distributed metrics: e_std_across_nodes
-	
-	- buy food 
-	- call rents
-	- cook dinner
-	- buy cigarettes 
-	- look at week
-	- save best mem for c in dump 
+- normalised pretraining
+- save eval r and stats compressed (5 min)
 
-	- # size_param: 	list	= property(lambda _: [datetime.now().strftime("%d-%m-%y:%H-%M-%S"), _.n_b, _.n_e, _.n_fb, _.n_sv, _.n_pv])
-	- for memory map
+- estimated time until finished from # electrons, batch size 
+- wandb reports
+- distributed metrics: e_std_across_nodes
 
-	## pyfig:def
-	- machine rank = global relative id of machine/process ??
+- buy food 
+- call rents
+- cook dinner
+- buy cigarettes 
+- look at week
+- save best mem for c in dump 
 
-	## pyfig:qzone
-	- what is love 
+- # size_param: 	list	= property(lambda _: [datetime.now().strftime("%d-%m-%y:%H-%M-%S"), _.n_b, _.n_e, _.n_fb, _.n_sv, _.n_pv])
+- for memory map
 
-	## pyfig:usage
-	- python run.py
+## pyfig:def
+- machine rank = global relative id of machine/process ??
 
-	## pyfig:args
-	- --submit (submit to Niflheim, UPDATE SO USER INDEPENDENT IN USER.PY)
-	- --n_gpu x (sets for x gpus)
-	- --debug (creates log files in dump/tmp)
-	- --run_sweep (runs sweep from variables in sweep subclass parameters dict)
-	- group_exp:	force single runs into same folder for neatness 
-	- init_arg: 
-		can be kw arguments n_b=126 
-		or dictionaries model=dict(n_layer=2, n_hidden=10)
-		or a sweep configuration sweep=dict(parameters=...)
+## pyfig:qzone
+- what is love 
 
-	## pyfig:run:examples
-	- python run.py --submit --run_sweep --debug --n_gpu 8
-	- python run.py --submit --run_sweep
+## pyfig:usage
+- python run.py
 
-	## pyfig:issues:sub_classes
-	- PlugIn classes can NOT call each other
-	- properties can NOT recursively call each other
-	- no dictionaries (other than sweep) as configuration args
-	- if wandb fails try # settings  = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
-	- ! at initialisation, sub_cls cannot be used for operations because they are not initialised and therefore 
-	- do not have access to d (dictionary property). This means the callable filter needs to happen *first
+## pyfig:args
+- --submit (submit to Niflheim, UPDATE SO USER INDEPENDENT IN USER.PY)
+- --n_gpu x (sets for x gpus)
+- --debug (creates log files in dump/tmp)
+- --run_sweep (runs sweep from variables in sweep subclass parameters dict)
+- group_exp:	force single runs into same folder for neatness 
+- init_arg: 
+	can be kw arguments n_b=126 
+	or dictionaries model=dict(n_layer=2, n_hidden=10)
+	or a sweep configuration sweep=dict(parameters=...)
 
-	## pyfig:prereq
-	- wandb api key 
-	- change secrets file
+## pyfig:run:examples
+- python run.py --submit --run_sweep --debug --n_gpu 8
+- python run.py --submit --run_sweep
 
-	# docs
-	## docs:python
-	- hasattr includes class attr not just instance attr
-	## docs:distribute:accelerator
-	- accelerate config before running anything to configure environment
-	- config file/params 
-	## docs:runfig
-	- prereq for 'runfig' complete transform
-	- needed to be this way round to ensure the system is initialised before running
-	- didn't put systems in base config bc want to generalise to other projects
+## pyfig:issues:sub_classes
+- PlugIn classes can NOT call each other
+- properties can NOT recursively call each other
+- no dictionaries (other than sweep) as configuration args
+- if wandb fails try # settings  = wandb.Settings(start_method='fork'), # idk y this is issue, don't change
+- ! at initialisation, sub_cls cannot be used for operations because they are not initialised and therefore 
+- do not have access to d (dictionary property). This means the callable filter needs to happen *first
 
-	## docs:accumulate
-	potential issues:
-	- loading / unloading too fast / slow? Crashes occasionally.
-			
-	## docs:wandb
-	- entity is the team name
+## pyfig:prereq
+- wandb api key 
+- change secrets file
 
-	## docs:torchscript
-	- unsupported
-		- https://pytorch.org/docs/stable/jit_unsupported.html 
-		- Functions which construct tensors from non-tensor inputs do not support the requires_grad argument, except for torch.tensor. (ie torch.ones)
+# docs
+## docs:python
+- hasattr includes class attr not just instance attr
+## docs:distribute:accelerator
+- accelerate config before running anything to configure environment
+- config file/params 
+## docs:runfig
+- prereq for 'runfig' complete transform
+- needed to be this way round to ensure the system is initialised before running
+- didn't put systems in base config bc want to generalise to other projects
 
-	## docs:profiler
-	1- --> wandb --> Artifacts --> files --> trace
-	https://wandb.ai/wandb/trace/reports/Using-the-PyTorch-Profiler-with-W-B--Vmlldzo5MDE3NjU
-	2- tensorboard --logdir=c.profile_dir
-	browser: http://localhost:6006/pytorch_profiler
-	https://pytorch.org/tutorials/intermediate/tensorboard_profiler_tutorial.html
-	
-	### docs:compile-torchscript-model
-	# - Final[torch.Tensor] not valid type
-	# - register_buffer way to include tensor constants
+## docs:accumulate
+potential issues:
+- loading / unloading too fast / slow? Crashes occasionally.
+		
+## docs:wandb
+- entity is the team name
 
-	## docs:useful_cmd
-	_kill_all = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
-	_kill_all_cmd = 'ssh user@server "killall -9 -u user"'
-	_cancel_job_cmd = f'scancel {cluster.job_id}'
+## docs:torchscript
+- unsupported
+	- https://pytorch.org/docs/stable/jit_unsupported.html 
+	- Functions which construct tensors from non-tensor inputs do not support the requires_grad argument, except for torch.tensor. (ie torch.ones)
 
-	### docs:compile_ts
-	# - model(r) before does nothing
-	# - model = torch.jit.script(model, r.clone()) !!! r.clone() required - reason unknown
+## docs:profiler
+1- --> wandb --> Artifacts --> files --> trace
+https://wandb.ai/wandb/trace/reports/Using-the-PyTorch-Profiler-with-W-B--Vmlldzo5MDE3NjU
+2- tensorboard --logdir=c.profile_dir
+browser: http://localhost:6006/pytorch_profiler
+https://pytorch.org/tutorials/intermediate/tensorboard_profiler_tutorial.html
 
-	# PYTORCH_JIT=0  # disable jit
-	# run_cmds('export PYTORCH_NVFUSER_DISABLE=fallback')
-	# run_cmds(['PYTORCH_NVFUSER_DISABLE_FALLBACK=1', 'export PYTORCH_NVFUSER_DISABLE_FALLBACK'], silent=False)
-	# @sjlee0407 The issue you are encountering 	
-	# is because you have allreduce_post_accumulation=False, allreduce_post_accumulation_fp16=False
-	# Torchscript/NVFuser currently works with the above two flags set to true. 
-	# Setting the above two to true will also increase performance orthogonally.
+### docs:compile-torchscript-model
+# - Final[torch.Tensor] not valid type
+# - register_buffer way to include tensor constants
+
+## docs:useful_cmd
+_kill_all = 'ssh amawi@svol.fysik.dtu.dk "killall -9 -u amawi"'
+_kill_all_cmd = 'ssh user@server "killall -9 -u user"'
+_cancel_job_cmd = f'scancel {cluster.job_id}'
+
+### docs:compile_ts
+# - model(r) before does nothing
+# - model = torch.jit.script(model, r.clone()) !!! r.clone() required - reason unknown
+
+# PYTORCH_JIT=0  # disable jit
+# run_cmds('export PYTORCH_NVFUSER_DISABLE=fallback')
+# run_cmds(['PYTORCH_NVFUSER_DISABLE_FALLBACK=1', 'export PYTORCH_NVFUSER_DISABLE_FALLBACK'], silent=False)
+# @sjlee0407 The issue you are encountering 	
+# is because you have allreduce_post_accumulation=False, allreduce_post_accumulation_fp16=False
+# Torchscript/NVFuser currently works with the above two flags set to true. 
+# Setting the above two to true will also increase performance orthogonally.
 
 
-	## docs:optuna
-	Median pruning algorithm implemented in MedianPruner
-	Non-pruning algorithm implemented in NopPruner
-	Algorithm to operate pruner with tolerance implemented in PatientPruner
-	Algorithm to prune specified percentile of trials implemented in PercentilePruner
-	Asynchronous Successive Halving algorithm implemented in SuccessiveHalvingPruner
-	Hyperband algorithm implemented in HyperbandPruner
-	Threshold pruning algorithm implemented in ThresholdPruner
+## docs:optuna
+Median pruning algorithm implemented in MedianPruner
+Non-pruning algorithm implemented in NopPruner
+Algorithm to operate pruner with tolerance implemented in PatientPruner
+Algorithm to prune specified percentile of trials implemented in PercentilePruner
+Asynchronous Successive Halving algorithm implemented in SuccessiveHalvingPruner
+Hyperband algorithm implemented in HyperbandPruner
+Threshold pruning algorithm implemented in ThresholdPruner
 
-	For RandomSampler, MedianPruner is the best.
-	For TPESampler, HyperbandPruner is the best.
-	"""
-  
+For RandomSampler, MedianPruner is the best.
+For TPESampler, HyperbandPruner is the best.
+"""
+
 """ 
 # docs:accelerate:config
 # docs:accelerate

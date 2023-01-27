@@ -8,6 +8,8 @@ import pprint
 from walle.utils import debug_dict
 from copy import deepcopy
 import numpy as np
+from typing import Callable
+
 
 def fb_block(s_v: torch.Tensor, p_v: torch.Tensor, n_u: int, n_d: int):
 	n_e = n_u + n_d
@@ -70,9 +72,9 @@ class Ansatz_fb(nn.Module):
 		ii.w_final = nn.Linear(ii.n_det, 1, bias=False)
 
 		ii.register_buffer('a', a.detach().clone().requires_grad_(False), persistent=False)    # tensor
-		ii.register_buffer('eye', torch.eye(ii.n_e).unsqueeze(0).unsqueeze(-1).requires_grad_(False), persistent=False)
-		ii.register_buffer('ones', torch.ones((1, ii.n_det,)).requires_grad_(False), persistent=False)
-		ii.register_buffer('zeros', torch.zeros((1, ii.n_det,)).requires_grad_(False), persistent=False)
+		ii.register_buffer('eye', torch.eye(ii.n_e)[None, :, :, None].requires_grad_(False), persistent=False)
+		ii.register_buffer('ones', torch.ones((1, ii.n_det)).requires_grad_(False), persistent=False)
+		ii.register_buffer('zeros', torch.zeros((1, ii.n_det)).requires_grad_(False), persistent=False)
   
 		debug_dict(msg='model buffers', buffers=list(ii.buffers()))
 
@@ -84,10 +86,10 @@ class Ansatz_fb(nn.Module):
 		n_b = r.shape[0]
 
 		ra = r[:, :, None, :] - ii.a[:, :] # (n_b, n_e, n_a, 3)
-		ra_len = torch.linalg.norm(ra, dim=-1, keepdim=True) # (n_b, n_e, n_a, 1)
+		ra_len = torch.linalg.vector_norm(ra, dim=-1, keepdim=True) # (n_b, n_e, n_a, 1)
 
 		rr = r[:, None, :, :] - r[:, :, None, :] # (n_b, n_e, n_e, 1)
-		rr_len = torch.linalg.norm(rr + ii.eye, dim=-1, keepdim=True) 
+		rr_len = torch.linalg.vector_norm(rr + ii.eye, dim=-1, keepdim=True) 
 
 		s_v = torch.cat([ra, ra_len], dim=-1).reshape(n_b, ii.n_e, -1) # (n_b, n_e, n_a*4)
 		p_v = torch.cat([rr, rr_len], dim=-1) # (n_b, n_e, n_e, 4)
@@ -106,56 +108,52 @@ class Ansatz_fb(nn.Module):
 
 		s_u, s_d = torch.split(s_v_block, [ii.n_u, ii.n_d], dim=1) # (n_b, n_u, 3n_sv+2n_pv), (n_b, n_d, 3n_sv+2n_pv)
 
-		s_u = torch.tanh(ii.v_u_fb_after(s_u)) # (n_b, n_u, n_sv)    # n_sv//2)
-		s_d = torch.tanh(ii.v_d_fb_after(s_d)) # (n_b, n_d, n_sv)    # n_sv//2)
+		s_u = torch.tanh(ii.v_u_fb_after(s_u)) # (n_b, n_u(r), n_sv)    # n_sv//2)
+		s_d = torch.tanh(ii.v_d_fb_after(s_d)) # (n_b, n_d(r), n_sv)    # n_sv//2)
 
 		# Map to orbitals for multiple determinants
-		s_wu = torch.cat(ii.wu(s_u).unsqueeze(1).chunk(ii.n_det, dim=-1), dim=1) # (n_b, n_det, n_u, n_u)
-		s_wd = torch.cat(ii.wd(s_d).unsqueeze(1).chunk(ii.n_det, dim=-1), dim=1) # (n_b, n_det, n_d, n_d)
+		# s_wu = ii.wu(s_u).unsqueeze(1).tensor_split(ii.n_det, dim=-1), dim=1) # (n_b, n_det, n_u(r), n_u)
+		# s_wd = ii.wd(s_d).unsqueeze(1).tensor_split(ii.n_det, dim=-1), dim=1) # (n_b, n_det, n_d(r), n_d)
+		
+		s_wu = ii.wu(s_u).reshape(n_b, ii.n_u, ii.n_u, ii.n_det) # (n_b, n_det, n_d, n_d)
+		s_wd = ii.wd(s_d).reshape(n_b, ii.n_d, ii.n_d, ii.n_det) # (n_b, n_det, n_d, n_d)
 		
 		# assert s_wd.shape == (n_b, ii.n_det, ii.n_d, ii.n_d)
-		ra_u, ra_d = torch.split(ra, [ii.n_u, ii.n_d], dim=1) # (n_b, n_u, n_a, 3), (n_b, n_d, n_a, 3)
+		ra_u, ra_d = torch.split(ra, [ii.n_u, ii.n_d], dim=1) # (n_b, n_u(r), n_a, 3), (n_b, n_d(r), n_a, 3)
 
-		exp_u = torch.linalg.norm(ra_u, dim=-1, keepdim=True) # (n_b, n_u, n_a, 1)
-		exp_d = torch.linalg.norm(ra_d, dim=-1, keepdim=True) # (n_b, n_d, n_a, 1)
+		exp_u = torch.exp(-torch.linalg.vector_norm(ra_u, dim=-1)) # (n_b, n_u(r), n_a)
+		exp_d = torch.exp(-torch.linalg.vector_norm(ra_d, dim=-1)) # (n_b, n_d(r), n_a)
 
-		# assert exp_d.shape == (n_b, ii.n_d, ii.a.shape[0], 1)
-		exp_u = torch.exp(-exp_u)
-		exp_d = torch.exp(-exp_d)
-		sum_a_exp_u = exp_u.sum(dim=2).unsqueeze(1)
-		sum_a_exp_d = exp_d.sum(dim=2).unsqueeze(1)
-		orb_u = s_wu * sum_a_exp_u # (n_b, n_det, n_u, n_u)
-		orb_d = s_wd * sum_a_exp_d # (n_b, n_det, n_d, n_d)
+		sum_a_exp_u = exp_u.sum(dim=-1, keepdim=True)[..., None] # n_b, n_u(r)
+		sum_a_exp_d = exp_d.sum(dim=-1, keepdim=True)[..., None] # n_b, n_d(r)
 
-		# assert orb_u.shape == (n_b, ii.n_det, ii.n_u, ii.n_u)
-		# log_psi, sgn = logabssumdet(orb_u, orb_d)
-		orbs = [orb_u, orb_d]
+		orb_u = s_wu * sum_a_exp_u # (n_b, n_u(r), n_u(orb), n_det) 
+		orb_d = s_wd * sum_a_exp_d # (n_b, n_d(r), n_d(orb), n_det)
 	
-		det_one_e_all = [v.reshape(n_b, -1) if v.shape[-1] == 1 else ii.ones for v in orbs]   # (n_b, n_det), (n_b, n_det)
-		det_one_e = det_one_e_all[0] * det_one_e_all[1] # if both cases satisfy n_u or n_d=1, this is the determinant
+		orb_u = orb_u.transpose(-1, 1) # (n_b, n_det, n_u(r), n_u(orb))
+		orb_d = orb_d.transpose(-1, 1) # (n_b, n_det, n_u(r), n_u(orb))
+
+		### case with 1 electron will fail ### # e1mask = torch.sign(orb_u.shape[-1])
+		sign_u, logdet_u = torch.linalg.slogdet(orb_u)
+		sign_d, logdet_d = torch.linalg.slogdet(orb_d)
+
+		sign = sign_u * sign_d
+		logdet = logdet_u + logdet_d
+
+		maxlogdet, _ = torch.max(logdet, dim=-1, keepdim=True) # (n_b, 1), (n_b, 1)
 		
-		slogdets = [torch.linalg.slogdet(v) if v.shape[-1]>1 else [ii.ones, ii.zeros] for v in orbs] # two-element list of list of (n_b, n_det) tensors
-		signs = [v[0] for v in slogdets] # two-element list of (n_b, n_det) tensors
-		logdets = [v[1] for v in slogdets] # two-element list of (n_b, n_det) tensors
+		sub_det = sign * torch.exp(logdet - maxlogdet) 
+		
+		psi_ish = ii.w_final(sub_det).squeeze()  # (n_b, 1)
 
-		sign_in = signs[0] * signs[1] # (n_b, n_det)
-		logdet = logdets[0] + logdets[1] # (n_b, n_det)
+		sign_psi = torch.sign(psi_ish)  
 
-		maxlogdet = torch.zeros_like(logdet)
-		if ii.n_det > 1:
-			maxlogdet, _ = torch.max(logdet, dim=-1, keepdim=True) # (n_b, 1), (n_b, 1)
-
-		det = sign_in * det_one_e * torch.exp(logdet - maxlogdet)
-
-		psi_ish = ii.w_final(det).squeeze() # (n_b)
-		sgn_psi = torch.sign(psi_ish) # (n_b)
-		log_psi = torch.log(torch.abs(psi_ish)) + maxlogdet.squeeze()
+		log_psi = torch.log(torch.absolute(psi_ish)) + maxlogdet.squeeze()
   
 		if ii.with_sign:
-			return log_psi.squeeze(), sgn_psi.squeeze()
-		else:
-			return log_psi.squeeze()
+			return log_psi, sign_psi
 
+		return log_psi
 
 compute_vv = lambda v_i, v_j: torch.unsqueeze(v_i, dim=-2)-torch.unsqueeze(v_j, dim=-3)
 
@@ -234,7 +232,7 @@ def dep_ke_comp(
 	e_jvp = gg + g**2
 	return -0.5 * e_jvp.sum(-1)
 
-from typing import Callable
+
 
 def compute_ke_b(
 	model: nn.Module, 
@@ -357,7 +355,6 @@ def sample_b(
 	deltar_1 = torch.clip(deltar + 0.01*torch.randn_like(deltar), min=0.005, max=0.5)
 	
 	acc = torch.zeros_like(deltar)
-
 	acc_all = torch.zeros_like(deltar)
 
 	for dr_test in [deltar, deltar_1]:
@@ -366,6 +363,7 @@ def sample_b(
 			r_1 = r + torch.randn_like(r, device=device, dtype=dtype, layout=torch.strided)*dr_test
 			p_1 = torch.exp(model(r_1))**2
 			
+
 			alpha = torch.rand_like(p_1, device=device, dtype=dtype, layout=torch.strided)
 			a_larger, b_larger = is_a_larger(p_1/p_0, alpha)
 

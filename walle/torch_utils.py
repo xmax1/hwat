@@ -52,7 +52,9 @@ def gen_profile(
 
 
 def get_max_mem_c(fn: Callable, c: PyfigBase, max_mem_min=8, max_max_mem=20, **kw) -> dict:
+	
 	import traceback
+
 	t = torch.cuda.get_device_properties(0).total_memory // 1024 // 1024
 	r = torch.cuda.memory_reserved(0)
 	a = torch.cuda.memory_allocated(0)
@@ -62,17 +64,17 @@ def get_max_mem_c(fn: Callable, c: PyfigBase, max_mem_min=8, max_max_mem=20, **k
 		try:
 			
 			n_b = n_b=2**n_b_power
-			c.update(dict(n_b = n_b))
-
+			c.update(dict(n_b = n_b, mode='train', n_step = 30))
 			v_run = fn(c=c)
 
 			mem_used = v_run['max_mem_alloc']
 			print(f'n_b {n_b} used {mem_used} out of {t}')
 
 			torch.cuda.empty_cache()
+			
 			if mem_used > t/2:
 				print('get_max_mem: b_s is ', n_b)
-				return dict(n_b_max=n_b, max_mem_alloc=mem_used)
+				return dict(n_b=n_b, n_b_max=n_b, max_mem_alloc=mem_used)
 
 		except Exception as e:
 			print(traceback.format_exc())

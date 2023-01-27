@@ -33,8 +33,6 @@ from torch import nn
 this_dir = Path(__file__).parent
 hostname = os.environ['HOSTNAME']
 
-
-
 class naive(PyfigBase.dist):
 	dist_method: 	str		= 'naive'  # options: accelerate
 	sync_step:      int     = 5
@@ -98,6 +96,7 @@ class naive(PyfigBase.dist):
 			v_mean_path.unlink()
 			gc.enable()
 		return v_sync
+
 
 import accelerate
 
