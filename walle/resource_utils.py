@@ -53,6 +53,7 @@ class niflheim(PyfigBase.resource):
 
 	_pci_id_cmd:	str		= 'nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'
 	pci_id:			str		= property(lambda _: ''.join(run_cmds(_._pci_id_cmd, silent=True)))
+	gpu_i: 			int		= 0
 
 	n_device_env:	str		= 'CUDA_VISIBLE_DEVICES'
 	# n_device:       int     = property(lambda _: sum(c.isdigit() for c in os.environ.get(_.n_device_env, '')))
@@ -138,7 +139,7 @@ class niflheim(PyfigBase.resource):
 		elif ii._p.dist.dist_method == 'naive':
 			print('\n pyfig distribution')
 			for i in range(ii.n_gpu):
-				job.update(dict(head= i==0))
+				job.update(dict(head= i==0, gpu_i=i))
 				cmd = dict_to_cmd(job)
 				cmd = f'python -u {job["run_name"]} {cmd}'
 				body += f'\n{ii._p.dist._launch_cmd} {cmd} 1> {ii.device_log_path(rank=i)} 2>&1 & \n'

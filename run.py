@@ -157,11 +157,11 @@ def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 
 			v_cpu_d = npify_tree(v_d)
 
-			v_cpu_d |= metrix.tick(step, opt_obj=v_cpu_d['e'].mean())
+			v_cpu_d |= metrix.tick(step, opt_obj=v_cpu_d[c.opt_obj].std())
 
 			v_metrix = compute_metrix(v_cpu_d, source=c.mode, sep='/')
 
-			if int(c.dist.rank)==0 and c.dist.head:
+			if (int(c.dist.rank)==0 and c.dist.head) or ('opt_hypam' in c.mode):
 
 				if not 'dark' in c.mode:
 					wandb.log(v_metrix, step=step)
@@ -182,7 +182,7 @@ def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 
 	torch.cuda.empty_cache()
 
-	if int(c.dist.rank)==0 and c.dist.head:
+	if (int(c.dist.rank)==0 and c.dist.head) or ('opt_hypam' in c.mode):
 
 		if not 'dark' in c.mode:
 			n_param = sum(p.numel() for p in model.parameters())
@@ -215,16 +215,30 @@ if __name__ == "__main__":
 	class RunMode:
 
 		def __call__(ii, c: Pyfig, v_init: dict=None, c_update: dict=None, mode: str=None):
-			c.update(c_update | dict(mode=(mode or {})))
-			next_mode = v_init.get('next', 'evaluate')
-			fn = getattr(ii, c.mode.split('-')[0])
 
-			return fn(c=c, v_init=v_init)
+			try:
+				c.update(c_update | dict(mode=(mode or {})))
+				next_mode = v_init.get('next', 'evaluate')
+				fn = getattr(ii, c.mode.split('-')[0])
+				v_run = fn(c=c, v_init=v_init)
+			except Exception as e:
+				print('trial failed: ', e)
+				v_run = {}
+			return v_run
 
 		def opt_hypam(ii, c: Pyfig=None, v_init: dict=None):
 			from walle.opt_hypam_utils import opt_hypam, objective
    
-			objective = partial(objective, c=c, run=run)
+
+			def _run(*arg, **kw):
+				try:
+					v_run = run(*arg, **kw)
+				except Exception as e:
+					print('trial failed: ', e)
+					v_run = {}
+				return v_run
+
+			objective = partial(objective, c=c, run=_run)
 			v_run = opt_hypam(objective, c)
 
 			#
@@ -279,13 +293,13 @@ if __name__ == "__main__":
 
 	res, v_run = dict(), dict(v_init_next=dict())
 
-	run_mode_all = [c.mode,] or c.multimode.split(':')
+	run_mode_all = [c.mode,] if c.mode else c.multimode.split(':')
 	print('run.py:mode = \n ***', run_mode_all, '***')
 	for mode_i, mode in enumerate(run_mode_all):
 
 		next_i = mode_i+1
 		if next_i < len(run_mode_all):
-			v_run['v_init_next']['next'] = run_mode_all[next_i]
+			v_run.get('v_init_next', {})['next'] = run_mode_all[next_i]
 
 		c_update_next = v_run.get('c_update_next', {})
 

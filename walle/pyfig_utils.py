@@ -243,18 +243,20 @@ class PyfigBase:
 	log_dir: 			Path    = property(lambda _: _.cluster_dir)
 
 	_ignore_f = ['commit', 'pull', 'backward', 'controller', 'plugin_ignore']
-	_ignore_c = ['sweep',]
+	_ignore_c = ['parameters',]
 	ignore: list = ['ignore', 'd', 'cmd', 'sub_ins', 'd_flat'] + _ignore_f + _ignore_c
 	_group_i: int = 0
 	_sub_ins: dict = {}
 	step: int = -1
+	zweep: str = ''
 
 	def __init__(ii, 
 		notebook:bool=False,  # removes sys_arg for notebooks
 		sweep: dict={},  # special properties for config update so is separated
 		c_init: dict|str|Path={},  # args specificall  
 		post_init_arg: dict={},
-		**other_arg):     
+		**other_arg
+	):     
 
 		ii.init_sub_cls()
 
@@ -267,15 +269,16 @@ class PyfigBase:
 
 		update = flat_any((c_init or {})) | flat_any((other_arg or {})) | (sys_arg or {})
 
-
 		### under construction ###
 		from .distribute_utils import naive, hf_accelerate
+
 		plugin_repo = dict(
 			dist = dict(
 				hf_accelerate=hf_accelerate,
 				naive = naive,
 			),
 		)
+
 		new_sub_cls = dict(filter(lambda kv: kv[0] in ii._sub_ins.keys(), update.items()))
 		[update.pop(k) for k in new_sub_cls.keys()]
 		for plugin, plugin_version in new_sub_cls.items():
@@ -312,7 +315,6 @@ class PyfigBase:
 
 			tags = [str(s) for s in [*ii.mode.split('-'), ii.exp_id, ii._group_i]]
 			
-
 			if 'dark' in tags:
 				print('pyfig:start:\n Going dark. wandb not initialised.')
 
@@ -332,9 +334,11 @@ class PyfigBase:
 				)
 
 				print(ii.wb.run_url)
+				print('exp_dir: ', ii.exp_dir)
 			
 			import shutil
-			shutil.copyfile(this_file_path, ii.exp_dir/this_file_path.name)
+			c_path = ii.project_dir / 'pyfig.py'
+			shutil.copyfile(c_path, ii.exp_dir/c_path.name)
 			
 			with open(ii.exp_dir/'c.pyfig', 'w') as f:
 				f.writelines([ii.cmd])
@@ -362,14 +366,16 @@ class PyfigBase:
 
 				ii.setup_exp_dir(group_exp= group_exp, force_new_id= True)
 				base_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, 
-							ignore=ii.ignore+['sweep','resource','dist_c','slurm_c'])
+							ignore=ii.ignore+['resource','dist_c','slurm_c','parameters'])
 				run_d = base_d | run_d
 
 				ii.debug_log([dict(os.environ.items()), run_d], ['log-submit_env.log', 'log-submit_d.log'])
 
 				ii.resource.cluster_submit(run_d)
 
-				print(ii.wb.run_url)
+				print('log_group_url: \t\t\t',  ii.wb.run_url)
+				print('exp_dir: \t\t\t', ii.exp_dir)
+				print('exp_log: \t\t\t', ii._debug_paths['device_log_path'])
 			
 			sys.exit('Exiting from submit.')
 
@@ -396,7 +402,7 @@ class PyfigBase:
 
 	@property
 	def cmd(ii):
-		return dict_to_cmd(ii.d)
+		return dict_to_cmd(ii.d_flat)
 
 	@property
 	def d(ii):
@@ -456,7 +462,7 @@ class PyfigBase:
 				n_sweep += len(v)
 	
 			# n_sweep = len(get_cartesian_product(*(v for v in param))
-			base_c = ins_to_dict(ii, sub_ins=True, attr=True, flat=True, ignore=ii.ignore+['sweep', 'head', 'exp_id'] + sweep_keys)
+			base_c = ins_to_dict(ii, sub_ins=True, attr=True, flat=True, ignore=ii.ignore+['parameters','head','exp_id'] + sweep_keys)
 			base_cmd = dict_to_cmd(base_c, sep='=')
 			base_sc = dict((k, dict(value=v)) for k,v in base_c.items())
    
@@ -518,7 +524,12 @@ class PyfigBase:
 		for k_update, v_update in deepcopy(arg).items():
 			is_updated = walk_ins_tree(ii, k_update, v_update)
 			if not is_updated:
-				print(f'not updated: k={k_update} v={v_update} type={type(v_update)}')
+
+				if k_update=='dtype': # !!! pyfig:fix: Special case, generalify
+					ii.dtype = v_update
+					print('dtype: --- ', v_update)
+				else:
+					print(f'not updated: k={k_update} v={v_update} type={type(v_update)}')
 
 		not_arg = dict(filter(lambda kv: kv[0] not in c_keys, arg.items()))
 		debug_dict(msg='update:not = \n', not_arg=not_arg)
@@ -531,7 +542,7 @@ class PyfigBase:
 			f.writelines(info)
 
 	def to(ii, framework='torch'):
-		base_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore+['sweep'])
+		base_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore+['parameters'])
 		d = {k:v for k,v in base_d.items() if isinstance(v, (np.ndarray, np.generic))}
 		if 'torch' in framework.lower():
 			d = {k:torch.tensor(v, requires_grad=False).to(device=ii.device, dtype=ii.dtype) for k,v in d.items()}
@@ -539,10 +550,11 @@ class PyfigBase:
 			d = {k:v.detach().cpu().numpy() for k,v in d.items() if isinstance(v, torch.Tensor)}
 		ii.update(d)
 
-	def set_dtype(ii, dtype=torch.DoubleTensor):
-		print('setting default dtype: ', dtype)
+	def set_dtype(ii, dtype = None):
+		print('setting default dtype: ', print(ii.dtype))
 		ii.dtype = dtype or ii.dtype
-		torch.set_default_tensor_type(ii.dtype) 
+		print('setting default dtype: ', dtype)
+		torch.set_default_dtype(ii.dtype)
 		ii.dtype = torch.randn((1,)).dtype
 		print('pyfig: dtype is ', ii.dtype)
 		return ii.dtype

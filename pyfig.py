@@ -31,7 +31,7 @@ class Pyfig(PyfigBase):
 	run_sweep:      	bool    = False
 	
 	seed:           	int   	= 808017424 # grr
-	dtype:          	str   	= torch.float32 # torch.float32
+	dtype:          	str   	= torch.float # torch.float32
 	cudnn_benchmark: 	bool 	= False
 
 	n_step:         	int   	= 1000
@@ -42,6 +42,7 @@ class Pyfig(PyfigBase):
 	log_state_step: 	int   	= property(lambda _: _.n_step//10)
  
 	n_eval_step:        int   	= 100
+	opt_obj:			str		= 'e'
 	eval_keys: 			list 	= ['e',]
 	log_keys: 			list 	= ['r', 'e', 'pe', 'ke']
 	
@@ -159,11 +160,16 @@ class Pyfig(PyfigBase):
 		3- 
 		"""
 
-		# fit the line 
-		# estimate max
-		# scale 
+		# tag record to be able to clear anything from wandb with no record tag
+		# - todo
+		# - run scaling exp
 
 		""" dummy to real ones
+		python run.py --submit 
+		
+		python run.py --time 01:00:00 --submit --multimode train:eval:max_mem:opt_hypam \
+		--exp_name ~debug --n_step 40 --n_pre_step 20 --dist naive --n_gpu 2 --n_b 128 --a_z [4]
+
 		python run.py --time 03:00:00 --submit --multimode train-record:eval --system O2_neutral_triplet \
 		--exp_name gpuscale~test --n_step 1000 --n_pre_step 100 --dist hf_accelerate --n_gpu 2 --n_b 512
 
@@ -171,14 +177,21 @@ class Pyfig(PyfigBase):
 		python run.py --time 03:00:00 --submit --multimode train-record:eval --n_step 10000 --system O2_neutral_triplet --exp_name gpuscale~v0 --n_pre_step 1000 --dist naive --zweep n_gpu-2-4-6-8-10 --n_b 4096
 
 		# opt_hypam system O2
-		python run.py --submit --time 00:05:00 --mode opt_hypam \
-		--system O2_neutral_triplet --exp_name gpuscale~v0 --dist naive --n_gpu 2 \
-		--n_step 100  --n_pre_step 50  --n_b 512 --sync_step -1
+		python run.py --submit --time 00:05:00 --mode opt_hypam  \
+		--system O2_neutral_triplet --exp_name ~debug --dist hf_accelerate --n_gpu 2  \
+		--n_step 100  --n_pre_step 50  --n_b 512 --sync_step -1 --n_trials 4
+		
+		python run.py --submit --time 02:00:00 --mode opt_hypam-record --system O2_neutral_triplet \
+		--exp_name opt_hypam~O2 --dist naive --n_gpu 4 --n_step 500  --n_pre_step 500  --n_b 1024 
+		--sync_step -1 --log_state_step -1 \
+		--n_trials 20
 
+
+		python run.py --submit --time 01:00:00 --mode opt_hypam \
+		--system O2_neutral_triplet --exp_name opt_hypam~O2 --dist naive --n_gpu 4 \
+		--n_step 500  --n_pre_step 500  --n_b 1024 --sync_step -1 --n_trials 20
 
 		"""
-
-
 
 		# 
 		# )

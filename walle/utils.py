@@ -184,12 +184,12 @@ def cmd_to_dict(cmd:Union[str, list], ref:dict, delim:str=' --', d=None):
 	[x.append('True') for x in cmd if len(x)==1]
 	
 	d = dict()
-	for k,v in cmd:
+	for k, v in cmd:
 		v = format_cmd_item(v)
 		k = k.replace(' ', '')
 
 		if k in base_ref_dict:
-			d[k] = base_ref_dict[k]['to_d']
+			d[k] = base_ref_dict[k]['to_d'][v]  # torch.float64 
 			continue
 
 		v_ref = ref.get(k, None)

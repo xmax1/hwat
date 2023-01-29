@@ -49,8 +49,10 @@ def objective(trial: Trial, c: PyfigBase, run: Callable):
 
 
 def suggest_hypam(trial: optuna.Trial, name: str, v: Param):
+
 	if isinstance(v, dict):
 		v = Param(**v)
+
 	debug_dict(d=v.d, msg='suggest_hypam:Param')
 
 	if not v.domain:
@@ -74,29 +76,6 @@ def suggest_hypam(trial: optuna.Trial, name: str, v: Param):
 	
 	raise Exception(f'{v} not supported in hypam opt')
 
-
-def order_conditions(sweep_p: dict):
-	from collections import OrderedDict
-	wait = []
-	order = []
-	for name, v in sweep_p.items():
-		if v.condition:
-			print(v.condition)
-			if any([k_cond in order for k_cond in v.condition]):
-				order += [name,]
-			else:
-				wait += [(name, v),]
-		else:
-			order += [name,]
-	if wait:
-		wait = OrderedDict(reversed(wait))
-		order += order_conditions(wait)
-	return order
-
-x = {'x':1, 'y':2}
-y = x.pop('y')
-print(y)
-
 from copy import deepcopy
 
 def get_hypam_from_study(trial: optuna.Trial, sweep_p: dict) -> dict:
@@ -106,42 +85,43 @@ def get_hypam_from_study(trial: optuna.Trial, sweep_p: dict) -> dict:
 		v = suggest_hypam(trial, name, param)
 		c_update[name] = v
 	
-	for k,v in deepcopy(c_update).items():
+	for k, v in deepcopy(c_update).items():
 		condition = sweep_p[k].condition
 		if condition:
-			if any([cond in c_update.values() for cond in condition]):
+			if not any([cond in c_update.values() for cond in condition]):
 				c_update.pop(k)
 
 	print('optuna:get_hypam_from_study \n')
 	pprint.pprint(c_update)
-
 	return c_update
 
+import time
 
 def opt_hypam(objective: Callable, c: PyfigBase):
 	print('hypam opt create/get study')
  
-	print(c.sweep.storage)
+	
 	if not c.dist.head:
-		while not Path(c.sweep.storage.split(':')[-1]).exists():
+		while not len(list(c.exp_dir.glob('*.db'))):
 			print('waiting for opt storage...')
-			sleep(3)
-
-	study = optuna.create_study(
-		direction 		= "minimize",
-		study_name		= c.sweep.sweep_name,
-		load_if_exists 	= True, 
-		storage			= c.sweep.storage,
-		sampler 		= lo_ve(c.exp_dir/'sampler.pk') or optuna.samplers.TPESampler(seed=c.seed),
-		pruner			= optuna.pruners.MedianPruner(n_warmup_steps=10),
-	)
+			sleep(5.)
+		sleep(c.resource.gpu_i)
+		study = optuna.load_study(study_name=c.sweep.sweep_name, storage=c.sweep.storage)
+	else:
+		study = optuna.create_study(
+			direction 		= "minimize",
+			study_name		= c.sweep.sweep_name,
+			load_if_exists 	= True, 
+			storage			= c.sweep.storage,
+			sampler 		= lo_ve(path=c.exp_dir/'sampler.pk') or optuna.samplers.TPESampler(seed=c.resource.gpu_i),
+			pruner			= optuna.pruners.MedianPruner(n_warmup_steps=10),
+		)
 
 	study.optimize(
 		objective, 
 		n_trials=c.sweep.n_trials, 
 		timeout=None, 
-		callbacks=None, 
-		show_progress_bar=True, 
+		callbacks=None,
 		gc_after_trial=True
 	)
 
