@@ -45,6 +45,13 @@ def init_exp(c: Pyfig, c_update: dict=None, **kw):
 	model_fn, param, b = make_functional_with_buffers(model)
 	model_fn_vmap = vmap(model_fn, in_dims=(None, None, 0))
 
+	### under construction ###
+	from hwat import PyfigDataset
+	from torch.utils.data import DataLoader
+	dataset = PyfigDataset(c, model)
+	dataloader = DataLoader(dataset, batch_size=c.data.n_b)
+	### under construction ###
+
 	opt = get_opt(**c.opt.d_flat)(model.parameters())
 	scheduler = get_scheduler(n_step=c.n_step, **c.opt.scheduler.d_flat)(opt)
 
@@ -53,7 +60,7 @@ def init_exp(c: Pyfig, c_update: dict=None, **kw):
 		c, model, opt = load(c, path=c.lo_ve_path, things_to_load=dict(model=model, opt=opt))
 		pprint.pprint(c.d)
 
-	model, opt, scheduler = c.dist.prepare(model, opt, scheduler)
+	model, dataloader, opt, scheduler = c.dist.prepare(model, dataloader, opt, scheduler)
 
 	if 'train' in c.mode:
 		model.train()
@@ -119,7 +126,7 @@ def loss_fn(
 
 def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 
-	compute_loss, model, opt, scheduler = init_exp(c, c_update, **kw)
+	model, dataloader, compute_loss, opt, scheduler = init_exp(c, c_update, **kw)
 	
 	metrix = Metrix(eval_keys=c.eval_keys)
 	

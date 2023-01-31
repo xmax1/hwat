@@ -402,34 +402,26 @@ def sample_b(
 	return dict(data=data, acc=acc_all/2., deltar=deltar)
 
 
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
+from pyfig import Pyfig
 
-data = torch.rand(size=(c.qrc.n_data, c.qrc.n_dim_data))
-y = torch.rand(size=(c.qrc.n_data, c.qrc.n_dim_data))
-dataset = TSData(data, y, **c.data.d)
-
-
-from things.pyfig_utils import PyfigBase
-
-tr_loader = DataLoader(dataset, batch_size=c.data.n_b, shuffle=True)
 
 class PyfigDataset(Dataset):
 
 	def __init__(ii, 
+		c: Pyfig,
 		model: nn.Module,
-		c: PyfigBase,
 	):
 
 		ii.model = model
 		ii.n_b = c.data.n_b
-		ii.n_step = c.data.n_step
 
+		ii.n_step = c.n_step
 		ii.n_corr = c.app.n_corr
 		ii.deltar = torch.tensor([0.02,], device=c.device, dtype=c.dtype).requires_grad_(False)
 		ii.center_points = get_center_points(c.app.n_e, c.app.a)
 
-		ii.data = center_points + torch.randn(size=(c.data.n_b, *center_points.shape))
-
+		ii.data = ii.center_points + torch.randn(size=(c.data.n_b, *ii.center_points.shape))
 
 	def __len__(ii):
 		return ii.n_b * ii.n_step

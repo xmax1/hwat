@@ -109,25 +109,30 @@ class naive(PyfigBase.dist):
 import accelerate
 
 
+
+split_batches= True
+mixed_precision= 'no' # 'fp16, 'bf16'
+
 class hf_accel(PyfigBase.dist):
 
 	dist_name: str		= 'hf_accel'
+	accel: accelerate.Accelerator = None
+
 	
 	accel: accelerate.Accelerator = None
 
 	rank_env_name: str 		= 'RANK'
 	sync_step: int			= 5
 
+	split_batches: bool		= True
+	mixed_precision: str	= 'no' # 'fp16, 'bf16'
+
 	launch_cmd:	Callable  	= property(lambda _: 
 		lambda n_submit: 
-		f'accelerate launch {dict_to_cmd(_.dist_c.d, exclude_false=True)} {job["run_name"]} \ '
+		f'accelerate launch {dict_to_cmd(_.dist_c.d, exclude_false=True)} {_._p.run_name} \ '
 	)
 
-	_is_local_main_process: bool = property(lambda _: _.accel.is_local_main_process)
-	_is_main_process: bool = property(lambda _: _.accel.is_main_process)
-	_is_distributed: bool = property(lambda _: _.accel.is_distributed)
-	_is_local_process_zero: bool = property(lambda _: _.accel.is_local_process_zero)
-	# head: bool = property(lambda _: _.accel.is_local_main_process)
+
 
 	class dist_c(PlugIn):
 		multi_gpu = True
@@ -139,7 +144,12 @@ class hf_accel(PyfigBase.dist):
 
 	def __init__(ii, parent=None):
 		super().__init__(parent=parent)
+		
 		ii.plugin_ignore += ['accel']
+
+		ii.accel = accelerate.Accelerator(
+			split_batches=getattr(ii, 'split_batches'), mixed_precision=getattr(ii, 'mixed_precision')
+		)
 
 	@torch.no_grad()
 	def sync(ii, step:int , v_d: dict[str:torch.Tensor]) -> list[torch.Tensor]:
@@ -176,3 +186,19 @@ class hf_accel(PyfigBase.dist):
 	def prepare(ii, *arg, **kw):
 		print(ii.accel.device, ii.accel.is_main_process, ii.accel.is_local_main_process, sep='\n')
 		return ii.accel.prepare(*arg, **kw)  # docs:accelerate
+
+	@property
+	def _docs(ii,):
+		"""
+		accel attrs
+		**device** (torch.device) -- The device to use.
+		**distributed_type** ([~utils.DistributedType]) -- The distributed training configuration.
+		**local_process_index** (int) -- The process index on the current machine.
+		**mixed_precision** (str) -- The configured mixed precision mode.
+		**num_processes** (int) -- The total number of processes used for training.
+		**optimizer_step_was_skipped** (bool) -- Whether or not the optimizer update was skipped (because of gradient overflow in mixed precision), in which case the learning rate should not be changed.
+		**process_index** (int) -- The overall index of the current process among all processes.
+		**state** ([~state.AcceleratorState]) -- The distributed setup state.
+		**sync_gradients** (bool) -- Whether the gradients are currently being synced across all processes.
+		**use_distributed** (bool) -- Whether the current configuration is for distributed training.
+		"""

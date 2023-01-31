@@ -47,7 +47,7 @@ class Pyfig(PyfigBase):
 	eval_keys: 			list 	= ['e',]
 	log_keys: 			list 	= ['r', 'e', 'pe', 'ke']
 	
-	class system(PlugIn):
+	class app(PlugIn):
 		system_name: str		= ''
 
 		system_id = property(lambda _: 
