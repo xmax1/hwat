@@ -14,7 +14,6 @@ import pprint
 import inspect
 import numpy as np
 from copy import copy, deepcopy
-import torch 
 from functools import partial 
 import pickle as pk
 import yaml
@@ -26,14 +25,14 @@ from .utils import dict_to_cmd, cmd_to_dict, dict_to_wandb, debug_dict
 from .utils import mkdir, iterate_n_dir, gen_time_id, add_to_Path, dump, load
 from .utils import get_cartesian_product, type_me, run_cmds, flat_any 
 
-from torch import nn
-
 this_file_path = Path(__file__) 
 hostname = os.environ['HOSTNAME']
 
 class PlugIn:
 	_p = None
 	_prefix = None
+	_static = True
+
 	ignore = ['d', 'd_flat', 'ignore', 'plugin_ignore'] # applies to every plugin
 	plugin_ignore: list = [] # can be used in the plugin versions
 
@@ -122,21 +121,7 @@ class PyfigBase:
 	group_i: 			int 	= property(lambda _: _._group_i)
 	
 	class data(PlugIn):
-		system: 	str = ''
 		n_b:        int         = 0
-
-		charge:     int         = 0
-		spin:       int         = 0
-		a:          np.ndarray  = np.array([[0.0, 0.0, 0.0],])
-		a_z:        np.ndarray  = np.array([4.,])
-
-		n_corr:     int         = 0
-		n_equil_step:		int	= 0
-		acc_target: int         = 0
-
-		n_e:        int         = property(lambda _: int(sum(_.a_z)))
-		n_u:        int         = property(lambda _: (_.spin + _.n_e)//2)
-		n_d:        int         = property(lambda _: _.n_e - _.n_u)
 
 	class model(PlugIn):
 		with_sign:      bool    = False
@@ -160,7 +145,7 @@ class PyfigBase:
   
 	class sweep(PlugIn):
 		storage: 		Path = property(lambda _: 'sqlite:///'+str(_._p.exp_dir / 'hypam_opt.db'))
-		sweep_name: 	str				= '' 
+		sweep_name: 	str				= 'study' 
 		sweep_method: 	str				= '' # wb name of alg: grid,bayes, ... 
 		parameters: 	dict[Param]		= {}
 		n_trials: 		int				= 10
@@ -180,54 +165,56 @@ class PyfigBase:
 		run_url: 		str		= property(lambda _: f'https://wandb.ai/{_.entity}/{_._p.project}/{_.wb_type}')
 		_wb_agent: 		bool	= False
 
-
 	class dist(PlugIn):
-		head:			bool	= True
-		dist_method: 	str		= 'naive'  # options: accelerate
-		sync_step:		int		= None
+		
+		dist_name: 	str			= None  # options: accelerate, naive
+		sync_step:		int		= 5
 
-		dist_set_seed: Callable = None
-		dist_set_device: Callable = None
-		dist_set_dtype: Callable = None
+		rank_env_name: 	str		= 'RANK'
+		launch_cmd:		str		= property(lambda _: 
+			lambda submit_i: None
+		)
 
-		_device: 		str		= 'cpu'
-		_srun_cmd: 		str		= 'srun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label '
-		_gpu_id_cmd:		str	= 'nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'
+		rank: 			int 	= property(lambda _: int(os.environ.get(_.rank_env_name, None)))
+		head: 			bool 	= property(lambda _: _.rank==0)
+		n_process: 		int 	= property(lambda _: _._p.resource.n_gpu)
 
-		_launch_cmd:	str  	= property(lambda _: f'{_._srun_cmd} python -u {_._p.run_name} ')
-		rank: 			bool 	= property(lambda _: os.environ.get('RANK', '0'))
 		gpu_id: 		str		= property(lambda _: ''.join(run_cmds(_._gpu_id_cmd, silent=True)).split('.')[0])
 		dist_id: 		str 	= property(lambda _: _.gpu_id + '-' + hostname.split('.')[0])
+		
+		_device: 		str		= 'cpu'
+		_gpu_id_cmd:	str		= 'nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'
+		_srun_cmd: 		str		= 'srun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label --export=RANK={submit_i}'
+
+		plugin_ignore: 	list	= ['launch_cmd']
 
 		class dist_c(PlugIn):
 			pass
 
-		def __init__(ii, parent=None):
-			super().__init__(parent=parent)
-
-			def debug_sync(v_d: dict, step: int):
-				v_sync = ii.sync(v_d, step)
-				return v_sync
-				
-			ii.sync = debug_sync
-
-		@torch.no_grad()
 		def sync(ii, step: int, v_d: dict) -> dict:
 			return v_d
 
-		def backward(ii, loss: torch.Tensor):
-			opt_is_adahess = ii._p.opt.opt_name.lower()=='AdaHessian'.lower()
-			loss.backward(create_graph=opt_is_adahess)
+		def backward(ii, loss, create_graph=False):
+			loss.backward(create_graph=create_graph)
 
 		def prepare(ii, *arg, **kw):
 			return list(arg) + list(kw.values())
- 
+
+		def dist_set_seed(ii, seed):
+			return seed
+		
+		def dist_set_device(ii, device):
+			return device
+		
+		def dist_set_dtype(ii, dtype):
+			return dtype
 
 	class resource(PlugIn):
 		submit: 		bool	= False
 		cluster_submit: Callable= None
 		script:			Callable= None
 		device_log_path:Callable= None
+
 
 	home:				Path	= Path().home()
 	project_dir:        Path    = property(lambda _: _.home / 'projects' / _.project)
@@ -240,10 +227,12 @@ class PyfigBase:
 	profile_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'profile'))
 	state_dir: 			Path    = property(lambda _: Path(_.exp_dir, 'state'))
 	exp_data_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exp_data'))
+	code_dir: 			Path    = property(lambda _: Path(_.exp_dir, 'code'))
 	log_dir: 			Path    = property(lambda _: _.cluster_dir)
 
-	_ignore_f = ['commit', 'pull', 'backward', 'controller', 'plugin_ignore']
-	_ignore_c = ['parameters',]
+
+	_ignore_f = ['commit', 'pull', 'backward', 'accel', 'plugin_ignore']
+	_ignore_c = ['parameters', 'scf']
 	ignore: list = ['ignore', 'd', 'cmd', 'sub_ins', 'd_flat'] + _ignore_f + _ignore_c
 	_group_i: int = 0
 	_sub_ins: dict = {}
@@ -251,12 +240,12 @@ class PyfigBase:
 	zweep: str = ''
 
 	def __init__(ii, 
-		notebook:bool=False,  # removes sys_arg for notebooks
-		sweep: dict={},  # special properties for config update so is separated
-		c_init: dict|str|Path={},  # args specificall  
+		notebook:bool=False,  		# removes sys_arg for notebooks
+		sweep: dict={},				# special properties for config update so is separated
+		c_init: dict|str|Path={},  	# args specific
 		post_init_arg: dict={},
 		**other_arg
-	):     
+	):
 
 		ii.init_sub_cls()
 
@@ -273,19 +262,23 @@ class PyfigBase:
 		from .distribute_utils import naive, hf_accelerate
 
 		plugin_repo = dict(
-			dist = dict(
+			dist_name = dict(
 				hf_accelerate=hf_accelerate,
 				naive = naive,
 			),
 		)
 
-		new_sub_cls = dict(filter(lambda kv: kv[0] in ii._sub_ins.keys(), update.items()))
+		new_sub_cls = dict(filter(lambda kv: kv[0] in plugin_repo, update.items()))
 		[update.pop(k) for k in new_sub_cls.keys()]
 		for plugin, plugin_version in new_sub_cls.items():
+			print('adding plugin:', plugin, plugin_version, '...')
 			sub_cls = plugin_repo[plugin][plugin_version]
+			plugin = plugin.split('_')[0]
 			ii.init_sub_cls(sub_cls=sub_cls, name=plugin)
 		### under construction ###
-		
+
+		print('update')
+		pprint.pprint(update)
 		ii.update(update)
 
 		if ii.debug:
@@ -320,7 +313,7 @@ class PyfigBase:
 
 			else:
 				print(f'pyfig:wb: tags- {tags}')
-				# os.environ['WANDB_START_METHOD'] = "thread"
+				
 				ii.wb.run = wandb.init(
 					project     = ii.project, 
 					group		= ii.exp_name,
@@ -336,12 +329,8 @@ class PyfigBase:
 				print(ii.wb.run_url)
 				print('exp_dir: ', ii.exp_dir)
 			
-			import shutil
-			c_path = ii.project_dir / 'pyfig.py'
-			shutil.copyfile(c_path, ii.exp_dir/c_path.name)
-			
-			with open(ii.exp_dir/'c.pyfig', 'w') as f:
-				f.writelines([ii.cmd])
+
+			ii.log(info=ii.cmd, path=ii.cluster_dir/'c.pyfig', group_exp=True)
 
 	def end(ii):
 		try: 
@@ -376,8 +365,16 @@ class PyfigBase:
 				print('log_group_url: \t\t\t',  ii.wb.run_url)
 				print('exp_dir: \t\t\t', ii.exp_dir)
 				print('exp_log: \t\t\t', ii._debug_paths['device_log_path'])
+
+			ii.save_code_state()
 			
 			sys.exit('Exiting from submit.')
+
+	def save_code_state(ii, exts = ['.py', '.ipynb', '.md']):
+		import shutil
+		shutil.copytree('things', ii.code_dir/'things')
+		[shutil.copyfile(p, ii.code_dir/p.name) for p in ii.project_dir.iterdir() if p.suffix in exts]
+		[shutil.copyfile(p, ii.code_dir/p.name) for p in ii.dump_dir.iterdir() if p.suffix in exts]
 
 	@staticmethod
 	def pr(d: dict):
@@ -414,6 +411,7 @@ class PyfigBase:
 
 	def init_sub_cls(ii, sub_cls: type=None, name: str=None) -> dict:
 		if name and not (sub_cls is None):
+			print('adding sub_cls: ', name, sub_cls)
 			sub_ins = sub_cls(parent=ii)
 			setattr(ii, name, sub_ins)
 			ii._sub_ins[name] = sub_ins
@@ -449,7 +447,8 @@ class PyfigBase:
 				# param-start-end-if anything  id-n_step-  i/a + c in range()
 				# else categorical tuple
 				zweep = ii.zweep.split('-')
-				c = [{zweep[0]: [i]} for i in zweep[1:]] 
+				t = zweep[-1]
+				c = [{zweep[0]: [i] if t=='list' else int(i)} for i in zweep[1:-1]] 
 			return c
 	
 		if ii.wb.wb_sweep:
@@ -472,7 +471,7 @@ class PyfigBase:
 					program 	= str(Path(ii.run_name).absolute()),
 					method  	= ii.sweep.sweep_method,
 					parameters  = base_sc|param,
-					controller  = dict(type='local'),
+					# accel  = dict(type='local'),
 				)
 
 				os.environ['WANDB_PROJECT'] = 'hwat'
@@ -502,8 +501,8 @@ class PyfigBase:
 	def debug_log(ii, d_all:list, name_all: list):
 		for d, name in zip(d_all, name_all):
 			if Path(ii.exp_dir).is_dir():
-				ii.log(d, path=ii.log_dir/name)
-			ii.log(d, path=ii.tmp_dir/name)
+				ii.log(d, path=ii.log_dir/name, group_exp=False)
+			ii.log(d, path=ii.tmp_dir/name, group_exp=True)
 			
 	def partial(ii, f:Callable, args=None, **kw):
 		d = flat_any(args if args else {}) | ii.d_flat | (kw or {})
@@ -512,6 +511,7 @@ class PyfigBase:
 		return f(**d)
 
 	def update(ii, _arg: dict=None, c_update: dict=None, **kw):
+		print('\npyfig:update')
 
 		c_update = (_arg or {}) | (c_update or {}) | (kw or {})
 		
@@ -535,13 +535,15 @@ class PyfigBase:
 		debug_dict(msg='update:not = \n', not_arg=not_arg)
 		
 	@staticmethod
-	def log(info: dict|str, path: Path):
+	def log(info: dict|str, path: Path, group_exp: bool=True):
 		mkdir(path)
 		info = pprint.pformat(info)
+		path = iterate_n_dir(path, group_exp=group_exp)
 		with open(path, 'w') as f:
 			f.writelines(info)
 
 	def to(ii, framework='torch'):
+		import torch
 		base_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore+['parameters'])
 		d = {k:v for k,v in base_d.items() if isinstance(v, (np.ndarray, np.generic))}
 		if 'torch' in framework.lower():
@@ -551,6 +553,8 @@ class PyfigBase:
 		ii.update(d)
 
 	def set_dtype(ii, dtype = None):
+		import torch
+		ii.dtype = torch.float64
 		print('setting default dtype: ', print(ii.dtype))
 		ii.dtype = dtype or ii.dtype
 		print('setting default dtype: ', dtype)
@@ -562,26 +566,34 @@ class PyfigBase:
 	def set_device(ii, device: str=None):
 		ii.device = 'cpu'
 		if device: 
+			print('Running on cpu', ii.dist.dist_id)
 			ii.device = device
-		elif not getattr(ii.dist, 'dist_set_device') is None:
+		elif not ii.dist.dist_name=='naive':
+			print('Getting device from dist plugin', ii.dist.dist_name)
+			print(dir(ii.dist))
 			ii.device = ii.dist.dist_set_device(ii.device)
 		else:
+			import torch
 			device_int = torch.cuda.current_device()
 			torch_n_device = torch.cuda.device_count()
 			cuda_visible_devices = os.environ['CUDA_VISIBLE_DEVICES']
+			print('CUDA_VISIBLE_DEVICES:', cuda_visible_devices)
 			ii.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 		print('pyfig: Device is ', ii.device)
 		return ii.device
 
 	def set_seed(ii, seed=None):
-		ii.seed = seed or ii.seed
-		if not getattr(ii.dist, 'dist_set_seed') is None:
-			print(f'plugin:dist: \"dist plugin setting seed.\"')
-			ii.seed = ii.dist.dist_set_seed(ii.seed)
+		print('\npyfig:set_seed:')
+
+		if callable(getattr(ii.dist, 'dist_set_seed')):
+			print(f'dist plugin setting seed')
+			seed = ii.dist.dist_set_seed(ii.seed)
 		else:
-			print(f'pyfig: \"Setting seed {ii.seed} w torch manually.\"')
+			import torch
+			print(f'pyfig setting seed')
+			ii.seed = ii.seed + ii.dist.gpu_i
 			torch.random.manual_seed(ii.seed)
-		print('pyfig: Seed is ', ii.seed)
+		print('pyfig:set_seed seed=', ii.seed)
 		return ii.seed
 
 def walk_ins_tree(
@@ -610,6 +622,7 @@ def walk_ins_tree(
 
 
 def lo_ve(path:Path=None, data: dict=None):
+	import torch
 	""" loads anything you want (add other interfaces as needed) 
 
 	1- str -> pathlib.Path
@@ -661,14 +674,14 @@ def lo_ve(path:Path=None, data: dict=None):
 	if 'r' in mode and not path.exists():
 		return print('path: ', str(path), 'n\'existe pas- returning None')
 
-	if 'state' in file_type or 'npz' in file_type:
+	if 'state' in file_type:
 		data = interface(data, path) if not data is None else interface(path)
+	elif 'npz' in file_type:
+		data = interface(path, **data) if not data is None else interface(path)
 	else:
 		with open(path, mode) as f:
 			data = interface(data, f) if not data is None else interface(f)
-
 	return data
-
 
 def get_cls_d(ins: type, cls_k: list):
 	return {k:getattr(ins.__class__, k) for k in cls_k}
@@ -725,45 +738,6 @@ def ins_to_dict( # docs:pyfig:ins_to_dict can only be used when sub_ins have bee
 
 	return flat_any(dict(ins_kv)) if flat else dict(ins_kv) 
 
-
-class Metrix:
-	step: 		   int 	 = 0
-	t0: 		   float = time()
-	max_mem_alloc: float = None
-	t_per_it: 	   float = None
-	opt_obj: 	   float = None
-	opt_obj_all:    list = None
-	eval_keys: 	   list  = None
-	
-	log: 			dict = None
-
-	exp_stats: 		list = ['max_mem_alloc', 't_per_it', 'opt_obj', 'opt_obj_all']
-	source: 		str  = 'exp_stats/'
-
-	def __init__(ii, eval_keys: list=None):
-		
-		ii.eval_keys = eval_keys
-		ii.opt_obj_all = []
-
-		torch.cuda.reset_peak_memory_stats()
-
-	def tick(ii, step: int, opt_obj: float=None, **kw) -> dict:
-		dstep = step - ii.step 
-
-		t1 = time()
-		ii.t_per_it = (t1 - ii.t0) / float(dstep)
-		ii.t0 = time()
-
-		ii.max_mem_alloc = torch.cuda.max_memory_allocated() // 1024 // 1024
-		torch.cuda.reset_peak_memory_stats()
-
-		ii.opt_obj = opt_obj
-		ii.opt_obj_all += [ii.opt_obj,]
-
-		return dict(exp_stats={k: getattr(ii, k) for k in ii.exp_stats})
-	
-	def to_dict(ii):
-		return {k: getattr(ii, k) for k in ii.exp_stats}
 
 
 # prefix components:
@@ -835,10 +809,10 @@ class dist_pyfig(PlugIn):
  
 	def __init__(ii, parent=None):
 		super().__init__(parent)
-		global Accelerator
+		global accel
 		global DataLoader
 
-		from accelerate import Accelerator
+		from accelerate import accel
 		from torch.utils.data import DataLoader
  
 	# class git(PlugIn):

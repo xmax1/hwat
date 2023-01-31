@@ -1,5 +1,6 @@
 
-from walle.pyfig_utils import Metrix
+import wandb
+from collections import OrderedDict
 
 from typing import Callable
 
@@ -7,11 +8,9 @@ import torch
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.optim import Optimizer
 from functorch import make_functional_with_buffers, vmap
-from walle.torch_utils import get_opt, get_scheduler, load, get_max_mem_c
-from walle.utils import debug_dict, npify_tree, compute_metrix, flat_any
+from things.torch_utils import get_opt, get_scheduler, load, get_max_mem_c
+from things.utils import debug_dict, npify_tree, compute_metrix, flat_any
 
-from walle.pyfig_utils import Param, lo_ve
-from pyfig import Pyfig 
 from functools import partial
 
 from hwat import Ansatz_fb as Model
@@ -21,13 +20,18 @@ from hwat import compute_ke_b, compute_pe_b
 import numpy as np
 from copy import deepcopy
 import pprint
+from pyscf import gto
 
+from things.pyfig_utils import lo_ve
+from things.utils import Metrix
+from pyfig import Pyfig 
 
 def init_exp(c: Pyfig, c_update: dict=None, **kw):
 	
 	torch.cuda.empty_cache()
 	torch.cuda.reset_peak_memory_stats()
 
+	print(c.dist, c.dist.dist_set_device)
 	c.update((c_update or {}) | (kw or {}))
 
 	c.set_seed()
@@ -37,7 +41,7 @@ def init_exp(c: Pyfig, c_update: dict=None, **kw):
 
 	torch.backends.cudnn.benchmark = c.cudnn_benchmark
 
-	model: torch.nn.Module = c.partial(Model).to(device=c.device, dtype=c.dtype)
+	model: torch.nn.Module = c.partial(Model).to(dtype=c.dtype)
 	model_fn, param, b = make_functional_with_buffers(model)
 	model_fn_vmap = vmap(model_fn, in_dims=(None, None, 0))
 
@@ -58,33 +62,30 @@ def init_exp(c: Pyfig, c_update: dict=None, **kw):
 
 	compute_loss = partial(loss_fn, mode=c.mode, model_fn=model_fn_vmap, model=model)
 
+	model.to(device=c.device)
+	print('run:init: ', next(model.parameters()).device, next(model.parameters()).dtype, model, opt, scheduler, sep='\n')
+
 	return compute_loss, model, opt, scheduler
 
 
 def loss_fn(
 	step: int,
-	r: torch.Tensor=None,
-	deltar: torch.Tensor=None,
+	data: torch.Tensor=None,
 	model:torch.nn.Module=None,
 	model_fn: Callable=None,
 	mode: str = 'train', 
+	phase: str = 'train',
 	**kw, 
 ):
 
 	with torch.no_grad():
-
-		if step < 0: # c.n_pre_step:
-			r = center_points + 10*torch.randn_like(r)
-
-		min_step = max(4, 2*round( (c.n_pre_step * (step/c.n_pre_step)) /2.))
-		n_corr = int(min(min_step, c.data.n_corr))
-		center_points = get_center_points(c.data.n_e, c.data.a)
-		r, acc, deltar = sample_b(model, r, deltar, n_corr=n_corr)
-
-		r = keep_around_points(r, center_points, l=5.+10.*step**1.02/c.n_pre_step)
-		pe = compute_pe_b(r, c.data.a, c.data.a_z) 
+		pe = compute_pe_b(data, c.data.a, c.data.a_z) 
 	
-	ke = compute_ke_b(model, model_fn, r, ke_method=c.model.ke_method)
+	try:
+		ke = compute_ke_b(model, model_fn, data, ke_method=c.model.ke_method)
+	except Exception as e:
+		print('ke error: ', e)
+		ke = torch.where(torch.isnan(ke), torch.zeros_like(pe), ke)
 
 	with torch.no_grad():
 		e = pe + ke
@@ -95,85 +96,95 @@ def loss_fn(
 	loss, grads, params = None, None, None
 
 	if 'train' in mode:
-		loss = ((energy / c.data.a_z.sum()) * model(r)).mean() 
+		if phase==c.names.phase_pre:
+			model: Model
+	
+			orb_u, orb_d = model.compute_orb(data, c.data.a) # (n_b, n_det, n_spin, n_spin)
+			orb = model.full_det_from_spin_det(orb_u, orb_d)
 
-	v_init = dict(r=r, deltar=deltar)
+			m_orb_u, m_orb_d = model.compute_hf_orb(data, c.scf.mol, c.scf.hf)
+			m_orb = model.full_det_from_spin_det(m_orb_u, m_orb_d)
 
-	return loss, v_init, dict(r=r, deltar=deltar, e=e, pe=pe, ke=ke, acc=acc, loss=loss)
+			loss = ((orb - m_orb)**2).mean()
 
-import wandb
+		elif phase==c.names.phase_train:
+			loss = ((energy / c.data.a_z.sum()) * model(data)).mean()
+
+		else:
+			raise ValueError('phase not recognised: ', phase)
+
+	return loss, dict(data=data, e=e, pe=pe, ke=ke, loss=loss)
+
+
 
 def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 
 	compute_loss, model, opt, scheduler = init_exp(c, c_update, **kw)
 	
-	v_init = c.init_app(v_init)
-
 	metrix = Metrix(eval_keys=c.eval_keys)
 	
 	c.start(dark='dark' in c.mode)
 
 	c.log_metric_step = min(c.log_metric_step, c.n_step//2)
 
-	v_cpu_d = {}
+	v_cpu_d = dict()
 
 	print('running: ', c.mode, 'run: \n', compute_loss, 'c_update: \n', c_update)
-	for rel_step, step in enumerate(range(1, (c.n_step if 'train' in c.mode else c.n_eval_step) + 1)):
+	for phase, step_all in OrderedDict([
+		(c.names.phase_pre, range(1, c.n_pre_step)), 
+		(c.names.phase_train, range(1, c.n_step if 'train' in c.mode else c.n_eval_step))
+	]).items():
 
-		model.zero_grad(set_to_none=True)
+		for rel_step, step in enumerate(step_all):
 
-		loss, v_init, v_d = compute_loss(step, **v_init)
+			model.zero_grad(set_to_none=True)
 
-		if 'train' in c.mode:
-			c.dist.backward(loss)
-			v_d['grads'] = {k:p.grad.detach() for k,p in model.named_parameters()}
-		
-		if (not (step % c.dist.sync_step)) and (c.resource.n_gpu > 1):
-			v_d = c.dist.sync(step, v_d)
+			loss, v_d = compute_loss(step, phase=phase)
 
+			if 'train' in c.mode:
+				create_graph = c.opt.opt_name.lower()=='AdaHessian'.lower()
+				c.dist.backward(loss, create_graph=create_graph)
+				v_d['grads'] = {k:p.grad.detach() for k,p in model.named_parameters()}
+			
 
-		if 'train' in c.mode:
-			with torch.no_grad():
-				for k, p in model.named_parameters():
-					g = v_d.get('grads').get(k) * (0.01 * step < c.n_pre_step)
-					p.grad.copy_( g )
-				opt.step()
-				scheduler.step()
+			if not (step % c.dist.sync_step):
+				v_d = c.dist.sync(step, v_d, every=c.dist.sync_step)
 
-
-		###--- cpu only from here ---###
-		if ('eval' in c.mode) or not (step % c.log_metric_step):
+			if 'train' in c.mode:
+				with torch.no_grad():
+					for k, p in model.named_parameters():
+						g = v_d.get('grads').get(k) * (0.001 * step < c.n_pre_step)
+						p.grad.copy_( g )
+					opt.step()
+					scheduler.step()
 
 			v_d['grads'] = {k:p.grad.detach().cpu().numpy() for k,p in model.named_parameters() if not p.grad is None}
 			v_d['params'] = {k:p.detach().cpu().numpy() for k,p in model.named_parameters()}
 
-			if not 'debug' in c.mode:
-				v_d.pop('grads')
-				v_d.pop('params')
+			
 
-			if 'eval' in c.mode:
-				keep_keys = c.eval_keys + list(v_init.keys()) + c.log_keys
-				v_d = dict(filter(lambda kv: kv[0] in keep_keys, v_d.items()))
-
+			###--- cpu only from here ---###
 			v_cpu_d = npify_tree(v_d)
+			
+			v_metrix = metrix.tick(step, c.mode, v_cpu_d, every=c.log_metric_step, opt_obj=c.opt_obj)
+				
+			if ('eval' in c.mode) or not (step % c.log_metric_step):
+				
+				v_metrix = compute_metrix(v_cpu_d, source=c.mode, sep='/')
 
-			v_cpu_d |= metrix.tick(step, opt_obj=v_cpu_d[c.opt_obj].std())
+				if (int(c.dist.rank)==0 and c.dist.head) or ('opt_hypam' in c.mode):
 
-			v_metrix = compute_metrix(v_cpu_d, source=c.mode, sep='/')
+					if not 'dark' in c.mode:
+						wandb.log(v_metrix, step=step)
 
-			if (int(c.dist.rank)==0 and c.dist.head) or ('opt_hypam' in c.mode):
+					if 'record' in c.mode:
+						log_data = dict(filter(lambda kv: kv[0] in c.log_keys, v_cpu_d.items()))
+						log_data = {k:v[None] for k,v in log_data.items()}
+						metrix.log = log_data if rel_step==1 else {k:np.stack([v, log_data[k]]) for k,v in log_data.items()}
 
-				if not 'dark' in c.mode:
-					wandb.log(v_metrix, step=step)
-
-				if 'record' in c.mode:
-					log_data = dict(filter(lambda kv: kv[0] in c.log_keys, v_d.items()))
-					log_data = {k:v[None] for k,v in log_data.items()}
-					metrix.log = log_data if rel_step==1 else {k:np.stack(v, log_data[k]) for k,v in log_data.items()}
-
-		if int(c.dist.rank)==0 and c.dist.head:
-			if not (step % c.log_state_step) and '-record' in c.mode:
-				lo_ve(path=c.state_dir/f'{c.mode}_i{step}.state', data=v_d)
+			if int(c.dist.rank)==0 and c.dist.head:
+				if not (step % c.log_state_step) and '-record' in c.mode:
+					lo_ve(path=c.state_dir/f'{c.mode}_i{step}.state', data=v_d)
 
 
 	v_run = dict(v_init_next={k:v.detach().cpu().numpy() for k,v in v_init.items()})
@@ -211,25 +222,37 @@ if __name__ == "__main__":
 	allowed_mode_all = 'train:eval:max_mem:opt_hypam:profile:train-eval'
 
 	c = Pyfig(notebook=False, sweep=None, c_update=None)
+	c_d0 = c.d_flat
 
 	class RunMode:
 
 		def __call__(ii, c: Pyfig, v_init: dict=None, c_update: dict=None, mode: str=None):
-
 			try:
+				
 				c.update(c_update | dict(mode=(mode or {})))
-				next_mode = v_init.get('next', 'evaluate')
+
+				next_mode = v_init.get('next', 'eval')
+
 				fn = getattr(ii, c.mode.split('-')[0])
+				
 				v_run = fn(c=c, v_init=v_init)
+
+				if next_mode=='opt_hypam':
+					v_run['v_init_next'] = {}
+					v_run['c_update_next'] = {}
+
 			except Exception as e:
-				print('trial failed: ', e)
+				import traceback
+				print(f'RunMode:fail \n', c.mode, e, v_init, c_update, '\nc=\n')
+				print(traceback.format_exc())
+				pprint.pprint(c.d)
 				v_run = {}
+
 			return v_run
 
 		def opt_hypam(ii, c: Pyfig=None, v_init: dict=None):
-			from walle.opt_hypam_utils import opt_hypam, objective
+			from things.opt_hypam_utils import opt_hypam, objective
    
-
 			def _run(*arg, **kw):
 				try:
 					v_run = run(*arg, **kw)
@@ -239,6 +262,7 @@ if __name__ == "__main__":
 				return v_run
 
 			objective = partial(objective, c=c, run=_run)
+
 			v_run = opt_hypam(objective, c)
 
 			#
@@ -264,7 +288,7 @@ if __name__ == "__main__":
 
 		def max_mem(ii, c: Pyfig=None, v_init: dict=None):
 
-			from walle.torch_utils import get_max_mem_c
+			from things.torch_utils import get_max_mem_c
 
 			v_run = get_max_mem_c(run, c=c)
 			# dict(n_b_max=n_b, max_mem_alloc=mem_used)
@@ -283,7 +307,7 @@ if __name__ == "__main__":
 			return run(c=c, v_init=v_init)
 
 		def profile(ii, c: Pyfig=None, v_init: dict=None):
-			from walle.torch_utils import gen_profile
+			from things.torch_utils import gen_profile
 			c.mode = 'train'
 			fn = partial(run, c=c, v_init=v_init)
 			v_run = gen_profile(fn, c)

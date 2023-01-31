@@ -18,7 +18,6 @@ import pprint
 import numpy as np
 import optree
 import paramiko
-import torch
 import yaml
 import torch
 
@@ -83,14 +82,15 @@ def gen_time_id(n=7):
 	return str(round(time() * 1000))[-n:]
 
 def iterate_n_dir(folder: Path, group_exp: bool=False, n_max=1000) -> Path:
-	if not group_exp and Path(folder).is_dir():
-		if not re.match(folder.name, '-[0-9]*'):
-			folder = add_to_Path(folder, '-0')
-		for i in range(n_max+1):
-			folder = folder.parent / folder.name.split('-')[0]
-			folder = add_to_Path(folder, f'-{i}')
-			if not folder.exists():
-				break   
+	if not group_exp:
+		if Path(folder).exists():
+			if not re.match(folder.name, '-[0-9]*'):
+				folder = add_to_Path(folder, '-0')
+			for i in range(n_max+1):
+				folder = folder.parent / folder.name.split('-')[0]
+				folder = add_to_Path(folder, f'-{i}')
+				if not folder.exists():
+					break   
 	return folder
 
 ### do things
@@ -487,3 +487,57 @@ def exit_handler():
 		print('Exiting boop beep bap.')
 	
 atexit.register(exit_handler)
+
+def find_free_port():
+	port = np.random.randint(49152, 65535)
+	is_in_use = len(run_cmds([f'ss -l -n | grep ":{port}"'], silent=True))
+	if is_in_use:
+		return find_free_port()
+	return port
+
+import numpy as np
+
+class Metrix:
+	step: 		   int 	 = 0
+	t0: 		   float = time()
+	max_mem_alloc: float = None
+	t_per_it: 	   float = None
+	opt_obj: 	   float = None
+	opt_obj_all:    list = None
+	eval_keys: 	   list  = None
+	
+	log: 			dict = None
+
+	exp_stats: 		list = ['max_mem_alloc', 't_per_it', 'opt_obj', 'opt_obj_all']
+	source: 		str  = 'exp_stats/'
+
+	def __init__(
+		ii, 
+		eval_keys: list=None,
+	):
+		torch.cuda.reset_peak_memory_stats()
+		
+		ii.eval_keys = eval_keys
+		ii.opt_obj_all = []
+
+	def tick(ii, step: int, mode: str, v_cpu_d: dict[str:np.ndarray], opt_obj: str='loss', every: int=10) -> dict:
+		ii.step, dstep = step, step - ii.step 
+
+		if not (step % every):
+
+			ii.t_per_it, ii.t0 = (time() - ii.t0)/every, time()
+			ii.max_mem_alloc = torch.cuda.max_memory_allocated() // 1024 // 1024
+			torch.cuda.reset_peak_memory_stats()
+
+			ii.opt_obj = opt_obj
+			ii.opt_obj_all += [ii.opt_obj,]
+
+			# keep_keys = c.eval_keys + list(v_init.keys()) + c.log_keys
+			# v_cpu_d = dict(filter(lambda kv: kv[0] in keep_keys, v_cpu_d.items()))
+
+			exp_stats = deepcopy(v_cpu_d)
+
+		return dict(exp_stats={k: getattr(ii, k) for k in ii.exp_stats})
+	
+	def to_dict(ii):
+		return {k: getattr(ii, k) for k in ii.exp_stats}

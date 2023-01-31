@@ -1,17 +1,18 @@
 import torch 
+from torch import Tensor
 import torch.nn as nn
 
 from torch.jit import Final
 from functorch import grad
 import functorch
 import pprint
-from walle.utils import debug_dict
+from things.utils import debug_dict
 from copy import deepcopy
 import numpy as np
-from typing import Callable
+from typing import Callable, Any
 
 
-def fb_block(s_v: torch.Tensor, p_v: torch.Tensor, n_u: int, n_d: int):
+def fb_block(s_v: Tensor, p_v: Tensor, n_u: int, n_d: int):
 	n_e = n_u + n_d
 
 	fb_f = [s_v,]
@@ -35,9 +36,20 @@ class Ansatz_fb(nn.Module):
 	n_a: Final[int]                 	# nuclei positions
 	with_sign: Final[bool]          	# return sign of wavefunction
 	debug: Final[bool]          		# return sign of wavefunction
-	a: torch.Tensor      
+	a: Tensor      
 
-	def __init__(ii, n_e, n_u, n_d, n_det, n_fb, n_pv, n_sv, a: torch.Tensor|np.ndarray, *, with_sign=False):
+	def __init__(
+		ii, 
+		n_e, 
+		n_u, 
+		n_d, 
+		n_det, 
+		n_fb, 
+		n_pv, 
+		n_sv, 
+		a, 
+		*, 
+		with_sign=False):
 		super(Ansatz_fb, ii).__init__()
   
 		ii.with_sign = with_sign      # return sign of wavefunction
@@ -66,8 +78,10 @@ class Ansatz_fb(nn.Module):
 		ii.v_u_fb_after = nn.Linear(ii.n_sv_out, ii.n_sv)
 		ii.v_d_fb_after = nn.Linear(ii.n_sv_out, ii.n_sv)
 
-		ii.wu = nn.Linear(ii.n_sv, ii.n_u * ii.n_det)
-		ii.wd = nn.Linear(ii.n_sv, ii.n_d * ii.n_det)
+		ii.w_spin = nn.ModuleList([
+			nn.Linear(ii.n_sv, ii.n_u * ii.n_det),
+			nn.Linear(ii.n_sv, ii.n_d * ii.n_det)
+		])
   
 		ii.w_final = nn.Linear(ii.n_det, 1, bias=False)
 
@@ -78,7 +92,7 @@ class Ansatz_fb(nn.Module):
   
 		debug_dict(msg='model buffers', buffers=list(ii.buffers()))
 
-	def forward(ii, r: torch.Tensor) -> torch.Tensor:
+	def forward(ii, r: Tensor) -> Tensor:
 		
 		if r.ndim in (1, 2):
 			r = r.reshape(-1, ii.n_e, 3) # (n_b, n_e, 3)
@@ -86,6 +100,48 @@ class Ansatz_fb(nn.Module):
 		n_b = r.shape[0]
 
 		ra = r[:, :, None, :] - ii.a[:, :] # (n_b, n_e, n_a, 3)
+		ra_u, ra_d = torch.split(ra, [ii.n_u, ii.n_d], dim=1) # (n_b, n_u(r), n_a, 3), (n_b, n_d(r), n_a, 3)
+
+		s_v, p_v = ii.compute_embedding(r, ra) # (n_b, n_e, n_sv), (n_b, n_e, n_pv)
+
+		s_u, s_d = ii.compute_stream(s_v, p_v) # (n_b, n_e, n_sv), (n_b, n_e, n_sv)
+			
+		### case with 1 electron will fail ### # e1mask = torch.sign(orb_u.shape[-1])
+		orb_u = ii.compute_orb_from_stream(s_u, ra_u, spin=0) # (n_b, n_det, n_u, n_u)
+		orb_d = ii.compute_orb_from_stream(s_d, ra_d, spin=1) # (n_b, n_det, n_d, n_d)
+
+		sign_u, logdet_u = torch.linalg.slogdet(orb_u)
+		sign_d, logdet_d = torch.linalg.slogdet(orb_d)
+
+		sign = sign_u * sign_d
+		logdet = logdet_u + logdet_d
+
+		maxlogdet, _ = torch.max(logdet, dim=-1, keepdim=True) # (n_b, 1), (n_b, 1)
+		
+		sub_det = sign * torch.exp(logdet - maxlogdet) 
+		
+		psi_ish: Tensor = ii.w_final(sub_det)  # (n_b, 1)
+
+		sign_psi = torch.sign(psi_ish)  
+
+		log_psi = torch.log(torch.absolute(psi_ish.squeeze())) + maxlogdet.squeeze()
+  
+		if ii.with_sign:
+			return log_psi, sign_psi
+
+		return log_psi
+
+	def compute_orb(r: Tensor, ra: Tensor) -> tuple[Tensor, Tensor]:
+		ra_u, ra_d = torch.split(ra, [ii.n_u, ii.n_d], dim=1) # (n_b, n_u(r), n_a, 3), (n_b, n_d(r), n_a, 3)
+		s_v, p_v = model.compute_embedding(r, ra)
+		s_u, s_d = model.compute_stream(s_v, p_v) # (n_b, n_u, n_det), (n_b, n_d, n_det
+		orb_u = model.compute_orb_from_stream(s_u, ra_u, spin=0) # (n_b, n_u, n_u, n_det)
+		orb_d = model.compute_orb_from_stream(s_d, ra_d, spin=1) # (n_b, n_d, n_d, n_det)
+		return orb_u, orb_d
+
+	def compute_embedding(ii, r: Tensor, ra: Tensor) -> tuple[Tensor, Tensor]:
+		n_b, n_e, _ = r.shape
+
 		ra_len = torch.linalg.vector_norm(ra, dim=-1, keepdim=True) # (n_b, n_e, n_a, 1)
 
 		rr = r[:, None, :, :] - r[:, :, None, :] # (n_b, n_e, n_e, 1)
@@ -93,7 +149,10 @@ class Ansatz_fb(nn.Module):
 
 		s_v = torch.cat([ra, ra_len], dim=-1).reshape(n_b, ii.n_e, -1) # (n_b, n_e, n_a*4)
 		p_v = torch.cat([rr, rr_len], dim=-1) # (n_b, n_e, n_e, 4)
-		
+		return s_v, p_v
+
+	def compute_stream(ii, s_v: Tensor, p_v: Tensor):
+			
 		s_v_block = fb_block(s_v, p_v, ii.n_u, ii.n_d)
 
 		for l_i, (s_lay, p_lay) in enumerate(zip(ii.s_lay, ii.p_lay)):
@@ -107,57 +166,45 @@ class Ansatz_fb(nn.Module):
 			s_v_block = fb_block(s_v, p_v, ii.n_u, ii.n_d) # (n_b, n_e, 3n_sv+2n_pv)
 
 		s_u, s_d = torch.split(s_v_block, [ii.n_u, ii.n_d], dim=1) # (n_b, n_u, 3n_sv+2n_pv), (n_b, n_d, 3n_sv+2n_pv)
+		return s_u, s_d
 
-		s_u = torch.tanh(ii.v_u_fb_after(s_u)) # (n_b, n_u(r), n_sv)    # n_sv//2)
-		s_d = torch.tanh(ii.v_d_fb_after(s_d)) # (n_b, n_d(r), n_sv)    # n_sv//2)
-
-		# Map to orbitals for multiple determinants
-		# s_wu = ii.wu(s_u).unsqueeze(1).tensor_split(ii.n_det, dim=-1), dim=1) # (n_b, n_det, n_u(r), n_u)
-		# s_wd = ii.wd(s_d).unsqueeze(1).tensor_split(ii.n_det, dim=-1), dim=1) # (n_b, n_det, n_d(r), n_d)
+	def compute_orb_from_stream(ii, s_v: Tensor, ra_v: Tensor, spin=0) -> Tensor:
+		n_b, n_spin, _ = s_v.shape
 		
-		s_wu = ii.wu(s_u).reshape(n_b, ii.n_u, ii.n_u, ii.n_det) # (n_b, n_det, n_d, n_d)
-		s_wd = ii.wd(s_d).reshape(n_b, ii.n_d, ii.n_d, ii.n_det) # (n_b, n_det, n_d, n_d)
+		s_v: Tensor = torch.tanh(ii.v_u_fb_after(s_v)) # (n_b, n_u(r), n_sv)    # n_sv//2)
+
+		s_w: Tensor = ii.w_spin[spin](s_v).reshape(n_b, n_spin, n_spin, ii.n_det) # (n_b, n_det, n_d, n_d)
+
+		exp = torch.exp(-torch.linalg.vector_norm(ra_v, dim=-1)) # (n_b, n_spin(r), n_a)
+
+		sum_a_exp = exp.sum(dim=-1, keepdim=True)[..., None] # n_b, n_u(r)
 		
-		# assert s_wd.shape == (n_b, ii.n_det, ii.n_d, ii.n_d)
-		ra_u, ra_d = torch.split(ra, [ii.n_u, ii.n_d], dim=1) # (n_b, n_u(r), n_a, 3), (n_b, n_d(r), n_a, 3)
-
-		exp_u = torch.exp(-torch.linalg.vector_norm(ra_u, dim=-1)) # (n_b, n_u(r), n_a)
-		exp_d = torch.exp(-torch.linalg.vector_norm(ra_d, dim=-1)) # (n_b, n_d(r), n_a)
-
-		sum_a_exp_u = exp_u.sum(dim=-1, keepdim=True)[..., None] # n_b, n_u(r)
-		sum_a_exp_d = exp_d.sum(dim=-1, keepdim=True)[..., None] # n_b, n_d(r)
-
-		orb_u = s_wu * sum_a_exp_u # (n_b, n_u(r), n_u(orb), n_det) 
-		orb_d = s_wd * sum_a_exp_d # (n_b, n_d(r), n_d(orb), n_det)
+		orb = s_w * sum_a_exp # (n_b, n_u(r), n_u(orb), n_det) 
 	
-		orb_u = orb_u.transpose(-1, 1) # (n_b, n_det, n_u(r), n_u(orb))
-		orb_d = orb_d.transpose(-1, 1) # (n_b, n_det, n_u(r), n_u(orb))
+		return orb.transpose(-1, 1) # (n_b, n_det, n_u(r), n_u(orb))
 
-		### case with 1 electron will fail ### # e1mask = torch.sign(orb_u.shape[-1])
-		sign_u, logdet_u = torch.linalg.slogdet(orb_u)
-		sign_d, logdet_d = torch.linalg.slogdet(orb_d)
+	def compute_hf_orb(ii, r: Tensor, mol: Any, hf: Any):
+		r_hf = r.reshape(-1, 3)
+		r_hf = r_hf.detach().cpu().numpy()
+		ao = mol.eval_gto('GTOval', r_hf)
+		mo = torch.tensor(ao @ hf.mo_coeff).to(device=r.device, dtype=r.dtype)
+		mo = torch.tensor(mo)[..., None, None] * ii.eye  # (n_b, n_e, n_e, n_det)
+		return mo.transpose(-1, 1)
 
-		sign = sign_u * sign_d
-		logdet = logdet_u + logdet_d
-
-		maxlogdet, _ = torch.max(logdet, dim=-1, keepdim=True) # (n_b, 1), (n_b, 1)
+	@staticmethod
+	def full_det_from_spin_det(orb_u: Tensor, orb_d: Tensor):
+		device, dtype = orb_u.device, orb_u.dtype
+		_, _, n_u, n_u = orb_u.shape
+		_, _, n_d, n_d = orb_d.shape
+		zero_top = torch.zeros(shape=(1, 1, n_u, n_d), device=device, dtype=dtype)
+		zero_bot = zero_top.transpose(-1, -2)
+		orb_u = torch.cat([orb_u, zero_top], dim=-1)
+		orb_d = torch.cat([zero_bot, orb_d], dim=-1)
+		return torch.cat([orb_u, orb_d], dim=-2)
 		
-		sub_det = sign * torch.exp(logdet - maxlogdet) 
-		
-		psi_ish = ii.w_final(sub_det).squeeze()  # (n_b, 1)
-
-		sign_psi = torch.sign(psi_ish)  
-
-		log_psi = torch.log(torch.absolute(psi_ish)) + maxlogdet.squeeze()
-  
-		if ii.with_sign:
-			return log_psi, sign_psi
-
-		return log_psi
-
 compute_vv = lambda v_i, v_j: torch.unsqueeze(v_i, dim=-2)-torch.unsqueeze(v_j, dim=-3)
 
-def compute_emb(r: torch.Tensor, terms: list, a=None):  
+def compute_emb(r: Tensor, terms: list, a=None):  
 	dtype, device = r.dtype, r.device
 	n_e, _ = r.shape
 	eye = torch.eye(n_e)[..., None]
@@ -199,53 +246,20 @@ def compute_pe_b(r, a=None, a_z=None):
 	return pe.squeeze()  
 
 
-def dep_ke_comp(
-	model: nn.Module, 
-	r: torch.Tensor,
-	ke_method='vjp', 
-	elements=False
-):
-	dtype, device = r.dtype, r.device
-	n_b, n_e, n_dim = r.shape
-	n_jvp = n_e * n_dim
-	ones = torch.ones((n_b,), device=device, dtype=dtype)
-	r_flat = r.reshape(n_b, n_jvp)
-	r_flat = r_flat.requires_grad_(True).contiguous()
- 
-	def grad_fn(_r: torch.Tensor):
-		lp: torch.Tensor = model(_r)
-		g = torch.autograd.grad(lp.sum(), _r, create_graph=True)[0]
-		return g
 
-	def grad_grad_fn(_r: torch.Tensor):
-		g = grad_fn(_r)
-		ggs = [torch.autograd.grad(g[:, i], _r, grad_outputs=ones, retain_graph=True)[0] for i in range(n_jvp)]
-		ggs = torch.stack(ggs, dim=-1)
-		return torch.diagonal(ggs, dim1=1, dim2=2)
-	
-	g = grad_fn(r_flat)
-	gg = grad_grad_fn(r_flat)
-
-	if elements:
-		return g, gg
-
-	e_jvp = gg + g**2
-	return -0.5 * e_jvp.sum(-1)
-
-
+# torch:issue !!! torch.no_grad does not work with torch.autograd.grad 
 
 def compute_ke_b(
 	model: nn.Module, 
 	model_fn: Callable,
-	r: torch.Tensor,
+	r: Tensor,
 	ke_method='vjp', 
 	elements=False
 ):
 	dtype, device = r.dtype, r.device
 	n_b, n_e, n_dim = r.shape
 	n_jvp = n_e * n_dim
-	# with torch.no_grad():
-	# @torch.enable_grad() # !!! This API does not apply to forward-mode AD. 
+
 	params = [p.detach() for p in model.parameters()]
 	buffers = [b for b in model.buffers()]
 	model_rv = lambda _r: model_fn(params, buffers, _r).sum()
@@ -261,12 +275,12 @@ def compute_ke_b(
 
 	def ke_grad_grad_method(r_flat):
 
-		def grad_fn(_r: torch.Tensor):
-			lp: torch.Tensor = model(_r)
+		def grad_fn(_r: Tensor):
+			lp: Tensor = model(_r)
 			g = torch.autograd.grad(lp.sum(), _r, create_graph=True)[0]
 			return g
 
-		def grad_grad_fn(_r: torch.Tensor):
+		def grad_grad_fn(_r: Tensor):
 			g = grad_fn(_r)
 			ggs = [torch.autograd.grad(g[:, i], _r, grad_outputs=ones, retain_graph=True)[0] for i in range(n_jvp)]
 			ggs = torch.stack(ggs, dim=-1)
@@ -316,7 +330,7 @@ def keep_around_points(r, points, l=1.):
 	return r
 
 
-def get_center_points(n_e, center: np.ndarray|torch.Tensor, _r_cen=None):
+def get_center_points(n_e, center: np.ndarray|Tensor, _r_cen=None):
 	""" from a set of centers, selects in order where each electron will start """
 	""" loop concatenate pattern """
 	for r_i in range(n_e):
@@ -325,7 +339,7 @@ def get_center_points(n_e, center: np.ndarray|torch.Tensor, _r_cen=None):
 	return _r_cen
 
 
-def init_r(center_points: torch.Tensor, std=0.1):
+def init_r(center_points: Tensor, std=0.1):
 	""" init r on different gpus with different rngs """
 	return center_points + torch.randn_like(center_points)*std
 	# """ loop concatenate pattern """
@@ -333,7 +347,7 @@ def init_r(center_points: torch.Tensor, std=0.1):
 	# return torch.stack(sub_r, dim=0) if len(sub_r)>1 else sub_r[0][None, ...]
 
 
-def is_a_larger(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+def is_a_larger(a: Tensor, b: Tensor) -> Tensor:
 	""" given a condition a > b returns 1 if true and 0 if not """
 	v = a - b # +ve when a bigger
 	a_is_larger = (torch.sign(v) + 1.) / 2. # 1 when a bigger
@@ -343,8 +357,8 @@ def is_a_larger(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 @torch.no_grad()
 def sample_b(
 	model: nn.Module, 
-	r: torch.Tensor, 
-	deltar: torch.Tensor, 
+	r: Tensor, 
+	deltar: Tensor, 
 	n_corr: int=10
 ):
 	""" metropolis hastings sampling with automated step size adjustment """
@@ -385,4 +399,74 @@ def sample_b(
 
 		deltar = a_larger*dr_test + b_larger*deltar
 	
-	return r, acc_all/2., deltar
+	return dict(data=data, acc=acc_all/2., deltar=deltar)
+
+
+from torch.utils.data import DataLoader, Dataset
+
+data = torch.rand(size=(c.qrc.n_data, c.qrc.n_dim_data))
+y = torch.rand(size=(c.qrc.n_data, c.qrc.n_dim_data))
+dataset = TSData(data, y, **c.data.d)
+
+
+from things.pyfig_utils import PyfigBase
+
+tr_loader = DataLoader(dataset, batch_size=c.data.n_b, shuffle=True)
+
+class PyfigDataset(Dataset):
+
+	def __init__(ii, 
+		model: nn.Module,
+		c: PyfigBase,
+	):
+
+		ii.model = model
+		ii.n_b = c.data.n_b
+		ii.n_step = c.data.n_step
+
+		ii.n_corr = c.app.n_corr
+		ii.deltar = torch.tensor([0.02,], device=c.device, dtype=c.dtype).requires_grad_(False)
+		ii.center_points = get_center_points(c.app.n_e, c.app.a)
+
+		ii.data = center_points + torch.randn(size=(c.data.n_b, *center_points.shape))
+
+
+	def __len__(ii):
+		return ii.n_b * ii.n_step
+
+	def __getitem__(ii, i):
+
+		v_d = sample_b(ii.model, ii.data, ii.deltar, n_corr=ii.n_corr)
+
+		for k,v in v_d.items():
+			setattr(ii, k, v)
+
+		return v_d['data'] 
+
+"""
+s_u = torch.tanh(ii.v_u_fb_after(s_u)) # (n_b, n_u(r), n_sv)    # n_sv//2)
+		s_d = torch.tanh(ii.v_d_fb_after(s_d)) # (n_b, n_d(r), n_sv)    # n_sv//2)
+
+		# Map to orbitals for multiple determinants
+		# s_wu = ii.wu(s_u).unsqueeze(1).tensor_split(ii.n_det, dim=-1), dim=1) # (n_b, n_det, n_u(r), n_u)
+		# s_wd = ii.wd(s_d).unsqueeze(1).tensor_split(ii.n_det, dim=-1), dim=1) # (n_b, n_det, n_d(r), n_d)
+		
+		s_wu = ii.wu(s_u).reshape(n_b, ii.n_u, ii.n_u, ii.n_det) # (n_b, n_det, n_d, n_d)
+		s_wd = ii.wd(s_d).reshape(n_b, ii.n_d, ii.n_d, ii.n_det) # (n_b, n_det, n_d, n_d)
+		
+		# assert s_wd.shape == (n_b, ii.n_det, ii.n_d, ii.n_d)
+		ra_u, ra_d = torch.split(ra, [ii.n_u, ii.n_d], dim=1) # (n_b, n_u(r), n_a, 3), (n_b, n_d(r), n_a, 3)
+
+		exp_u = torch.exp(-torch.linalg.vector_norm(ra_u, dim=-1)) # (n_b, n_u(r), n_a)
+		exp_d = torch.exp(-torch.linalg.vector_norm(ra_d, dim=-1)) # (n_b, n_d(r), n_a)
+
+		sum_a_exp_u = exp_u.sum(dim=-1, keepdim=True)[..., None] # n_b, n_u(r)
+		sum_a_exp_d = exp_d.sum(dim=-1, keepdim=True)[..., None] # n_b, n_d(r)
+
+		orb_u = s_wu * sum_a_exp_u # (n_b, n_u(r), n_u(orb), n_det) 
+		orb_d = s_wd * sum_a_exp_d # (n_b, n_d(r), n_d(orb), n_det)
+	
+		orb_u = orb_u.transpose(-1, 1) # (n_b, n_det, n_u(r), n_u(orb))
+		orb_d = orb_d.transpose(-1, 1) # (n_b, n_det, n_u(r), n_u(orb))
+
+"""

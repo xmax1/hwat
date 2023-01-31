@@ -2,15 +2,16 @@ from pathlib import Path
 import numpy as np
 from datetime import datetime
 
-from walle.pyfig_utils import PyfigBase, Param, PlugIn, dict_to_cmd
-from walle.resource_utils import niflheim
-from walle.distribute_utils import naive, hf_accelerate
+from typing import Callable, Any
+
+from things.pyfig_utils import PyfigBase, Param, PlugIn
+from things.resource_utils import niflheim
+from things.distribute_utils import naive, hf_accelerate
 
 from dump.systems import systems
 from dump.user_secret import user
 
 import wandb
-import torch
 
 class Pyfig(PyfigBase):
 
@@ -31,7 +32,7 @@ class Pyfig(PyfigBase):
 	run_sweep:      	bool    = False
 	
 	seed:           	int   	= 808017424 # grr
-	dtype:          	str   	= torch.float # torch.float32
+	dtype:          	str   	= None # torch.float32  # keep torch out ofthe namespace for now
 	cudnn_benchmark: 	bool 	= False
 
 	n_step:         	int   	= 1000
@@ -46,8 +47,14 @@ class Pyfig(PyfigBase):
 	eval_keys: 			list 	= ['e',]
 	log_keys: 			list 	= ['r', 'e', 'pe', 'ke']
 	
-	class data(PyfigBase.data):
-		system: 	str			= ''
+	class system(PlugIn):
+		system_name: str		= ''
+
+		system_id = property(lambda _: 
+			'_'.join([
+				f'{a_z_i:.0f}-{a_i[0]:.2f}-{a_i[1]:.2f}-{a_i[2]:.2f}' 
+			for a_z_i, a_i in zip(_.a_z, _.a)
+		]))
 
 		charge:     int         = 0
 		spin:       int         = 0
@@ -56,6 +63,7 @@ class Pyfig(PyfigBase):
 
 		n_b:        int         = 512
 		n_corr:     int         = 20
+		n_equil_step:		int	= 0
 		acc_target: int         = 0.5
 
 		n_equil_step:int        = property(lambda _: 1000//_.n_corr)
@@ -83,7 +91,8 @@ class Pyfig(PyfigBase):
 		n_fbv:          int     = property(lambda _: _.n_sv*3+_.n_pv*2)
 
 	class opt(PyfigBase.opt):
-		opt_name: 		str		= 'RAdam' # 'AdaHessian', 'LBFGS', 
+		_available_opt: list 	= ['AdaHessian', 'RAdam']
+		opt_name: 		str		= 'RAdam'
 		lr:  			float 	= 0.01
 		betas:			list	= [0.9, 0.999]
 		eps: 			float 	= 1e-4
@@ -100,15 +109,11 @@ class Pyfig(PyfigBase):
 
 	class sweep(PyfigBase.sweep):
 		sweep_method: 	str		= 'grid'
+		sweep_name: 	str		= 'study'	
 
 		parameters: 	dict 	= dict(
 			# dtype			=	Param(values=[torch.float32, torch.float64], dtype=str), # !! will not work
 			# n_b			=	Param(values=[512, 1024, 2048], dtype=int), # 
-
-			# n_sv:           int     = 64
-			# n_pv:           int     = 32
-			# n_fb:           int     = 3
-			# n_det:          int     = 4
 
 			opt_name		=	Param(values=['AdaHessian',  'RAdam'], dtype=str),
 			lr				=	Param(domain=(0.0001, 1.), log=True),
@@ -125,7 +130,7 @@ class Pyfig(PyfigBase):
 		)
 
 	class dist(naive):
-		dist_method = 'naive'
+		dist_name = 'naive'
 
 	class resource(niflheim):
 		env: 			str     = 'zen'
@@ -134,16 +139,52 @@ class Pyfig(PyfigBase):
 	class wb(PyfigBase.wb):
 		wb_mode = 'online'
 
+	class names(PlugIn):
+		phase_train: str = 'train'
+		phase_pre: str = 'pre'
+
+
+	class scf(PlugIn):
+		_static = True
+
+		mol: Any = None
+		hf: Callable = None
+
+		def __init__(ii, parent=None) -> None:
+			super().__init__(parent=parent)
+
+			system_id: str = ii._p.data.system_id
+			spin: int = ii._p.data.spin
+			charge: int = ii._p.data.charge
+
+			from pyscf import gto
+
+			ii.mol = gto.Mole(atom=system_id.replace('-', ' ').replace('_', ';'), basis='sto3g', unit='bohr')
+			ii.mol.spin = spin
+			ii.mol.charge = charge
+			ii.mol.build() 
+			ii.hf = ii.mol.HF()
+			ii.hf.kernel()
+
 	zweep: str = ''
 
 	def __init__(ii, notebook: bool=False, sweep: dict={}, c_init: dict={}, **other_arg) -> None:
 
-		print('pyfig:init')
+		### under construction
+		import sys
+		print(sys.argv[0][1:])
+		if any(['init_accelerate' in k for k in sys.argv[0][1:].split(' ')]):
+			print('loading accelerate')
+			from accelerate import accel
+			accel = accel()
+			c_init.update(dict(accel=accel))
+		### under construction
+
+		print('\npyfig:init')
 		super().__init__(notebook=notebook, c_init=c_init, sweep=sweep, **other_arg)
 
-		print('pyfig:init:system')
 		ii.update(systems.get(ii.data.system, {}))
-  
+
 		ii.run_local_or_submit()
 
 		"""
@@ -160,36 +201,125 @@ class Pyfig(PyfigBase):
 		3- 
 		"""
 
+		""" New PlugIns 
+		- aim https://github.com/aimhubio/aim
+		- slurm exp management https://github.com/TUM-DAML/seml
+		- """
+
+		""" todo
+		# now
+		- clean pyfig 
+		- accel finish with split dataloader
+
+
+		# soon
+		- export model to latex math
+
+
+		# later
+		- autogen a configurable demo graph of code, which looks at the model
+		- delay import of ml framework until function calls
+		"""
+
+		""" run list
+		- 20 gpus
+		- pretraining
+
+		
+		"""
+
+
+		""" conceptual run
+
+		- init_exp
+
+		- init_app
+
+		- pyfig.start: 
+			- init logger
+
+		- model.zero_grad: 
+
+		- compute_loss:
+			+ r
+			+ ke
+			+ pe
+			+ deltar
+
+			* names.mode_eval
+			* names.mode_train
+				* names.phase_pre
+					+ pre_loss
+				* names.phase_main
+					+ loss
+
+		- compute gradients:
+			*** names.phase_train
+			
+		- synchronize with distribution
+			*** n_gpu > 1
+		
+		- update model
+			*** names.phase_train
+
+		- log
+			* names.mode_train
+			* names.mode_train
+		
+		
+		
+		"""
+
 		# tag record to be able to clear anything from wandb with no record tag
 		# - todo
 		# - run scaling exp
 
-		""" dummy to real ones
-		python run.py --submit 
-		
+
+		"""
+
+		python run.py --submit --mode opt_hypam
+
+
+
+		### dummy everything
 		python run.py --time 01:00:00 --submit --multimode train:eval:max_mem:opt_hypam \
 		--exp_name ~debug --n_step 40 --n_pre_step 20 --dist naive --n_gpu 2 --n_b 128 --a_z [4]
 
-		python run.py --time 03:00:00 --submit --multimode train-record:eval --system O2_neutral_triplet \
-		--exp_name gpuscale~test --n_step 1000 --n_pre_step 100 --dist hf_accelerate --n_gpu 2 --n_b 512
+		### dummy accelerate
+		python run.py --time 00:10:00 --submit --dist_name hf_accelerate \
+		--mode train --system O2_neutral_triplet --exp_name ~debug \
+		--n_pre_step 10 --n_step 100 --n_gpu 2
 
-		python run.py --time 03:00:00 --submit --multimode train-record:eval --n_step 10000 --system O2_neutral_triplet --exp_name gpuscale~v0 --n_pre_step 1000 --dist hf_acclerate --zweep n_gpu-2-4-6-8-10
-		python run.py --time 03:00:00 --submit --multimode train-record:eval --n_step 10000 --system O2_neutral_triplet --exp_name gpuscale~v0 --n_pre_step 1000 --dist naive --zweep n_gpu-2-4-6-8-10 --n_b 4096
+		### dummy dist
+		python run.py --time 00:10:00 --submit --dist_name naive \
+		--mode train --exp_name ~debug \
+		--n_pre_step 100 --n_step 1000 --n_gpu 2 --a_z [4]
 
-		# opt_hypam system O2
-		python run.py --submit --time 00:05:00 --mode opt_hypam  \
-		--system O2_neutral_triplet --exp_name ~debug --dist hf_accelerate --n_gpu 2  \
-		--n_step 100  --n_pre_step 50  --n_b 512 --sync_step -1 --n_trials 4
+		### real accelerate 
+		python run.py --time 01:00:00 --submit --dist_name hf_accelerate \
+		--mode train --system O2_neutral_triplet --exp_name show~n_gpu_sweep \
+		--n_pre_step 1000 --n_step 2000 --zweep n_gpu-1-2-4-8-int
+
+		python run.py --time 02:00:00 --submit --dist naive \
+		--multimode train-record:eval --system O2_neutral_triplet --exp_name share~n_gpu \
+		--n_pre_step 1000 --n_step 10000 --zweep n_gpu-1-2-4-8-int
+				
+		### dummy opt
+		python run.py --time 00:05:00 --submit --dist_name naive \
+		--mode opt_hypam --a_z [4] --exp_name ~debug \
+		--n_pre_step 50 --n_step 100 --n_gpu 1 --n_trials 10
+
+		### real opt
+		python run.py --time 04:00:00 --submit --system O2_neutral_triplet --dist_name naive \
+		--mode opt_hypam --exp_name show~opt \
+		--n_pre_step 100 --n_step 500 --n_gpu 1 --n_trials 1000
+
 		
-		python run.py --submit --time 02:00:00 --mode opt_hypam-record --system O2_neutral_triplet \
-		--exp_name opt_hypam~O2 --dist naive --n_gpu 4 --n_step 500  --n_pre_step 500  --n_b 1024 
-		--sync_step -1 --log_state_step -1 \
-		--n_trials 20
+		### big
+		python run.py --time 02:00:00 --submit --dist_name hf_accelerate \
+		--mode train --exp_name show~50e \
+		--n_pre_step 1000 --n_step 10000 --n_gpu 8 --a_z [50]
 
-
-		python run.py --submit --time 01:00:00 --mode opt_hypam \
-		--system O2_neutral_triplet --exp_name opt_hypam~O2 --dist naive --n_gpu 4 \
-		--n_step 500  --n_pre_step 500  --n_b 1024 --sync_step -1 --n_trials 20
 
 		"""
 
@@ -223,27 +353,6 @@ class Pyfig(PyfigBase):
 		# python run.py --submit --exp_name dist --group_exp --time 01:00:00 --a_z [30] --dist hf_accelerate --mode max_mem --n_gpu 10
 		# for a_z in [[i,] for i in range(10, 60, 2)]:
 		# 	run_d = dict(a_z=a_z)
-
-
-	def init_app(ii, v_init: dict=None):
-		import torch
-		from hwat import get_center_points
-		
-		center_points 	= get_center_points(ii.data.n_e, ii.data.a)
-		r 				= center_points + torch.randn(size=(ii.data.n_b, *center_points.shape), dtype=ii.dtype, device=ii.device)
-		deltar			= torch.tensor([0.02,], device=ii.device, dtype=ii.dtype)
-
-		v_init_0 = dict(r=r, deltar=deltar, center_points=center_points) 
-
-		n_b_prev = len((v_init or {}).get('r', []))
-
-		new_init = not n_b_prev == ii.data.n_b 
-
-		v_init = v_init_0 if new_init else v_init
-
-		v_init = {k:torch.tensor(v).detach().to(device=ii.device, dtype=ii.dtype).requires_grad_(False) for k,v in v_init.items()
-					if isinstance(v, (torch.Tensor, np.ndarray, np.generic))}
-		return v_init
 
 	def record_app(ii, opt_obj_all: list):
 
@@ -337,7 +446,7 @@ class Pyfig(PyfigBase):
 # docs
 ## docs:python
 - hasattr includes class attr not just instance attr
-## docs:distribute:accelerator
+## docs:distribute:accel
 - accelerate config before running anything to configure environment
 - config file/params 
 ## docs:runfig

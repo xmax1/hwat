@@ -13,12 +13,12 @@ import optree
 from copy import deepcopy
 from pyfig_util import cluster_options, PyfigBase
 
-from walle import PlugIn from walle import get_cartesian_product
-from walle import run_cmds, run_cmds_server, count_gpu, gen_alphanum
-from walle import mkdir, cmd_to_dict, dict_to_wandb, iterate_n_dir
-from walle import type_me
-from walle import add_to_Path, flat_any
-from walle import load, dump, cls_to_dict, dict_to_cmd
+from things import PlugIn from things import get_cartesian_product
+from things import run_cmds, run_cmds_server, count_gpu, gen_alphanum
+from things import mkdir, cmd_to_dict, dict_to_wandb, iterate_n_dir
+from things import type_me
+from things import add_to_Path, flat_any
+from things import load, dump, cls_to_dict, dict_to_cmd
 
 import dump.user_secret as user_secret
 

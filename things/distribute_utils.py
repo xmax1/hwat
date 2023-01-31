@@ -23,9 +23,8 @@ import json
 from functools import partial
 import numpy as np
 
-from .utils import dict_to_cmd, cmd_to_dict, dict_to_wandb, debug_dict
-from .utils import mkdir, iterate_n_dir, gen_time_id, add_to_Path, dump, load
-from .utils import get_cartesian_product, type_me, run_cmds, flat_any 
+from .utils import mkdir, iterate_n_dir, gen_time_id, add_to_Path, dump, load, dict_to_cmd
+from .utils import get_cartesian_product, type_me, run_cmds, flat_any, find_free_port
 from .pyfig_utils import PlugIn, PyfigBase
 
 from torch import nn
@@ -34,11 +33,20 @@ this_dir = Path(__file__).parent
 hostname = os.environ['HOSTNAME']
 
 class naive(PyfigBase.dist):
-	dist_method: 	str		= 'naive'  # options: accelerate
+	
+	dist_name: 	str		= 'naive'
 	sync_step:      int     = 5
 
+	launch_cmd: Callable 	= property(lambda _: 
+		lambda submit_i: 
+		f'srun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label --export=RANK={submit_i} python -u {_._p.run_name} '
+	)
 
 	def sync(ii, step: int, v_d: dict) -> dict:
+		
+		if ii.n_process==1: 
+			return v_d
+
 		v_path = (ii._p.exchange_dir / f'{step}_{ii._p.dist.dist_id}').with_suffix('.pk')
 		v_mean_path = add_to_Path(v_path, '-mean')
 		
@@ -101,38 +109,46 @@ class naive(PyfigBase.dist):
 import accelerate
 
 
-class hf_accelerate(PyfigBase.dist):
+class hf_accel(PyfigBase.dist):
 
-	plugin_ignore: list = ['controller']
+	dist_name: str		= 'hf_accel'
+	
+	accel: accelerate.Accelerator = None
 
-	controller: accelerate.Accelerator = None
+	rank_env_name: str 		= 'RANK'
+	sync_step: int			= 5
 
-	dist_method: 	str		= 'hf_accelerate'
-	sync_step:		int		= 5
-	_launch_cmd:	str  	= property(lambda _: f'accelerate launch {dict_to_cmd(_.dist_c.d, exclude_false=True)} ')
+	launch_cmd:	Callable  	= property(lambda _: 
+		lambda n_submit: 
+		f'accelerate launch {dict_to_cmd(_.dist_c.d, exclude_false=True)} {job["run_name"]} \ '
+	)
+
+	_is_local_main_process: bool = property(lambda _: _.accel.is_local_main_process)
+	_is_main_process: bool = property(lambda _: _.accel.is_main_process)
+	_is_distributed: bool = property(lambda _: _.accel.is_distributed)
+	_is_local_process_zero: bool = property(lambda _: _.accel.is_local_process_zero)
+	# head: bool = property(lambda _: _.accel.is_local_main_process)
 
 	class dist_c(PlugIn):
-		# compute_environment = 'LOCAL_MACHINE'
-		# distributed_type =  'MULTI_GPU'
 		multi_gpu = True
 		machine_rank = '0'
 		same_network = True
-		main_process_port = str(np.random.randint(30000, 60000))
+		main_process_port = property(lambda _: find_free_port()) # 
 		num_processes =  property(lambda _: str(_._p._p.resource.n_gpu))
 		num_machines =  property(lambda _: str(_._p._p.resource.n_node))
 
 	def __init__(ii, parent=None):
-		super().__init__(parent)
-		ii.controller: accelerate.Accelerator = accelerate.Accelerator()
+		super().__init__(parent=parent)
+		ii.plugin_ignore += ['accel']
 
 	@torch.no_grad()
-	def sync(ii, step, v_d: dict[str:torch.Tensor]) -> list[torch.Tensor]:
+	def sync(ii, step:int , v_d: dict[str:torch.Tensor]) -> list[torch.Tensor]:
 
 		if ((step/ii.sync_step)==1) and ii._p.debug:
 			[print(k, v.shape) for k,v in v_d.items()]
 
 		v_flat, treespec = optree.tree_flatten(v_d)
-		v_sync_flat: list[torch.Tensor] = ii.dist.gather(v_flat)
+		v_sync_flat: list[torch.Tensor] = ii.accel.gather(v_flat)
 		for i, (v, v_ref) in enumerate(zip(v_sync_flat, v_flat)):
 			if ((step/ii.sync_step)==1) and ii._p.debug:
 				print(v.shape, v_ref.shape)
@@ -144,18 +160,19 @@ class hf_accelerate(PyfigBase.dist):
 
 	def backward(ii, loss: torch.Tensor):
 		opt_is_adahess = ii._p.opt.opt_name.lower()=='AdaHessian'.lower()
-		ii.controller.backward(loss, create_graph=opt_is_adahess)
+		ii.accel.backward(loss, create_graph=opt_is_adahess)
 
 	def dist_set_device(ii, device=None):
-		print('getting devices with accelerate ', ii.controller._get_devices())
-		ii._device = ii.controller.device
+		print('getting devices with accelerate ', ii.accel._get_devices())
+		ii._device = ii.accel.device
 		return ii._device
 
 	def dist_set_seed(ii, seed=None):
 		from accelerate.utils import set_seed
 		print('setting seed w accelerate ' )
 		ii._seed = seed or ii._p.seed
-		set_seed(ii._seed)
+		set_seed(ii._seed, device_specific=True)
   
-	def prepare(ii, model=None, opt=None, **kw):
-		return ii.controller.prepare(model=model, opt=opt, **kw)  # docs:accelerate
+	def prepare(ii, *arg, **kw):
+		print(ii.accel.device, ii.accel.is_main_process, ii.accel.is_local_main_process, sep='\n')
+		return ii.accel.prepare(*arg, **kw)  # docs:accelerate

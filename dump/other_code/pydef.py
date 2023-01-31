@@ -1,7 +1,7 @@
 from pathlib import Path
 import torch
 import numpy as np
-from walle.pyfig_utils import PyfigBase
+from things.pyfig_utils import PyfigBase
 Base: PyfigBase = PyfigBase()
 
 """ PlugIns
@@ -12,19 +12,35 @@ Base: PyfigBase = PyfigBase()
 
 
 
-cmd: str = """
-python run.py 
+test: str = """
+python run.py --submit 
+--time 01:00:00 
+--exp_name something~else
+--system 
+--multimode train:eval:max_mem:opt_hypam 
+
+--n_step 40 
+--n_pre_step 20 
+
+--dist naive 
+--n_gpu 2 
+"""
+
+all: str = """								
+python run.py 				
 --time 01:00:00 
 --submit 
---multimode train:eval:max_mem:opt_hypam 
---exp_name something~else 
+--multimode train-record:eval-record 	# -record, -dark
+--exp_name name~me
 --n_step 40 
 --n_pre_step 20 
 --dist naive 
---n_gpu 2 
+--sync_step -1
+--log_metric_step -1
+--n_gpu 20 
+--nodes 2 
 --n_b 128 
---a_z [4]
-
+--a_z [2,2]
 
 """
 
@@ -138,7 +154,7 @@ class sweep(PyfigBase.sweep):
     )
 
 class dist(naive):
-    dist_method = 'naive'
+    dist_name = 'naive'
 
 class resource(niflheim):
     env: 			str     = 'zen'

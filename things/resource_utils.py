@@ -53,7 +53,6 @@ class niflheim(PyfigBase.resource):
 
 	_pci_id_cmd:	str		= 'nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'
 	pci_id:			str		= property(lambda _: ''.join(run_cmds(_._pci_id_cmd, silent=True)))
-	gpu_i: 			int		= 0
 
 	n_device_env:	str		= 'CUDA_VISIBLE_DEVICES'
 	# n_device:       int     = property(lambda _: sum(c.isdigit() for c in os.environ.get(_.n_device_env, '')))
@@ -78,9 +77,6 @@ class niflheim(PyfigBase.resource):
 	# running_max: 	int     = 20
 
 	def cluster_submit(ii, job: dict):
-		
-		if job['head']:
-			print(ii._slurm)
 
 		# module load foss
 		body = []
@@ -124,32 +120,24 @@ class niflheim(PyfigBase.resource):
 		body += extra
 		# body += debug_body
 
+		# CUDA_LAUNCH_BLOCKING=1 
 
-		if ii._p.wb.wb_sweep:
-			body += [f'wandb controller {ii._p.wb.sweep_id}'] # {ii._p.wb.sweep_path_id}
-			body += [f'wandb agent {ii._p.wb.sweep_id} 1> {ii.device_log_path(rank=0)} 2>&1 ']
-			body += ['wait',]
+		dist_name = ii._p.dist.dist_name
+		n_submit = 1 if dist_name=='hf_accel' else ii.n_gpu
+		for submit_i in range(n_submit):
+			print('\ndistribution: {dist_name}')
 
-		elif ii._p.dist.dist_method == 'hf_accelerate':
-			print('\n accelerate distribution')
-			# ! backslash must come between run.py and cmd
 			cmd = dict_to_cmd(job, exclude_none=True)
-			body += f'{ii._p.dist._launch_cmd} {job["run_name"]} \ {cmd} 1> {ii.device_log_path(rank=0)} 2>&1 \n'  
-   
-		elif ii._p.dist.dist_method == 'naive':
-			print('\n pyfig distribution')
-			for i in range(ii.n_gpu):
-				job.update(dict(head= i==0, gpu_i=i))
-				cmd = dict_to_cmd(job)
-				cmd = f'python -u {job["run_name"]} {cmd}'
-				body += f'\n{ii._p.dist._launch_cmd} {cmd} 1> {ii.device_log_path(rank=i)} 2>&1 & \n'
-			body += '\nwait \n'
+			body += f'{ii._p.dist.launch_cmd(submit_i)} "{cmd}" 1> {ii.device_log_path(rank=submit_i)} 2>&1 & \n'
+			# ! backslash must come between run.py and cmd
 		
+		body += '\nwait \n'
 		body += '\necho End \n'
 
-		if ii._p.debug:
-			print(body)
-		
+		# body += [f'wandb accel {ii._p.wb.sweep_id}'] # {ii._p.wb.sweep_path_id}
+		# body += [f'wandb agent {ii._p.wb.sweep_id} 1> {ii.device_log_path(rank=0)} 2>&1 ']
+		# body += ['wait',]
+	
 		body = body.split('\n')
 		body = [b.strip() for b in body]
 		body = '\n'.join(body)

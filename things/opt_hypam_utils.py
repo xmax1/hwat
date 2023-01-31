@@ -44,7 +44,7 @@ def objective(trial: Trial, c: PyfigBase, run: Callable):
 	c.mode = 'train'
 	v_run = run(c=c, c_update=c_update_next)
 	c.mode = 'eval-dark'
-	v_run = run(c=c, v_init=v_run['v_init_next'])
+	v_run = run(c=c, v_init=v_run.get('v_init_next', {}))
 	return np.stack(v_run['opt_obj_all']).mean()
 
 
@@ -105,7 +105,8 @@ def opt_hypam(objective: Callable, c: PyfigBase):
 		while not len(list(c.exp_dir.glob('*.db'))):
 			print('waiting for opt storage...')
 			sleep(5.)
-		sleep(c.resource.gpu_i)
+		sleep(c.dist.gpu_i)
+	
 		study = optuna.load_study(study_name=c.sweep.sweep_name, storage=c.sweep.storage)
 	else:
 		study = optuna.create_study(
@@ -113,7 +114,7 @@ def opt_hypam(objective: Callable, c: PyfigBase):
 			study_name		= c.sweep.sweep_name,
 			load_if_exists 	= True, 
 			storage			= c.sweep.storage,
-			sampler 		= lo_ve(path=c.exp_dir/'sampler.pk') or optuna.samplers.TPESampler(seed=c.resource.gpu_i),
+			sampler 		= lo_ve(path=c.exp_dir/'sampler.pk') or optuna.samplers.TPESampler(seed=c.dist.gpu_i),
 			pruner			= optuna.pruners.MedianPruner(n_warmup_steps=10),
 		)
 
