@@ -47,7 +47,7 @@ def run(c: Pyfig):
 	from hwat_func import compute_ke_b, compute_pe_b
 	from hwat_func import init_r, get_center_points
 
-	center_points = get_center_points(c.data.n_e, c.data.a)
+	center_points = get_center_points(c.data.n_e, c.app.a)
 	r = init_r(c.data.n_b, c.data.n_e, center_points, std=0.1)
 	deltar = torch.tensor([0.02]).to(device).to(dtype)
  
@@ -90,7 +90,7 @@ def run(c: Pyfig):
 				model_ke = lambda _r: model_v(params, _r).sum()
 
 				ke = compute_ke_b(model_ke, r, ke_method=c.model.ke_method)
-				pe = compute_pe_b(r, c.data.a, c.data.a_z)
+				pe = compute_pe_b(r, c.app.a, c.app.a_z)
 				e = pe + ke
 				e_mean_dist = torch.mean(torch.abs(torch.median(e) - e))
 				e_clip = torch.clip(e, min=e-5*e_mean_dist, max=e+5*e_mean_dist)

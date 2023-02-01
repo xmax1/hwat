@@ -137,16 +137,10 @@ def get_scheduler(
 	sch_name: str = None,
 	sch_max_lr: float = None,
 	sch_epochs: int = None, 
-	n_step: int = None,
+	n_scheduler_step: int = None,
 	default: str = 'OneCycleLR',
 	**kw,
 ) -> torch.optim.lr_scheduler._LRScheduler:
-
-	# epochs = type_check_v('epochs', epochs, int, 1)
-	# max_lr = type_check_v('max_lr', max_lr, float, 0.001)
-	# n_step = type_check_v('n_step', n_step, int, 10000)
-	# scheduler_name = type_check_v('scheduler_name', scheduler_name, str, '')
-	# epochs = epochs if epochs else 1
 
 	if sch_name.lower() == 'OneCycleLR'.lower():
 		scheduler = partial(

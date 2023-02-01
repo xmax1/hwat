@@ -48,7 +48,9 @@ def eval_orbitals(
         scf_approx = [scf_approx]
 
     leading_dims = electrons.shape[:-1]
+
     electrons = electrons.reshape([n_scf, -1, 3])  # (batch*nelec, 3)
+
     # (batch*nelec, nbasis), (batch*nelec, nbasis)
 
     mos = [scf.eval_molecular_orbitals(e) for scf, e in zip(scf_approx, electrons)]

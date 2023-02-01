@@ -38,14 +38,15 @@ class naive(PyfigBase.dist):
 	sync_step:      int     = 5
 
 	launch_cmd: Callable 	= property(lambda _: 
-		lambda submit_i: 
-		f'srun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label --export=RANK={submit_i} python -u {_._p.run_name} '
+		lambda submit_i, cmd: 
+		f'export RANK={submit_i} \
+		\nsrun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label python -u {_._p.run_name} {cmd} '
 	)
 
-	def sync(ii, step: int, v_d: dict) -> dict:
-		
-		if ii.n_process==1: 
-			return v_d
+	@torch.no_grad()
+	def dist_sync(ii, v_d: dict) -> list[torch.Tensor]:
+
+		step = gen_time_id()
 
 		v_path = (ii._p.exchange_dir / f'{step}_{ii._p.dist.dist_id}').with_suffix('.pk')
 		v_mean_path = add_to_Path(v_path, '-mean')
@@ -62,7 +63,7 @@ class naive(PyfigBase.dist):
 		finally:
 			gc.enable()
 		
-		if ii._p.dist.head:
+		if ii.head:
 
 			n_ready = 0
 			while n_ready < ii._p.resource.n_gpu:
@@ -108,31 +109,21 @@ class naive(PyfigBase.dist):
 
 import accelerate
 
-
-
 split_batches= True
 mixed_precision= 'no' # 'fp16, 'bf16'
 
 class hf_accel(PyfigBase.dist):
-
 	dist_name: str		= 'hf_accel'
 	accel: accelerate.Accelerator = None
-
-	
-	accel: accelerate.Accelerator = None
-
-	rank_env_name: str 		= 'RANK'
-	sync_step: int			= 5
-
-	split_batches: bool		= True
+	split_batches: bool		= False  # if True, reshapes data to (n_gpu, batch_size//n_gpu, ...)
 	mixed_precision: str	= 'no' # 'fp16, 'bf16'
 
 	launch_cmd:	Callable  	= property(lambda _: 
-		lambda n_submit: 
-		f'accelerate launch {dict_to_cmd(_.dist_c.d, exclude_false=True)} {_._p.run_name} \ '
-	)
-
-
+		lambda submit_i, cmd: 
+		f'accelerate launch {dict_to_cmd(_.dist_c.d, exclude_false=True)} {_._p.run_name} \ "{cmd}" '
+	) # ! backslash must come between run.py and cmd and "cmd" needed
+		
+	sync_step: int			= 5
 
 	class dist_c(PlugIn):
 		multi_gpu = True
@@ -144,7 +135,7 @@ class hf_accel(PyfigBase.dist):
 
 	def __init__(ii, parent=None):
 		super().__init__(parent=parent)
-		
+
 		ii.plugin_ignore += ['accel']
 
 		ii.accel = accelerate.Accelerator(
@@ -152,28 +143,20 @@ class hf_accel(PyfigBase.dist):
 		)
 
 	@torch.no_grad()
-	def sync(ii, step:int , v_d: dict[str:torch.Tensor]) -> list[torch.Tensor]:
-
-		if ((step/ii.sync_step)==1) and ii._p.debug:
-			[print(k, v.shape) for k,v in v_d.items()]
-
+	def dist_sync(ii, v_d: dict[str:torch.Tensor]) -> list[torch.Tensor]:
 		v_flat, treespec = optree.tree_flatten(v_d)
 		v_sync_flat: list[torch.Tensor] = ii.accel.gather(v_flat)
 		for i, (v, v_ref) in enumerate(zip(v_sync_flat, v_flat)):
-			if ((step/ii.sync_step)==1) and ii._p.debug:
-				print(v.shape, v_ref.shape)
 			v = v.reshape(-1, *v_ref.shape).mean(dim=0)
 			v_sync_mean = [v] if i==0 else [*v_sync_mean, v]
 		v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync_mean)
-
 		return v_sync
 
-	def backward(ii, loss: torch.Tensor):
-		opt_is_adahess = ii._p.opt.opt_name.lower()=='AdaHessian'.lower()
-		ii.accel.backward(loss, create_graph=opt_is_adahess)
+	def backward(ii, loss: torch.Tensor, create_graph=False):
+		ii.accel.backward(loss, create_graph=create_graph)
 
 	def dist_set_device(ii, device=None):
-		print('getting devices with accelerate ', ii.accel._get_devices())
+		print('dist:accel: getting devices with accelerate ', ii.accel._get_devices())
 		ii._device = ii.accel.device
 		return ii._device
 
@@ -186,6 +169,9 @@ class hf_accel(PyfigBase.dist):
 	def prepare(ii, *arg, **kw):
 		print(ii.accel.device, ii.accel.is_main_process, ii.accel.is_local_main_process, sep='\n')
 		return ii.accel.prepare(*arg, **kw)  # docs:accelerate
+
+	def unwrap(ii, model:nn.Module):
+		return ii.accel.unwrap_model(model)
 
 	@property
 	def _docs(ii,):

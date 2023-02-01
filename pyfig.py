@@ -6,7 +6,7 @@ from typing import Callable, Any
 
 from things.pyfig_utils import PyfigBase, Param, PlugIn
 from things.resource_utils import niflheim
-from things.distribute_utils import naive, hf_accelerate
+from things.distribute_utils import naive, hf_accel
 
 from dump.systems import systems
 from dump.user_secret import user
@@ -37,39 +37,72 @@ class Pyfig(PyfigBase):
 
 	n_step:         	int   	= 1000
 	n_pre_step:    		int   	= 250
+	n_eval_step:        int   	= 100
+	n_scheduler_step: 	int   	= property(lambda _: _.n_step + _.n_pre_step)
+	n_total_step: 	 	int   	= property(lambda _: _.n_step + _.n_pre_step + _.n_eval_step)
 
 	step: 				int 	= None
-	log_metric_step:	int   	= 50
+	log_metric_step: 	int   	= property(lambda _: min(2, _.n_step//20))
 	log_state_step: 	int   	= property(lambda _: _.n_step//10)
  
-	n_eval_step:        int   	= 100
 	opt_obj:			str		= 'e'
 	eval_keys: 			list 	= ['e',]
 	log_keys: 			list 	= ['r', 'e', 'pe', 'ke']
+
+	class data(PlugIn):
+		n_b: int = 64
+
 	
 	class app(PlugIn):
-		system_name: str		= ''
 
-		system_id = property(lambda _: 
-			'_'.join([
-				f'{a_z_i:.0f}-{a_i[0]:.2f}-{a_i[1]:.2f}-{a_i[2]:.2f}' 
-			for a_z_i, a_i in zip(_.a_z, _.a)
-		]))
+		system_name: str		= ''
+		system_id = property(lambda _: [[int(a_z_i), a_i.tolist()] for a_z_i, a_i in zip(_.a_z, _.a)])
 
 		charge:     int         = 0
 		spin:       int         = 0
 		a:          np.ndarray  = np.array([[0.0, 0.0, 0.0],])
-		a_z:        np.ndarray  = np.array([16.,])
+		a_z:        np.ndarray  = np.array([16,])
 
-		n_b:        int         = 512
 		n_corr:     int         = 20
-		n_equil_step:		int	= 0
+		n_equil_step:int		= 0
 		acc_target: int         = 0.5
 
-		n_equil_step:int        = property(lambda _: 1000//_.n_corr)
+		hf: 	   Any          = property(lambda _: _._hf)
+		mol: 	   Any	        = property(lambda _: _._mol)
+
 		n_e:        int         = property(lambda _: int(sum(_.a_z)))
 		n_u:        int         = property(lambda _: (_.spin + _.n_e)//2)
 		n_d:        int         = property(lambda _: _.n_e - _.n_u)
+		
+		n_equil_step:int        = property(lambda _: 1000//_.n_corr)
+
+		def __init__(ii, parent=None) -> None:
+
+			super().__init__(parent=parent)
+			# 	_system_id = property(lambda _: 
+			# 	'_'.join([
+			# 		f'{a_z_i:.0f}-{a_i[0]:.2f}-{a_i[1]:.2f}-{a_i[2]:.2f}' 
+			# 	for a_z_i, a_i in zip(_.a_z, _.a)
+			# ]))
+			# ii.ignore = ['hf', 'mol']
+			ii.system_name = ii.system_name
+
+			from pyscf import gto
+
+			mol: gto.Mole = gto.Mole(
+				atom=ii.system_id, basis='sto3g', unit='bohr'
+			)
+
+			# print(ii._system_id.replace('-', ' ').replace('_', ';'))
+			print(ii.system_id)
+			mol.spin = ii.spin
+			mol.charge = ii.charge
+			mol.build()
+			hf = mol.UHF()
+			hf.kernel()
+
+			ii._hf = hf
+			ii._mol = mol
 
 
 	class model(PyfigBase.model):
@@ -125,12 +158,11 @@ class Pyfig(PyfigBase):
 			# n_pv	= 	Param(values=[16, 32, 64], dtype=int),
 			# n_det	= 	Param(values=[1, 2, 4, 8], dtype=int),
 			# n_fb	= 	Param(values=[1, 2, 3, 4], dtype=int),
-			# n_b		= 	Param(values=[512, 1024, 2048, 4096], dtype=int),
-
+			# n_b	= 	Param(values=[512, 1024, 2048, 4096], dtype=int),
 		)
 
 	class dist(naive):
-		dist_name = 'naive'
+		dist_name = 'naive'  # options: 'naive', 'hf_accel'
 
 	class resource(niflheim):
 		env: 			str     = 'zen'
@@ -143,47 +175,24 @@ class Pyfig(PyfigBase):
 		phase_train: str = 'train'
 		phase_pre: str = 'pre'
 
-
-	class scf(PlugIn):
-		_static = True
-
-		mol: Any = None
-		hf: Callable = None
-
-		def __init__(ii, parent=None) -> None:
-			super().__init__(parent=parent)
-
-			system_id: str = ii._p.data.system_id
-			spin: int = ii._p.data.spin
-			charge: int = ii._p.data.charge
-
-			from pyscf import gto
-
-			ii.mol = gto.Mole(atom=system_id.replace('-', ' ').replace('_', ';'), basis='sto3g', unit='bohr')
-			ii.mol.spin = spin
-			ii.mol.charge = charge
-			ii.mol.build() 
-			ii.hf = ii.mol.HF()
-			ii.hf.kernel()
-
 	zweep: str = ''
 
 	def __init__(ii, notebook: bool=False, sweep: dict={}, c_init: dict={}, **other_arg) -> None:
 
 		### under construction
-		import sys
-		print(sys.argv[0][1:])
-		if any(['init_accelerate' in k for k in sys.argv[0][1:].split(' ')]):
-			print('loading accelerate')
-			from accelerate import accel
-			accel = accel()
-			c_init.update(dict(accel=accel))
+		# import sys
+		# print(sys.argv[0][1:])
+		# if any(['init_accelerate' in k for k in sys.argv[0][1:].split(' ')]):
+		# 	print('loading accelerate')
+		# 	from accelerate import accel
+		# 	accel = accel()
+		# 	c_init.update(dict(accel=accel))
 		### under construction
 
 		print('\npyfig:init')
 		super().__init__(notebook=notebook, c_init=c_init, sweep=sweep, **other_arg)
 
-		ii.update(systems.get(ii.data.system, {}))
+		ii.update(systems.get(ii.app.system_name, {}))
 
 		ii.run_local_or_submit()
 
@@ -211,9 +220,9 @@ class Pyfig(PyfigBase):
 		- clean pyfig 
 		- accel finish with split dataloader
 
-
 		# soon
 		- export model to latex math
+		- ignore issue, how to consistently ignore an attr
 
 
 		# later
@@ -277,8 +286,34 @@ class Pyfig(PyfigBase):
 
 		"""
 
+		c_test = dict(
+			n_sv     = 32,
+			n_pv     = 32,
+			n_fb     = 3,
+			n_det    = 2,
+			n_b = 32,
+			multimode = 'max_mem:opt_hypam:train:eval',  # profile
+
+		)
+
+		parameters = dict(
+			n_gpu			=	Param(values=[1,  2], dtype=int),
+			dist_name		= 	Param(values=['naive', 'hf_accel'], dtype=str), 
+			
+			
+		)
+
+		python run.py --submit --time 00:05:00 --n_b 32 --n_gpu 1 --mode train --dist_name hf_accel
+
+
+
 		python run.py --submit --mode opt_hypam
 
+		python run.py --time 01:00:00 --submit --dist_name hf_accel \
+		--mode max_mem --system O2_neutral_triplet --exp_name show~max_mem_sweep \
+		--n_pre_step 50 --n_step 200 --n_gpu 2
+		
+		--zweep n_gpu-1-2-4-8-10-int
 
 
 		### dummy everything
@@ -286,7 +321,7 @@ class Pyfig(PyfigBase):
 		--exp_name ~debug --n_step 40 --n_pre_step 20 --dist naive --n_gpu 2 --n_b 128 --a_z [4]
 
 		### dummy accelerate
-		python run.py --time 00:10:00 --submit --dist_name hf_accelerate \
+		python run.py --time 00:10:00 --submit --dist_name hf_accel \
 		--mode train --system O2_neutral_triplet --exp_name ~debug \
 		--n_pre_step 10 --n_step 100 --n_gpu 2
 
@@ -296,7 +331,7 @@ class Pyfig(PyfigBase):
 		--n_pre_step 100 --n_step 1000 --n_gpu 2 --a_z [4]
 
 		### real accelerate 
-		python run.py --time 01:00:00 --submit --dist_name hf_accelerate \
+		python run.py --time 01:00:00 --submit --dist_name hf_accel \
 		--mode train --system O2_neutral_triplet --exp_name show~n_gpu_sweep \
 		--n_pre_step 1000 --n_step 2000 --zweep n_gpu-1-2-4-8-int
 
@@ -316,7 +351,7 @@ class Pyfig(PyfigBase):
 
 		
 		### big
-		python run.py --time 02:00:00 --submit --dist_name hf_accelerate \
+		python run.py --time 02:00:00 --submit --dist_name hf_accel \
 		--mode train --exp_name show~50e \
 		--n_pre_step 1000 --n_step 10000 --n_gpu 8 --a_z [50]
 
@@ -333,7 +368,7 @@ class Pyfig(PyfigBase):
 
 		# python run.py --submit --mode train --n_det 1 --n_step 10000 --a_z [4] --exp_name stab~4 --n_pre_step 1000
 		# python run.py --submit --mode train --n_det 1 --n_step 10000 --a_z [16] --exp_name stab~16 --n_pre_step 1000
-		# python run.py --submit --dist hf_accelerate --n_gpu 2 --exp_name demo~opt_hypam --mode opt_hypam --time 12:00:00 --system O2_neutral_triplet
+		# python run.py --submit --dist hf_accel --n_gpu 2 --exp_name demo~opt_hypam --mode opt_hypam --time 12:00:00 --system O2_neutral_triplet
 		# a_z		= 	Param(values=[[i,] for i in range(5, 50)], dtype=int),
 		# get_mem_max 15
 
@@ -342,15 +377,15 @@ class Pyfig(PyfigBase):
 		# 26 / 1 / 23
 		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist naive
 		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist naive --cudnn_benchmark
-		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist hf_accelerate
-		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist hf_accelerate --cudnn_benchmark
+		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist hf_accel
+		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist hf_accel --cudnn_benchmark
 
 		# python run.py --submit --cudnn_benchmark --exp_name opt_hypam1~O2 --mode opt_hypam-record --time 12:00:00 --n_step 500 --n_b 512
 
 		# python run.py --submit --a_z [16] --dist naive --cudnn_benchmark --exp_name sweep-n_b --mode max_mem --time 12:00:00
 		# python run.py --submit --dist naive --cudnn_benchmark --exp_name sweep-a_z --group_exp --time 00:10:00
 		# python run.py --submit --exp_name dist --group_exp --time 01:00:00 --a_z [30] --dist naive --mode max_mem --n_gpu 10
-		# python run.py --submit --exp_name dist --group_exp --time 01:00:00 --a_z [30] --dist hf_accelerate --mode max_mem --n_gpu 10
+		# python run.py --submit --exp_name dist --group_exp --time 01:00:00 --a_z [30] --dist hf_accel --mode max_mem --n_gpu 10
 		# for a_z in [[i,] for i in range(10, 60, 2)]:
 		# 	run_d = dict(a_z=a_z)
 

@@ -199,14 +199,14 @@ zweep: str = ''
 		--exp_name ~debug --n_step 40 --n_pre_step 20 --dist naive --n_gpu 2 --n_b 128 --a_z [4]
 
 		python run.py --time 03:00:00 --submit --multimode train-record:eval --system O2_neutral_triplet \
-		--exp_name gpuscale~test --n_step 1000 --n_pre_step 100 --dist hf_accelerate --n_gpu 2 --n_b 512
+		--exp_name gpuscale~test --n_step 1000 --n_pre_step 100 --dist hf_accel --n_gpu 2 --n_b 512
 
 		python run.py --time 03:00:00 --submit --multimode train-record:eval --n_step 10000 --system O2_neutral_triplet --exp_name gpuscale~v0 --n_pre_step 1000 --dist hf_acclerate --zweep n_gpu-2-4-6-8-10
 		python run.py --time 03:00:00 --submit --multimode train-record:eval --n_step 10000 --system O2_neutral_triplet --exp_name gpuscale~v0 --n_pre_step 1000 --dist naive --zweep n_gpu-2-4-6-8-10 --n_b 4096
 
 		# opt_hypam system O2
 		python run.py --submit --time 00:05:00 --mode opt_hypam  \
-		--system O2_neutral_triplet --exp_name ~debug --dist hf_accelerate --n_gpu 2  \
+		--system O2_neutral_triplet --exp_name ~debug --dist hf_accel --n_gpu 2  \
 		--n_step 100  --n_pre_step 50  --n_b 512 --sync_step -1 --n_trials 4
 		
 		python run.py --submit --time 02:00:00 --mode opt_hypam-record --system O2_neutral_triplet \
@@ -229,7 +229,7 @@ zweep: str = ''
 
 		# python run.py --submit --mode train --n_det 1 --n_step 10000 --a_z [4] --exp_name stab~4 --n_pre_step 1000
 		# python run.py --submit --mode train --n_det 1 --n_step 10000 --a_z [16] --exp_name stab~16 --n_pre_step 1000
-		# python run.py --submit --dist hf_accelerate --n_gpu 2 --exp_name demo~opt_hypam --mode opt_hypam --time 12:00:00 --system O2_neutral_triplet
+		# python run.py --submit --dist hf_accel --n_gpu 2 --exp_name demo~opt_hypam --mode opt_hypam --time 12:00:00 --system O2_neutral_triplet
 		# a_z		= 	Param(values=[[i,] for i in range(5, 50)], dtype=int),
 		# get_mem_max 15
 
@@ -238,15 +238,15 @@ zweep: str = ''
 		# 26 / 1 / 23
 		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist naive
 		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist naive --cudnn_benchmark
-		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist hf_accelerate
-		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist hf_accelerate --cudnn_benchmark
+		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist hf_accel
+		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist hf_accel --cudnn_benchmark
 
 		# python run.py --submit --cudnn_benchmark --exp_name opt_hypam1~O2 --mode opt_hypam-record --time 12:00:00 --n_step 500 --n_b 512
 
 		# python run.py --submit --a_z [16] --dist naive --cudnn_benchmark --exp_name sweep-n_b --mode max_mem --time 12:00:00
 		# python run.py --submit --dist naive --cudnn_benchmark --exp_name sweep-a_z --group_exp --time 00:10:00
 		# python run.py --submit --exp_name dist --group_exp --time 01:00:00 --a_z [30] --dist naive --mode max_mem --n_gpu 10
-		# python run.py --submit --exp_name dist --group_exp --time 01:00:00 --a_z [30] --dist hf_accelerate --mode max_mem --n_gpu 10
+		# python run.py --submit --exp_name dist --group_exp --time 01:00:00 --a_z [30] --dist hf_accel --mode max_mem --n_gpu 10
 		# for a_z in [[i,] for i in range(10, 60, 2)]:
 		# 	run_d = dict(a_z=a_z)
 

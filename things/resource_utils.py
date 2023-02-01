@@ -89,7 +89,7 @@ class niflheim(PyfigBase.resource):
 		MKL_THREADING_LAYER=GNU   
 		export ${{MKL_THREADING_LAYER}}
 		"""
-		# important, here, hf_accelerate and numpy issues https://github.com/pytorch/pytorch/issues/37377
+		# important, here, hf_accel and numpy issues https://github.com/pytorch/pytorch/issues/37377
 
 		extra = """
 		module load CUDA/11.7.0
@@ -98,6 +98,8 @@ class niflheim(PyfigBase.resource):
 		export NUMEXPR_NUM_THREADS=1
 		export OMP_NUM_THREADS=8
 		export OPENBLAS_NUM_THREADS=1
+
+		echo $PWD
 		"""
 		
 		debug_body = f""" \
@@ -125,12 +127,10 @@ class niflheim(PyfigBase.resource):
 		dist_name = ii._p.dist.dist_name
 		n_submit = 1 if dist_name=='hf_accel' else ii.n_gpu
 		for submit_i in range(n_submit):
-			print('\ndistribution: {dist_name}')
-
+			print(f'\ndistribution: {dist_name} submit_i: {submit_i}')
 			cmd = dict_to_cmd(job, exclude_none=True)
-			body += f'{ii._p.dist.launch_cmd(submit_i)} "{cmd}" 1> {ii.device_log_path(rank=submit_i)} 2>&1 & \n'
-			# ! backslash must come between run.py and cmd
-		
+			body += f'{ii._p.dist.launch_cmd(submit_i, cmd)} 1> {ii.device_log_path(rank=submit_i)} 2>&1 & \n'
+			
 		body += '\nwait \n'
 		body += '\necho End \n'
 

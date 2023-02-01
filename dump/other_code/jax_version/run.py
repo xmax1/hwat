@@ -59,7 +59,7 @@ from typing import NamedTuple
 def train_step(state, r_step):
 
 	ke = compute_ke_b(state, r_step)
-	pe = compute_pe_b(r_step, c.data.a, c.data.a_z)
+	pe = compute_pe_b(r_step, c.app.a, c.app.a_z)
 	e = pe + ke
 	
 	e_mean_dist = jnp.mean(jnp.abs(jnp.median(e) - e))
@@ -86,7 +86,7 @@ from hwat import init_r, get_center_points
 from jax import random as rnd
 
 rng, rng_p = gen_rng(rnd.PRNGKey(c.seed), c.n_device)
-center_points = get_center_points(c.data.n_e, c.data.a)
+center_points = get_center_points(c.data.n_e, c.app.a)
 r = init_r(rng_p, c.data.n_b, c.data.n_e, center_points, std=0.1)
 deltar = jnp.array([0.02])[None, :].repeat(n_device, axis=0)
 

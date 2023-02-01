@@ -39,7 +39,11 @@ class PlugIn:
 	def __init__(ii, parent=None):
 		ii._p: PyfigBase
 		ii._p: PyfigBase = parent
+
 		ii.init_sub_cls()
+		
+		for k, v in ins_to_dict(ii, attr=True, ignore=ii.ignore).items():
+			setattr(ii, k, v)
   
 	def init_sub_cls(ii,) -> dict:
 		sub_cls = ins_to_dict(ii, sub_cls=True)
@@ -121,7 +125,7 @@ class PyfigBase:
 	group_i: 			int 	= property(lambda _: _._group_i)
 	
 	class data(PlugIn):
-		n_b:        int         = 0
+		n_b:        int         = None
 
 	class model(PlugIn):
 		with_sign:      bool    = False
@@ -132,7 +136,6 @@ class PyfigBase:
 		n_pv:           int     = 16
 		n_fb:           int     = 2
 		n_det:          int     = 1
-  
 		n_fbv:          int     = property(lambda _: _.n_sv*3+_.n_pv*2)
 
 	class opt(PlugIn):
@@ -172,10 +175,10 @@ class PyfigBase:
 
 		rank_env_name: 	str		= 'RANK'
 		launch_cmd:		str		= property(lambda _: 
-			lambda submit_i: None
+			lambda submit_i, cmd: None
 		)
 
-		rank: 			int 	= property(lambda _: int(os.environ.get(_.rank_env_name, None)))
+		rank: 			int 	= property(lambda _: int(os.environ.get(_.rank_env_name, '-1')))
 		head: 			bool 	= property(lambda _: _.rank==0)
 		n_process: 		int 	= property(lambda _: _._p.resource.n_gpu)
 
@@ -191,7 +194,13 @@ class PyfigBase:
 		class dist_c(PlugIn):
 			pass
 
-		def sync(ii, step: int, v_d: dict) -> dict:
+		def sync(ii, v_d: dict, this_is_noop: bool=False) -> list[Any]:
+			if this_is_noop or ii.n_process==1:
+				return v_d
+			else:
+				return ii.dist_sync(v_d)
+
+		def dist_sync(ii, v_d: dict) -> list[Any]:
 			return v_d
 
 		def backward(ii, loss, create_graph=False):
@@ -208,6 +217,9 @@ class PyfigBase:
 		
 		def dist_set_dtype(ii, dtype):
 			return dtype
+
+		def unwrap(ii, model):
+			return model
 
 	class resource(PlugIn):
 		submit: 		bool	= False
@@ -259,11 +271,11 @@ class PyfigBase:
 		update = flat_any((c_init or {})) | flat_any((other_arg or {})) | (sys_arg or {})
 
 		### under construction ###
-		from .distribute_utils import naive, hf_accelerate
+		from .distribute_utils import naive, hf_accel
 
 		plugin_repo = dict(
 			dist_name = dict(
-				hf_accelerate=hf_accelerate,
+				hf_accel=hf_accel,
 				naive = naive,
 			),
 		)
@@ -275,6 +287,7 @@ class PyfigBase:
 			sub_cls = plugin_repo[plugin][plugin_version]
 			plugin = plugin.split('_')[0]
 			ii.init_sub_cls(sub_cls=sub_cls, name=plugin)
+
 		### under construction ###
 
 		print('update')
@@ -564,16 +577,17 @@ class PyfigBase:
 		return ii.dtype
 
 	def set_device(ii, device: str=None):
-		ii.device = 'cpu'
-		if device: 
-			print('Running on cpu', ii.dist.dist_id)
+		import torch
+		if device:
 			ii.device = device
-		elif not ii.dist.dist_name=='naive':
+		elif not torch.cuda.is_available(): 
+			print('Running on cpu', ii.dist.dist_id)
+			ii.device = 'cpu'
+		elif ii.dist.dist_name=='hf_accel':
 			print('Getting device from dist plugin', ii.dist.dist_name)
 			print(dir(ii.dist))
 			ii.device = ii.dist.dist_set_device(ii.device)
 		else:
-			import torch
 			device_int = torch.cuda.current_device()
 			torch_n_device = torch.cuda.device_count()
 			cuda_visible_devices = os.environ['CUDA_VISIBLE_DEVICES']

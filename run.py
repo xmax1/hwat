@@ -8,30 +8,23 @@ import torch
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.optim import Optimizer
 from functorch import make_functional_with_buffers, vmap
-from things.torch_utils import get_opt, get_scheduler, load, get_max_mem_c
-from things.utils import debug_dict, npify_tree, compute_metrix, flat_any
+from things.torch_utils import get_opt, get_scheduler, load
+from things.utils import npify_tree, compute_metrix
 
 from functools import partial
 
 from hwat import Ansatz_fb as Model
-from hwat import get_center_points
-from hwat import keep_around_points, sample_b
 from hwat import compute_ke_b, compute_pe_b
 import numpy as np
 from copy import deepcopy
 import pprint
-from pyscf import gto
 
 from things.pyfig_utils import lo_ve
 from things.utils import Metrix
 from pyfig import Pyfig 
 
 def init_exp(c: Pyfig, c_update: dict=None, **kw):
-	
-	torch.cuda.empty_cache()
-	torch.cuda.reset_peak_memory_stats()
 
-	print(c.dist, c.dist.dist_set_device)
 	c.update((c_update or {}) | (kw or {}))
 
 	c.set_seed()
@@ -49,7 +42,9 @@ def init_exp(c: Pyfig, c_update: dict=None, **kw):
 	from hwat import PyfigDataset
 	from torch.utils.data import DataLoader
 	dataset = PyfigDataset(c, model)
-	dataloader = DataLoader(dataset, batch_size=c.data.n_b)
+	def custom_collate(batch):
+		return batch[0] 
+	dataloader = DataLoader(dataset, batch_size= 1, collate_fn= custom_collate)  # c.data.n_b otherwise because of the internal sampler
 	### under construction ###
 
 	opt = get_opt(**c.opt.d_flat)(model.parameters())
@@ -57,7 +52,7 @@ def init_exp(c: Pyfig, c_update: dict=None, **kw):
 
 	if c.lo_ve_path:
 		print('init: loading config, modelm and opt \n', )
-		c, model, opt = load(c, path=c.lo_ve_path, things_to_load=dict(model=model, opt=opt))
+		c, model, opt = load(c, path=c.lo_ve_path, things_to_load=dict(model= model, opt= opt))
 		pprint.pprint(c.d)
 
 	model, dataloader, opt, scheduler = c.dist.prepare(model, dataloader, opt, scheduler)
@@ -72,21 +67,19 @@ def init_exp(c: Pyfig, c_update: dict=None, **kw):
 	model.to(device=c.device)
 	print('run:init: ', next(model.parameters()).device, next(model.parameters()).dtype, model, opt, scheduler, sep='\n')
 
-	return compute_loss, model, opt, scheduler
+	return model, dataloader, compute_loss, opt, scheduler
 
 
 def loss_fn(
-	step: int,
 	data: torch.Tensor=None,
 	model:torch.nn.Module=None,
 	model_fn: Callable=None,
-	mode: str = 'train', 
 	phase: str = 'train',
 	**kw, 
 ):
 
 	with torch.no_grad():
-		pe = compute_pe_b(data, c.data.a, c.data.a_z) 
+		pe = compute_pe_b(data, c.app.a, c.app.a_z) 
 	
 	try:
 		ke = compute_ke_b(model, model_fn, data, ke_method=c.model.ke_method)
@@ -102,27 +95,40 @@ def loss_fn(
 		
 	loss, grads, params = None, None, None
 
-	if 'train' in mode:
+	if 'train' in c.mode:
+		# if the other loss variable is detached, then the gradients are not computed
+		# sometimes, the one of the variables doesn't have gradients and you forget
+
 		if phase==c.names.phase_pre:
 			model: Model
-	
-			orb_u, orb_d = model.compute_orb(data, c.data.a) # (n_b, n_det, n_spin, n_spin)
-			orb = model.full_det_from_spin_det(orb_u, orb_d)
 
-			m_orb_u, m_orb_d = model.compute_hf_orb(data, c.scf.mol, c.scf.hf)
+			# unwrap_model = c.dist.unwrap(model)
+			m_orb_u, m_orb_d = model.compute_hf_orb(data, c.app.mol, c.app.hf)
 			m_orb = model.full_det_from_spin_det(m_orb_u, m_orb_d)
-
-			loss = ((orb - m_orb)**2).mean()
-
+			
+			data = data.detach().requires_grad_(True)
+			orb_u, orb_d = model.compute_orb(data)
+			orb = model.full_det_from_spin_det(orb_u, orb_d)
+			
+			loss = ((orb - m_orb)**2).mean(0).sum()
+			
 		elif phase==c.names.phase_train:
-			loss = ((energy / c.data.a_z.sum()) * model(data)).mean()
+			loss = ((energy / c.app.a_z.sum()) * model(data)).mean()
 
 		else:
 			raise ValueError('phase not recognised: ', phase)
 
-	return loss, dict(data=data, e=e, pe=pe, ke=ke, loss=loss)
+	return loss, dict(data=data, e=e, pe=pe, ke=ke)
 
-
+@torch.no_grad()
+def update(model, grads, opt, scheduler):
+	for k, p in model.named_parameters():
+		if not (p.grad is None):
+			g = grads.get(k)
+			p.grad.copy_(g if g is not None else torch.zeros_like(p))
+	opt.step()
+	scheduler.step()
+		
 
 def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 
@@ -130,68 +136,54 @@ def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 	
 	metrix = Metrix(eval_keys=c.eval_keys)
 	
-	c.start(dark='dark' in c.mode)
+	c.start()
 
-	c.log_metric_step = min(c.log_metric_step, c.n_step//2)
+	print('running: ', c.mode, 'run: ', compute_loss, 'c_update: ', c_update, sep='\n')
 
 	v_cpu_d = dict()
-
-	print('running: ', c.mode, 'run: \n', compute_loss, 'c_update: \n', c_update)
 	for phase, step_all in OrderedDict([
 		(c.names.phase_pre, range(1, c.n_pre_step)), 
 		(c.names.phase_train, range(1, c.n_step if 'train' in c.mode else c.n_eval_step))
 	]).items():
 
-		for rel_step, step in enumerate(step_all):
+		for rel_step, (step, data) in enumerate(zip(step_all, dataloader), 1):
 
 			model.zero_grad(set_to_none=True)
 
-			loss, v_d = compute_loss(step, phase=phase)
+			loss, v_d = compute_loss(data, model=model, phase=phase)
 
 			if 'train' in c.mode:
 				create_graph = c.opt.opt_name.lower()=='AdaHessian'.lower()
 				c.dist.backward(loss, create_graph=create_graph)
-				v_d['grads'] = {k:p.grad.detach() for k,p in model.named_parameters()}
-			
 
-			if not (step % c.dist.sync_step):
-				v_d = c.dist.sync(step, v_d, every=c.dist.sync_step)
+				no_none = filter(lambda kv: not (kv[1].grad is None), model.named_parameters())
+				v_d['grads'] = {k:p.grad.detach() for k,p in no_none}
+
+			v_d = c.dist.sync(v_d, this_is_noop= not (step % c.dist.sync_step))
 
 			if 'train' in c.mode:
-				with torch.no_grad():
-					for k, p in model.named_parameters():
-						g = v_d.get('grads').get(k) * (0.001 * step < c.n_pre_step)
-						p.grad.copy_( g )
-					opt.step()
-					scheduler.step()
+				update(model, v_d['grads'], opt, scheduler)
 
-			v_d['grads'] = {k:p.grad.detach().cpu().numpy() for k,p in model.named_parameters() if not p.grad is None}
-			v_d['params'] = {k:p.detach().cpu().numpy() for k,p in model.named_parameters()}
+				v_d['params'] = {k:p.detach().cpu().numpy() for k,p in model.named_parameters()}
+				v_d['grads'] = {k:g.cpu().numpy() for k,g in v_d['grads'].items()}
 
-			
 
 			###--- cpu only from here ---###
 			v_cpu_d = npify_tree(v_d)
 			
 			v_metrix = metrix.tick(step, c.mode, v_cpu_d, every=c.log_metric_step, opt_obj=c.opt_obj)
-				
-			if ('eval' in c.mode) or not (step % c.log_metric_step):
-				
-				v_metrix = compute_metrix(v_cpu_d, source=c.mode, sep='/')
 
-				if (int(c.dist.rank)==0 and c.dist.head) or ('opt_hypam' in c.mode):
-
-					if not 'dark' in c.mode:
+			if c.dist.head:
+				
+				if not (step % c.log_metric_step):
+					if 'record' in c.mode or 'eval' in c.mode:
+					
+						v_metrix = compute_metrix(v_cpu_d, source=c.mode, sep='/')
 						wandb.log(v_metrix, step=step)
 
+				if not (step % c.log_state_step):
 					if 'record' in c.mode:
-						log_data = dict(filter(lambda kv: kv[0] in c.log_keys, v_cpu_d.items()))
-						log_data = {k:v[None] for k,v in log_data.items()}
-						metrix.log = log_data if rel_step==1 else {k:np.stack([v, log_data[k]]) for k,v in log_data.items()}
-
-			if int(c.dist.rank)==0 and c.dist.head:
-				if not (step % c.log_state_step) and '-record' in c.mode:
-					lo_ve(path=c.state_dir/f'{c.mode}_i{step}.state', data=v_d)
+						lo_ve(path=c.state_dir/f'{c.mode}_i{step}.state', data=v_d)
 
 
 	v_run = dict(v_init_next={k:v.detach().cpu().numpy() for k,v in v_init.items()})
@@ -200,12 +192,11 @@ def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 
 	torch.cuda.empty_cache()
 
-	if (int(c.dist.rank)==0 and c.dist.head) or ('opt_hypam' in c.mode):
+	if c.dist.head:
 
-		if not 'dark' in c.mode:
-			n_param = sum(p.numel() for p in model.parameters())
-			wandb.log(dict(n_param=n_param))
-			done = c.record_app(metrix.opt_obj_all)
+		n_param = sum(p.numel() for p in model.parameters())
+		wandb.log(dict(n_param=n_param))
+		done = c.record_app(metrix.opt_obj_all)
 
 		if metrix.log:
 			lo_ve(path=(c.exp_dir/c.run_id).with_suffix('.npz'), data=metrix.log)  # ! mean gather used by core loop, need sth else

@@ -520,6 +520,9 @@ class Metrix:
 		ii.eval_keys = eval_keys
 		ii.opt_obj_all = []
 
+		torch.cuda.empty_cache()
+		torch.cuda.reset_peak_memory_stats()
+
 	def tick(ii, step: int, mode: str, v_cpu_d: dict[str:np.ndarray], opt_obj: str='loss', every: int=10) -> dict:
 		ii.step, dstep = step, step - ii.step 
 

@@ -181,7 +181,7 @@ if __name__ == "__main__":
 	device = 'cuda' if torch.cuda.is_available() else 'cpu'
 	c._convert(device=device, dtype=dtype)
  
-	center_points = get_center_points(c.data.n_e, c.data.a)
+	center_points = get_center_points(c.data.n_e, c.app.a)
 	n_b, n_e = c.data.n_b, c.data.n_e
 	r = init_r(n_b, n_e, center_points, std=0.1)
 	r_flat = r.reshape(n_b, -1)
