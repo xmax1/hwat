@@ -144,12 +144,12 @@ def get_scheduler(
 
 	if sch_name.lower() == 'OneCycleLR'.lower():
 		scheduler = partial(
-			torch.optim.lr_scheduler.OneCycleLR, max_lr=sch_max_lr, steps_per_epoch=n_step, epochs=sch_epochs
+			torch.optim.lr_scheduler.OneCycleLR, max_lr=sch_max_lr, steps_per_epoch=n_scheduler_step, epochs=sch_epochs
 		)
 
 	else:
 		print(f'!!! Scheduler {sch_name} not available, returning OneCycleLR ')
-		return get_scheduler(scheduler_name=default, max_lr=sch_max_lr, epochs=sch_epochs, n_step=n_step)
+		return get_scheduler(scheduler_name=default, max_lr=sch_max_lr, epochs=sch_epochs, n_step=n_scheduler_step)
 
 	return scheduler
 

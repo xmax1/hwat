@@ -38,20 +38,17 @@ class Pyfig(PyfigBase):
 	n_step:         	int   	= 1000
 	n_pre_step:    		int   	= 250
 	n_eval_step:        int   	= 100
-	n_scheduler_step: 	int   	= property(lambda _: _.n_step + _.n_pre_step)
 	n_total_step: 	 	int   	= property(lambda _: _.n_step + _.n_pre_step + _.n_eval_step)
 
 	step: 				int 	= None
-	log_metric_step: 	int   	= property(lambda _: min(2, _.n_step//20))
-	log_state_step: 	int   	= property(lambda _: _.n_step//10)
+	log_metric_step: 	int   	= property(lambda _: 2 if _.debug else _.n_step//20)
+	log_state_step: 	int   	= property(lambda _: 2 if _.debug else _.n_step//10)
  
-	opt_obj:			str		= 'e'
-	eval_keys: 			list 	= ['e',]
-	log_keys: 			list 	= ['r', 'e', 'pe', 'ke']
+	opt_obj_key:			str		= 'e'
+	opt_obj_op: Callable = property(lambda _: lambda x: x.std())
 
 	class data(PlugIn):
 		n_b: int = 64
-
 	
 	class app(PlugIn):
 
@@ -134,6 +131,8 @@ class Pyfig(PyfigBase):
 
 		class scheduler(PlugIn):
 			_prefix: 	str 	= 'sch_'
+			n_scheduler_step: 	int   	= property(lambda _: _._p._p.n_step + _._p._p.n_pre_step)
+
 			sch_default:str 	='OneCycleLR'
 
 			sch_name: 	str		= 'OneCycleLR'
@@ -171,13 +170,31 @@ class Pyfig(PyfigBase):
 	class wb(PyfigBase.wb):
 		wb_mode = 'online'
 
-	class names(PlugIn):
-		phase_train: str = 'train'
-		phase_pre: str = 'pre'
+	class tag(PlugIn):
+		pre: str = 'pre'
+		train: str = 'train'
+		eval: str = 'eval'
+		record: str = 'record'
 
 	zweep: str = ''
 
 	def __init__(ii, notebook: bool=False, sweep: dict={}, c_init: dict={}, **other_arg) -> None:
+
+		import sys
+		print('--_debug' in sys.argv, sys.argv)
+		if '--_debug' in sys.argv:
+			c_init = dict(
+				n_sv     = 16,
+				n_pv     = 8,
+				n_fb     = 2,
+				n_det    = 2,
+				n_b 	 = 4,
+				multimode = 'max_mem-record:opt_hypam-record:train-record:eval-record',  # profile
+				n_step   = 50,
+				n_pre_step   = 50,
+				n_eval_step   = 50,
+				debug	= True,
+			)
 
 		### under construction
 		# import sys
@@ -287,12 +304,16 @@ class Pyfig(PyfigBase):
 		"""
 
 		c_test = dict(
-			n_sv     = 32,
-			n_pv     = 32,
-			n_fb     = 3,
+			n_sv     = 16,
+			n_pv     = 8,
+			n_fb     = 2,
 			n_det    = 2,
-			n_b = 32,
-			multimode = 'max_mem:opt_hypam:train:eval',  # profile
+			n_b 	 = 4,
+			multimode = 'max_mem-record:opt_hypam-record:train-record:eval-record',  # profile
+			n_step   = 50,
+			n_pre_step   = 50,
+			n_eval_step   = 50,
+			debug	= True,
 
 		)
 
@@ -391,9 +412,9 @@ class Pyfig(PyfigBase):
 
 	def record_app(ii, opt_obj_all: list):
 
-		atomic_id = "-".join([str(int(float(i))) for i in ii.data.a_z.flatten()])
-		spin_and_charge = f'{ii.data.charge}_{ii.data.spin}'
-		geometric_hash = f'{ii.data.a.mean():.0f}'
+		atomic_id = "-".join([str(int(float(i))) for i in ii.app.a_z.flatten()])
+		spin_and_charge = f'{ii.app.charge}_{ii.app.spin}'
+		geometric_hash = f'{ii.app.a.mean():.0f}'
 		exp_metaid = '_'.join([atomic_id, spin_and_charge, geometric_hash])
 
 		columns = ["charge_spin_az0-az1-..._pmu", "Energy", "Error (+/- std)"]

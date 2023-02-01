@@ -240,6 +240,7 @@ class PyfigBase:
 	state_dir: 			Path    = property(lambda _: Path(_.exp_dir, 'state'))
 	exp_data_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exp_data'))
 	code_dir: 			Path    = property(lambda _: Path(_.exp_dir, 'code'))
+	fail_dir: 			Path    = property(lambda _: Path(_.exp_dir, 'fail'))
 	log_dir: 			Path    = property(lambda _: _.cluster_dir)
 
 
@@ -299,6 +300,9 @@ class PyfigBase:
 
 		ii.debug_log([sys_arg, dict(os.environ.items()), ii.d], ['log_sys_arg.log', 'log_env_run.log', 'log_d.log'])
 
+	# def _set_fail_flag():
+	# 	os.environ['FAIL_FLAG'] = str(Path(_.exp_dir, 'fail'))
+
 	def start(ii, dark=False):
 
 		if ii.dist.head and int(ii.dist.rank)==0 and not dark:
@@ -339,6 +343,7 @@ class PyfigBase:
 					reinit 		= not (ii.wb.run is None)
 				)
 
+				os.environ['FAIL_FLAG'] = str(Path(ii.fail_dir, ii.exp_name + ii.run_id))
 				print(ii.wb.run_url)
 				print('exp_dir: ', ii.exp_dir)
 			

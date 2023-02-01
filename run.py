@@ -35,7 +35,7 @@ def init_exp(c: Pyfig, c_update: dict=None, **kw):
 	torch.backends.cudnn.benchmark = c.cudnn_benchmark
 
 	model: torch.nn.Module = c.partial(Model).to(dtype=c.dtype)
-	model_fn, param, b = make_functional_with_buffers(model)
+	model_fn, param, buffer = make_functional_with_buffers(model)
 	model_fn_vmap = vmap(model_fn, in_dims=(None, None, 0))
 
 	### under construction ###
@@ -48,7 +48,7 @@ def init_exp(c: Pyfig, c_update: dict=None, **kw):
 	### under construction ###
 
 	opt = get_opt(**c.opt.d_flat)(model.parameters())
-	scheduler = get_scheduler(n_step=c.n_step, **c.opt.scheduler.d_flat)(opt)
+	scheduler = get_scheduler(**c.opt.scheduler.d_flat)(opt)
 
 	if c.lo_ve_path:
 		print('init: loading config, modelm and opt \n', )
@@ -99,7 +99,7 @@ def loss_fn(
 		# if the other loss variable is detached, then the gradients are not computed
 		# sometimes, the one of the variables doesn't have gradients and you forget
 
-		if phase==c.names.phase_pre:
+		if phase==c.tag.pre:
 			model: Model
 
 			# unwrap_model = c.dist.unwrap(model)
@@ -112,7 +112,7 @@ def loss_fn(
 			
 			loss = ((orb - m_orb)**2).mean(0).sum()
 			
-		elif phase==c.names.phase_train:
+		elif phase==c.tag.train:
 			loss = ((energy / c.app.a_z.sum()) * model(data)).mean()
 
 		else:
@@ -134,56 +134,78 @@ def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 
 	model, dataloader, compute_loss, opt, scheduler = init_exp(c, c_update, **kw)
 	
-	metrix = Metrix(eval_keys=c.eval_keys)
+	metrix = Metrix(mode=c.mode)
 	
 	c.start()
 
 	print('running: ', c.mode, 'run: ', compute_loss, 'c_update: ', c_update, sep='\n')
 
 	v_cpu_d = dict()
-	for phase, step_all in OrderedDict([
-		(c.names.phase_pre, range(1, c.n_pre_step)), 
-		(c.names.phase_train, range(1, c.n_step if 'train' in c.mode else c.n_eval_step))
-	]).items():
 
-		for rel_step, (step, data) in enumerate(zip(step_all, dataloader), 1):
+	subrtne = (
+		(c.tag.pre, range(1, c.n_pre_step+1)),
+		(c.tag.train, range(1, c.n_step+1)),
+		(c.tag.eval, range(1, c.n_eval_step+1))
+	)
+
+	rtne = {
+		c.tag.train : (subrtne[0], subrtne[1]),
+		c.tag.eval	: (subrtne[2],),
+	}
+
+
+	for phase, sequence in rtne[c.mode]:
+		metrix.phase = phase
+
+		for (rel_step, step), data in zip(enumerate(sequence, 1), dataloader):
 
 			model.zero_grad(set_to_none=True)
 
 			loss, v_d = compute_loss(data, model=model, phase=phase)
 
-			if 'train' in c.mode:
+			if c.tag.train in c.mode:
+
 				create_graph = c.opt.opt_name.lower()=='AdaHessian'.lower()
 				c.dist.backward(loss, create_graph=create_graph)
-
 				no_none = filter(lambda kv: not (kv[1].grad is None), model.named_parameters())
 				v_d['grads'] = {k:p.grad.detach() for k,p in no_none}
 
-			v_d = c.dist.sync(v_d, this_is_noop= not (step % c.dist.sync_step))
+			v_d = c.dist.sync(v_d, this_is_noop= not (step % c.dist.sync_step), method='mean')
 
-			if 'train' in c.mode:
+			if c.tag.train in c.mode:
+
 				update(model, v_d['grads'], opt, scheduler)
 
-				v_d['params'] = {k:p.detach().cpu().numpy() for k,p in model.named_parameters()}
 				v_d['grads'] = {k:g.cpu().numpy() for k,g in v_d['grads'].items()}
+				v_d['params'] = {k:p.detach().cpu().numpy() for k,p in model.named_parameters()}
+
+
 
 
 			###--- cpu only from here ---###
-			v_cpu_d = npify_tree(v_d)
-			
-			v_metrix = metrix.tick(step, c.mode, v_cpu_d, every=c.log_metric_step, opt_obj=c.opt_obj)
+			log_metrix = not (step % c.log_metric_step)
+			log_state = not (step % c.log_state_step)
 
-			if c.dist.head:
-				
-				if not (step % c.log_metric_step):
-					if 'record' in c.mode or 'eval' in c.mode:
-					
-						v_metrix = compute_metrix(v_cpu_d, source=c.mode, sep='/')
-						wandb.log(v_metrix, step=step)
+			if c.dist.head and (log_metrix or log_state):
 
-				if not (step % c.log_state_step):
-					if 'record' in c.mode:
-						lo_ve(path=c.state_dir/f'{c.mode}_i{step}.state', data=v_d)
+				v_cpu_d = npify_tree(v_d)
+
+				if log_metrix:
+					if c.tag.eval in c.mode:
+
+						v_metrix = metrix.tick(
+							step, c.mode, phase, 
+							opt_obj_key=c.opt_obj_key, opt_obj_op=c.opt_obj_op, v_cpu_d= v_cpu_d,
+							log_exp_stats_keys=c.log_exp_stats_keys
+						)
+
+						v_metrix_processed 	= compute_metrix(v_metrix, source=c.mode, sep='/')
+						wandb.log(v_metrix_processed, step=step)
+
+				if log_state:
+					if c.tag.record in c.mode:
+						lo_ve(path=c.state_dir/f'{c.mode}_{phase}_i{step}.state', data=v_d)
+
 
 
 	v_run = dict(v_init_next={k:v.detach().cpu().numpy() for k,v in v_init.items()})
@@ -198,8 +220,8 @@ def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 		wandb.log(dict(n_param=n_param))
 		done = c.record_app(metrix.opt_obj_all)
 
-		if metrix.log:
-			lo_ve(path=(c.exp_dir/c.run_id).with_suffix('.npz'), data=metrix.log)  # ! mean gather used by core loop, need sth else
+		
+		lo_ve(path=(c.exp_dir/c.run_id).with_suffix('.npz'), data=metrix.log)  
 
 	if v_run and v_cpu_d and metrix.to_dict():
 		v_run |= v_cpu_d | metrix.to_dict()
@@ -210,7 +232,7 @@ def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 		# v_init['next_state_path'] = c.state_dir/f'{c.mode}_i{step}.state'
 		path = c.state_dir/f'{c.mode}_i{step}.state'
 		lo_ve(path=path, data=v_d)
-		v_run['c_update_next'] = {'lo_ve_path': path} 
+		v_run['c_update_next'] = {'lo_ve_path': path}
 
 	return v_run
 

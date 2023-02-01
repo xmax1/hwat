@@ -480,13 +480,53 @@ def import_jax():
 import atexit
 
 
-def exit_handler():
-	try:
-		run_cmds(f'scancel {os.environ["SLURM_JOBID"]}')
-	except Exception as e:
-		print('Exiting boop beep bap.')
-	
-atexit.register(exit_handler)
+
+import atexit
+import sys
+
+class ExitHooks(object):
+	def __init__(self):
+		self.exit_code = None
+		self.exception = None
+
+	def hook(self):
+		self._orig_exit = sys.exit
+		sys.exit = self.exit
+		sys.excepthook = self.exc_handler
+
+	def exit(self, code=0):
+		self.exit_code = code
+		self._orig_exit(code)
+
+	def exc_handler(self, exc_type, exc, *args):
+		self.exception = exc
+
+hooks = ExitHooks()
+hooks.hook()
+
+def exit_foo():
+	fail_flag = os.environ.get('FAIL_FLAG')
+	def write_exit(code=''):
+		if fail_flag is None:
+			# sys.exit(f'Exit code {code}')
+			print(f'Exit code {code}')
+			# sys.exit(1)
+			# return
+		else:
+			run_cmds(f'scancel {os.environ["SLURM_JOBID"]}')
+			with open(fail_flag, 'w') as f:
+				f.write(code)
+	if hooks.exit_code is not None:
+		print("death by ", hooks.exit_code)
+		write_exit(code=hooks.exit_code)
+		
+	elif hooks.exception is not None:
+		print("death by exception: %s" % hooks.exception)
+		write_exit(code=hooks.exit_code)
+
+	else:
+		print("natural death")
+atexit.register(exit_foo)
 
 def find_free_port():
 	port = np.random.randint(49152, 65535)
@@ -498,49 +538,54 @@ def find_free_port():
 import numpy as np
 
 class Metrix:
-	step: 		   int 	 = 0
 	t0: 		   float = time()
+	step: 		   int 	 = 0
+	mode: str = None
+	phase: str = None
+
 	max_mem_alloc: float = None
 	t_per_it: 	   float = None
+	
 	opt_obj: 	   float = None
 	opt_obj_all:    list = None
-	eval_keys: 	   list  = None
 	
-	log: 			dict = None
-
-	exp_stats: 		list = ['max_mem_alloc', 't_per_it', 'opt_obj', 'opt_obj_all']
-	source: 		str  = 'exp_stats/'
-
-	def __init__(
-		ii, 
-		eval_keys: list=None,
-	):
-		torch.cuda.reset_peak_memory_stats()
+	def __init__(ii, mode: str):
 		
-		ii.eval_keys = eval_keys
+		ii.mode = mode
+
 		ii.opt_obj_all = []
 
 		torch.cuda.empty_cache()
 		torch.cuda.reset_peak_memory_stats()
 
-	def tick(ii, step: int, mode: str, v_cpu_d: dict[str:np.ndarray], opt_obj: str='loss', every: int=10) -> dict:
-		ii.step, dstep = step, step - ii.step 
+	def tick(ii, 
+		step: int, 
+		opt_obj_key: str, 
+		opt_obj_op: Callable, 
+		v_cpu_d: dict, 
+		log_exp_stats_keys: dict[str:np.ndarray]= None, 
+		every: int= None
+	) -> dict:
 
-		if not (step % every):
+		if not (step % every) or (every is None):
 
-			ii.t_per_it, ii.t0 = (time() - ii.t0)/every, time()
+			ii.step, dstep = step, step - ii.step
+
+			dstep = every or dstep 
+
+			ii.t_per_it, ii.t0 = (time() - ii.t0)/dstep, time()
 			ii.max_mem_alloc = torch.cuda.max_memory_allocated() // 1024 // 1024
 			torch.cuda.reset_peak_memory_stats()
 
-			ii.opt_obj = opt_obj
+			ii.opt_obj = opt_obj_op(v_cpu_d[opt_obj_key])
 			ii.opt_obj_all += [ii.opt_obj,]
 
-			# keep_keys = c.eval_keys + list(v_init.keys()) + c.log_keys
-			# v_cpu_d = dict(filter(lambda kv: kv[0] in keep_keys, v_cpu_d.items()))
+			log_kv = dict(filter(lambda kv: kv[0] in log_exp_stats_keys, deepcopy(v_cpu_d).items()))
 
-			exp_stats = deepcopy(v_cpu_d)
-
-		return dict(exp_stats={k: getattr(ii, k) for k in ii.exp_stats})
+			exp_stats = {'exp_stats': {ii.mode: {ii.phase: log_kv}}}
+		else:
+			exp_stats = {}
+		return exp_stats
 	
 	def to_dict(ii):
 		return {k: getattr(ii, k) for k in ii.exp_stats}
