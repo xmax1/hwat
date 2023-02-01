@@ -9,11 +9,11 @@ import numpy as np
 import torch
 import optree
 
-from .utils import debug_dict, dict_to_cmd, flat_any
-from .pyfig_utils import PyfigBase, PlugIn 
-from .utils import type_check_v
-from .utils import get_max_n_from_filename
-from .pyfig_utils import lo_ve
+from ..utils import debug_dict, dict_to_cmd, flat_any
+from ..pyfig_utils import PyfigBase, PlugIn 
+from ..utils import type_check_v
+from ..utils import get_max_n_from_filename
+from ..pyfig_utils import lo_ve
 
 from torch import nn
 

@@ -194,11 +194,11 @@ class PyfigBase:
 		class dist_c(PlugIn):
 			pass
 
-		def sync(ii, v_d: dict, this_is_noop: bool=False) -> list[Any]:
+		def sync(ii, v_d: dict, sync_method: str, this_is_noop: bool=False) -> list[Any]:
 			if this_is_noop or ii.n_process==1:
 				return v_d
 			else:
-				return ii.dist_sync(v_d)
+				return ii.dist_sync(v_d, sync_method=sync_method)
 
 		def dist_sync(ii, v_d: dict) -> list[Any]:
 			return v_d
@@ -227,22 +227,33 @@ class PyfigBase:
 		script:			Callable= None
 		device_log_path:Callable= None
 
+	class tag(PlugIn):
+		pre: str = 'pre'
+		train: str = 'train'
+		eval: str = 'eval'
+		record: str = 'record'
+		mean: str = 'mean'
+		next_run: str = 'next_run'
+		gather: str = 'gather'
+		next_run_c_update: str = 'next_run_c_update'
 
-	home:				Path	= Path().home()
-	project_dir:        Path    = property(lambda _: _.home / 'projects' / _.project)
-	dump_dir:           Path    = property(lambda _: Path('dump'))
-	tmp_dir:            Path	= property(lambda _: Path(_.dump_dir,'tmp'))
-	exp_dir:        	Path	= property(lambda _: Path(_.dump_exp_dir, _.exp_name, _.exp_id))
-	dump_exp_dir:       Path	= property(lambda _: Path(_.dump_dir, 'exp'))
-	cluster_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'cluster'))
-	exchange_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exchange'))
-	profile_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'profile'))
-	state_dir: 			Path    = property(lambda _: Path(_.exp_dir, 'state'))
-	exp_data_dir: 		Path    = property(lambda _: Path(_.exp_dir, 'exp_data'))
-	code_dir: 			Path    = property(lambda _: Path(_.exp_dir, 'code'))
-	fail_dir: 			Path    = property(lambda _: Path(_.exp_dir, 'fail'))
-	log_dir: 			Path    = property(lambda _: _.cluster_dir)
 
+	home:					Path	= Path().home()
+	project_dir:        	Path    = property(lambda _: _.home / 'projects' / _.project)
+	dump_dir:           	Path    = property(lambda _: Path('dump'))
+	tmp_dir:            	Path	= property(lambda _: Path(_.dump_dir,'tmp'))
+	exp_dir:        		Path	= property(lambda _: Path(_.dump_exp_dir, _.exp_name, _.exp_id))
+	dump_exp_dir:       	Path	= property(lambda _: Path(_.dump_dir, 'exp'))
+	cluster_dir: 			Path    = property(lambda _: Path(_.exp_dir, 'cluster'))
+	exchange_dir: 			Path    = property(lambda _: Path(_.exp_dir, 'exchange'))
+	profile_dir: 			Path    = property(lambda _: Path(_.exp_dir, 'profile'))
+	state_dir: 				Path    = property(lambda _: Path(_.exp_dir, 'state'))
+	exp_data_dir: 			Path    = property(lambda _: Path(_.exp_dir, 'exp_data'))
+	code_dir: 				Path    = property(lambda _: Path(_.exp_dir, 'code'))
+	fail_dir: 				Path    = property(lambda _: Path(_.exp_dir, 'fail'))
+	log_dir: 				Path    = property(lambda _: _.cluster_dir)
+
+	next_run_state_path:	Path	= property(lambda _: Path(_.state_dir, f'{_.run_id}_success.state'))
 
 	_ignore_f = ['commit', 'pull', 'backward', 'accel', 'plugin_ignore']
 	_ignore_c = ['parameters', 'scf']
@@ -300,12 +311,9 @@ class PyfigBase:
 
 		ii.debug_log([sys_arg, dict(os.environ.items()), ii.d], ['log_sys_arg.log', 'log_env_run.log', 'log_d.log'])
 
-	# def _set_fail_flag():
-	# 	os.environ['FAIL_FLAG'] = str(Path(_.exp_dir, 'fail'))
+	def start(ii):
 
-	def start(ii, dark=False):
-
-		if ii.dist.head and int(ii.dist.rank)==0 and not dark:
+		if ii.dist.head:
 			assert ii.resource.submit == False
 
 			print('start:wb:init creating the group')
@@ -325,29 +333,24 @@ class PyfigBase:
 
 			tags = [str(s) for s in [*ii.mode.split('-'), ii.exp_id, ii._group_i]]
 			
-			if 'dark' in tags:
-				print('pyfig:start:\n Going dark. wandb not initialised.')
-
-			else:
-				print(f'pyfig:wb: tags- {tags}')
-				
-				ii.wb.run = wandb.init(
-					project     = ii.project, 
-					group		= ii.exp_name,
-					dir         = ii.exp_data_dir,
-					entity      = ii.wb.entity,	
-					mode        = ii.wb.wb_mode,
-					config      = dict_to_wandb(ii.d_flat),
-					id			= ii.run_id,
-					tags 		= tags,
-					reinit 		= not (ii.wb.run is None)
-				)
-
-				os.environ['FAIL_FLAG'] = str(Path(ii.fail_dir, ii.exp_name + ii.run_id))
-				print(ii.wb.run_url)
-				print('exp_dir: ', ii.exp_dir)
+			print(f'pyfig:wb: tags- {tags}')
 			
+			ii.wb.run = wandb.init(
+				project     = ii.project, 
+				group		= ii.exp_name,
+				dir         = ii.exp_data_dir,
+				entity      = ii.wb.entity,	
+				mode        = ii.wb.wb_mode,
+				config      = dict_to_wandb(ii.d_flat),
+				id			= ii.run_id,
+				tags 		= tags,
+				reinit 		= not (ii.wb.run is None)
+			)
 
+			os.environ['FAIL_FLAG'] = str(Path(ii.fail_dir, ii.exp_name + ii.run_id))
+			print(ii.wb.run_url)
+			print('exp_dir: ', ii.exp_dir)
+			
 			ii.log(info=ii.cmd, path=ii.cluster_dir/'c.pyfig', group_exp=True)
 
 	def end(ii):
@@ -610,8 +613,9 @@ class PyfigBase:
 		else:
 			import torch
 			print(f'pyfig setting seed')
-			ii.seed = ii.seed + ii.dist.gpu_i
+			seed = ii.seed + ii.dist.rank
 			torch.random.manual_seed(ii.seed)
+		ii.seed = seed
 		print('pyfig:set_seed seed=', ii.seed)
 		return ii.seed
 
@@ -641,6 +645,7 @@ def walk_ins_tree(
 
 
 def lo_ve(path:Path=None, data: dict=None):
+
 	import torch
 	""" loads anything you want (add other interfaces as needed) 
 
@@ -681,6 +686,11 @@ def lo_ve(path:Path=None, data: dict=None):
 			w = np.savez_compressed,
 		)
 	)
+
+	if isinstance(data, dict) and len(data)==0:
+		print('lo_ve: data is empty dict- not dumping anything. Setting None and trying to load path.')
+		data = None
+
 	path = Path(path)
 	if not path.suffix:
 		path = path.with_suffix('.pk')
@@ -756,190 +766,3 @@ def ins_to_dict( # docs:pyfig:ins_to_dict can only be used when sub_ins have bee
 		ins_kv += [(k, getattr(ins, k)) for k in cls_attr_k]
 
 	return flat_any(dict(ins_kv)) if flat else dict(ins_kv) 
-
-
-
-# prefix components:
-draw_space =  '    '
-draw_branch = '│   '
-# pointers:
-draw_tee =    '├── '
-draw_last =   '└── '
-
-def recurse_tree(dir_path: Path, prefix: str=''):
-	"""A recursive generator, given a directory Path object
-	will yield a visual tree structure line by line
-	with each line prefixed by the same characters
-	"""    
-	contents = list(dir_path.iterdir())
-	# contents each get pointers that are ├── with a final └── :
-	pointers = [draw_tee] * (len(contents) - 1) + [draw_last]
-	for pointer, path in zip(pointers, contents):
-		yield prefix + pointer + path.name
-		if path.is_dir(): # extend the prefix and recurse:
-			extension = draw_branch if pointer == draw_tee else draw_space 
-			# i.e. space because last, └── , above so no more |
-			yield from recurse_tree(path, prefix=prefix+extension)
-	
-
-def tree(
-	dir_path: Path, 
-	level: int=4, 
-	limit_to_directories: bool=False,
-	length_limit: int=10
-):
-	"""Given a directory Path object print a visual tree structure"""
-	dir_path = Path(dir_path) # accept string coerceable to Path
-	files = 0
-	directories = 0
-	def inner(dir_path: Path, prefix: str='', level=-1):
-		nonlocal files, directories
-		if not level: 
-			return # 0, stop iterating
-		if limit_to_directories:
-			contents = [d for d in dir_path.iterdir() if d.is_dir()]
-		else: 
-			contents = list(dir_path.iterdir())
-		pointers = [draw_tee] * (len(contents) - 1) + [draw_last]
-		for pointer, path in zip(pointers, contents):
-			if path.is_dir():
-				yield prefix + pointer + path.name
-				directories += 1
-				extension = draw_branch if pointer == draw_tee else draw_space 
-				yield from inner(path, prefix=prefix+extension, level=level-1)
-			elif not limit_to_directories:
-				yield prefix + pointer + path.name
-				files += 1
-	print(dir_path.name)
-	iterator = inner(dir_path, level=level)
-	for line in islice(iterator, length_limit):
-		print(line)
-	if next(iterator, None):
-		print(f'... length_limit, {length_limit}, reached, counted:')
-	print(f'\n{directories} directories' + (f', {files} files' if files else ''))
-
-def draw_tree():
-	recurse_tree(Path.home() / 'pyscratch')
- 
- 
-""" 
-
-class dist_pyfig(PlugIn):
- 
-	def __init__(ii, parent=None):
-		super().__init__(parent)
-		global accel
-		global DataLoader
-
-		from accelerate import accel
-		from torch.utils.data import DataLoader
- 
-	# class git(PlugIn):
-	# 	branch:     str     = 'main'
-	# 	remote:     str     = 'origin' 
-
-	# 	_commit_id_cmd:	str 	= 'git log --pretty=format:%h -n 1'
-	# 	commit_id:   	list	= property(lambda _: run_cmds(_._commit_id_cmd, cwd=_._p.project_dir, silent=True))
-		# commit_cmd:	str     = 'git commit -a -m "run"' # !NB no spaces in msg 
-		# commit: 		list	= property(lambda _: run_cmds(_.commit_cmd, cwd=_.project_dir)) 
-		# pull_cmd:		str 	= ['git fetch --all', 'git reset --hard origin/main']
-		# pull:   		list	= property(lambda _: run_cmds(_.pull_cmd, cwd=_.project_dir))
-  
-  
-def ins_to_dict( # docs:pyfig:ins_to_dict can only be used when sub_ins have been init 
-	ins: type, 
-	attr=False,
-	sub_ins=False,
-	sub_cls=False,
-	call=False,
-	prop=False,
-	ignore:list=None,
-	flat:bool=False,
-	sub_ins_tag:str='_p',
-) -> dict:
-
-	ignore = ignore or []
-
-	# ins_d = {k:getattr(ins, k) for k in dir(ins)}
-	cls_k = (k for k in dir(ins) if not k.startswith('_') and not k in ignore)
-	cls_d = get_cls_d(ins)
-
-	
-	sub_ins_kv, prop_kv, call_kv, attr_kv, sub_cls_kv = [], [], [], [], []
-	for cls_k, cls_v in cls_d.items():
-
-		if isinstance(v, type):
-			sub_cls_kv += [(k,v),]
-   
-		elif hasattr(v, sub_ins_tag):
-			sub_ins: dict = ins_to_dict(v, 
-				attr=attr, sub_ins=sub_ins, prop=prop, 
-				ignore=ignore, flat=flat, sub_ins_tag=sub_ins_tag
-			)
-			sub_ins_kv += list(sub_ins.items())
-   
-		elif prop: # docs:pyfig:sub_cls:issues
-			if isinstance(getattr(ins.__class__, k), property):
-				prop_kv += [(k,v),]
-	
-		elif call and (callable(v) and not hasattr(v, sub_ins_tag)):
-			call_kv += [(k,v),]
-   
-		elif attr:
-			attr_kv += [(k,v),]
-
-		else:
-			pass
-
-	# final_d = dict(prop*prop_kv + sub_ins*sub_ins_kv + attr*attr_kv + sub_cls*sub_cls_kv) # + call*call_kv one day but not needed
-	final_d = dict(prop_kv + sub_ins_kv + attr_kv + sub_cls_kv) # + call*call_kv one day but not needed
-	return flat_any(final_d) if flat else final_d # docs:python:flat:q? parameter to flat dict in levels?
-# server local https://github.com/wandb/wandb/issues/4586
-			# launch_cmd = 'srun --gpus=1 --ntasks=1 --exclusive --label  '
-			# body += [f'{launch_cmd} python -u {ii._p.run_name} {dict_to_cmd(job)} 1> {ii.device_log_path(rank=0)} 2>&1 & ']
-				# srun --nodes=1 --mpi=cray_shasta --gpus=1 --cpus-per-task=8 --ntasks=1 -vvvvv --label --exclusive bash -c &
-
-
-		class _Body:
-			lines = []
-			def __iadd__(ii, l):
-				ii.lines += [l]
-			def __repr__(self) -> str:
-				pass
-			def __str__(ii) -> str:
-				return '\n'.join(ii.lines)
-
-		try:
-			_body = _Body()
-			_body += 'x'
-			print(_body)
-		except Exception as e:
-			print(e)
-
-	file_interface_all = dict(
-		pk = dict(
-			rb = pk.load,
-			wb = partial(pk.dump, protocol=pk.HIGHEST_PROTOCOL),
-		),
-		yaml = dict(
-			r = yaml.load,
-			w = yaml.dump,
-		),
-		json = dict(
-			r = json.load,
-			w = json.dump,
-		),
-		state = dict(
-			r = torch.save,
-			w = torch.load
-		),
-		cmd = dict(
-			r = lambda f: ' '.join(f.readlines()),
-			w = lambda x, f: f.writelines(x),
-		),
-		npy = dict(
-			rb = np.load,
-			wb = np.save,
-		)
-	) 
-"""

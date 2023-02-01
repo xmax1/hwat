@@ -8,7 +8,7 @@ import torch
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.optim import Optimizer
 from functorch import make_functional_with_buffers, vmap
-from things.torch_utils import get_opt, get_scheduler, load
+from things.for_torch.torch_utils import get_opt, get_scheduler, load
 from things.utils import npify_tree, compute_metrix
 
 from functools import partial
@@ -130,22 +130,27 @@ def update(model, grads, opt, scheduler):
 	scheduler.step()
 		
 
+# set rank = 0 for all processes for opt hypam
+# 
+
 def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 
 	model, dataloader, compute_loss, opt, scheduler = init_exp(c, c_update, **kw)
 	
-	metrix = Metrix(mode=c.mode)
-	
 	c.start()
+	
+	initial_state_metrix = dict(n_param=sum(p.numel() for p in model.parameters()))
+	metrix = Metrix(mode=c.mode, init_summary=initial_state_metrix)
 
+	print('depreciating v_init: keys=', (v_init or {}).keys())
 	print('running: ', c.mode, 'run: ', compute_loss, 'c_update: ', c_update, sep='\n')
 
 	v_cpu_d = dict()
 
 	subrtne = (
-		(c.tag.pre, range(1, c.n_pre_step+1)),
-		(c.tag.train, range(1, c.n_step+1)),
-		(c.tag.eval, range(1, c.n_eval_step+1))
+		(c.tag.pre, c.n_pre_step),
+		(c.tag.train, c.n_step),
+		(c.tag.eval, c.n_eval_step),
 	)
 
 	rtne = {
@@ -153,11 +158,10 @@ def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 		c.tag.eval	: (subrtne[2],),
 	}
 
-
-	for phase, sequence in rtne[c.mode]:
+	for phase, n_phase_step in rtne[c.mode.split('-')[0]]: # ! because of the -option
 		metrix.phase = phase
 
-		for (rel_step, step), data in zip(enumerate(sequence, 1), dataloader):
+		for (rel_step, step), data in zip(enumerate(range(1, n_phase_step+1), 1), dataloader):
 
 			model.zero_grad(set_to_none=True)
 
@@ -170,7 +174,7 @@ def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 				no_none = filter(lambda kv: not (kv[1].grad is None), model.named_parameters())
 				v_d['grads'] = {k:p.grad.detach() for k,p in no_none}
 
-			v_d = c.dist.sync(v_d, this_is_noop= not (step % c.dist.sync_step), method='mean')
+			v_d = c.dist.sync(v_d, sync_method=c.tag.mean, this_is_noop= not (step % c.dist.sync_step))
 
 			if c.tag.train in c.mode:
 
@@ -180,59 +184,69 @@ def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
 				v_d['params'] = {k:p.detach().cpu().numpy() for k,p in model.named_parameters()}
 
 
-
-
 			###--- cpu only from here ---###
-			log_metrix = not (step % c.log_metric_step)
-			log_state = not (step % c.log_state_step)
+			### construction zone ###
+			log_metric_step = n_phase_step // c.log_metric_n_times
+			log_state_step = n_phase_step // c.log_state_n_times
+			log_metrix = not (step % log_metric_step)
+			log_state = not (step % log_state_step)
+			log_final = step==n_phase_step
+			is_log_step = log_metrix or log_state or log_final
+			### construction zone ###
 
-			if c.dist.head and (log_metrix or log_state):
+			if c.dist.head and is_log_step:
 
 				v_cpu_d = npify_tree(v_d)
 
 				if log_metrix:
-					if c.tag.eval in c.mode:
+					v_metrix = metrix.tick(step,
+						opt_obj_key= c.opt_obj_key, opt_obj_op= c.opt_obj_op, v_cpu_d= v_cpu_d,
+						log_exp_stats_keys=c.log_exp_stats_keys
+					)
 
-						v_metrix = metrix.tick(
-							step, c.mode, phase, 
-							opt_obj_key=c.opt_obj_key, opt_obj_op=c.opt_obj_op, v_cpu_d= v_cpu_d,
-							log_exp_stats_keys=c.log_exp_stats_keys
-						)
-
-						v_metrix_processed 	= compute_metrix(v_metrix, source=c.mode, sep='/')
-						wandb.log(v_metrix_processed, step=step)
+					wandb.log(compute_metrix(v_metrix, source=c.mode, sep='/'), step=step)
 
 				if log_state:
-					if c.tag.record in c.mode:
-						lo_ve(path=c.state_dir/f'{c.mode}_{phase}_i{step}.state', data=v_d)
+					lo_ve(path=c.state_dir/f'{c.mode}_{phase}_i{step}.state', data=v_cpu_d)
 
-
-
-	v_run = dict(v_init_next={k:v.detach().cpu().numpy() for k,v in v_init.items()})
+			if rel_step==1 or rel_step==n_phase_step:
+				print(f'{c.mode} {phase} step {step} of {n_phase_step} done')
+				v_cpu_d_1 = {k:f'{v.mean():.2f}' for k,v in v_cpu_d.items()}
+				other = dict(
+					opt_obj_key= c.opt_obj_key, 
+					opt_obj_op= c.opt_obj_op,
+					step=step, 
+					n_step=n_phase_step, 
+					log_metric_step=log_metric_step, 
+					log_state_step=log_state_step,
+				)
+				pprint.pprint(v_cpu_d_1 | other)
 
 	c.to(framework='numpy')
 
 	torch.cuda.empty_cache()
 
 	if c.dist.head:
+		c.app.record_summary(summary= metrix.summary, opt_obj_all=metrix.opt_obj_all)
 
-		n_param = sum(p.numel() for p in model.parameters())
-		wandb.log(dict(n_param=n_param))
-		done = c.record_app(metrix.opt_obj_all)
+		if c.log_data_dump_keys is not None:
+			
+			v_data_dump: dict = c.dist.sync(v_cpu_d, sync_method=c.tag.gather)
 
+			data_dump = dict(filter(lambda kv: kv[0] in c.log_data_dump_keys, v_data_dump.items()))
+
+			lo_ve(path=(c.exp_dir/c.run_id).with_suffix('.npz'), data=data_dump)
+
+
+	if v_init.get(c.tag.next_run)==c.tag.eval:
 		
-		lo_ve(path=(c.exp_dir/c.run_id).with_suffix('.npz'), data=metrix.log)  
+		path = c.next_run_state_path
 
-	if v_run and v_cpu_d and metrix.to_dict():
-		v_run |= v_cpu_d | metrix.to_dict()
+		lo_ve(path=path, data=v_cpu_d)
+
+		v_run[c.tag.next_run_c_update] = dict(lo_ve_init_path= path)
 
 	c.end()
-
-	if v_init.get('next', '')=='eval':
-		# v_init['next_state_path'] = c.state_dir/f'{c.mode}_i{step}.state'
-		path = c.state_dir/f'{c.mode}_i{step}.state'
-		lo_ve(path=path, data=v_d)
-		v_run['c_update_next'] = {'lo_ve_path': path}
 
 	return v_run
 
@@ -308,7 +322,7 @@ if __name__ == "__main__":
 
 		def max_mem(ii, c: Pyfig=None, v_init: dict=None):
 
-			from things.torch_utils import get_max_mem_c
+			from things.for_torch.torch_utils import get_max_mem_c
 
 			v_run = get_max_mem_c(run, c=c)
 			# dict(n_b_max=n_b, max_mem_alloc=mem_used)
@@ -327,7 +341,7 @@ if __name__ == "__main__":
 			return run(c=c, v_init=v_init)
 
 		def profile(ii, c: Pyfig=None, v_init: dict=None):
-			from things.torch_utils import gen_profile
+			from things.for_torch.torch_utils import gen_profile
 			c.mode = 'train'
 			fn = partial(run, c=c, v_init=v_init)
 			v_run = gen_profile(fn, c)

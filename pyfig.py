@@ -13,17 +13,59 @@ from dump.user_secret import user
 
 import wandb
 
+""" 
+# issues
+- type_me argument parsing fails for empty lists. Error is caught but unsure if other effects so far. 
+- paths and dirs need to be strings, not Nones
+- 
+
+# useful 
+- variable descriptions things/pyfig_def.py
+
+# requirements
+## distribution
+- each gpu must have a unique rank env variable
+
+# very basic test
+- python run.py
+
+# other test
+python run.py --submit --n_gpu 2 --n_b 2 --mode train --_debug --dist_name naive --exp_name test
+
+
+# advanced test
+c_test = dict(
+	n_sv     = 16,
+	n_pv     = 8,
+	n_fb     = 2,
+	n_det    = 2,
+	n_b 	 = 4,
+	multimode = 'max_mem-record:opt_hypam-record:train-record:eval-record',  # profile
+	n_step   = 50,
+	n_pre_step   = 50,
+	n_eval_step   = 50,
+	debug	= True,
+	exp_name = 'adv_test',
+)
+parameters = dict(
+	n_gpu			=	Param(values=[1,  2], dtype=int),
+	dist_name		= 	Param(values=['naive', 'hf_accel'], dtype=str), 
+	
+)
+
+"""
+
 class Pyfig(PyfigBase):
 
 	user: 				str 	= user
  
 	project:            str     = 'hwat'
 	run_name:       	Path	= 'run.py'
-	load_exp_state:		str		= ''
 
 	exp_name:       	str		= '' # default is demo
 	exp_id: 			str		= ''
 	group_exp: 			bool	= False
+	lo_ve_path: 		str 	= '' # for LOad & saVE -> lo_ve
 
 	mode: 				str		= ''
 	multimode: 			str		= 'train:eval'
@@ -41,12 +83,20 @@ class Pyfig(PyfigBase):
 	n_total_step: 	 	int   	= property(lambda _: _.n_step + _.n_pre_step + _.n_eval_step)
 
 	step: 				int 	= None
+	log_metric_n_times:	int   	= 20
+	log_state_n_times:	int   	= 2
+
+	### maybe deprecated ###
 	log_metric_step: 	int   	= property(lambda _: 2 if _.debug else _.n_step//20)
-	log_state_step: 	int   	= property(lambda _: 2 if _.debug else _.n_step//10)
+	log_state_step: 	int   	= property(lambda _: 2 if _.debug else _.n_step//5)
+	### maybe deprecated ###
+
+	log_exp_stats_keys: str		= ['e', 't_per_it', 'max_mem_alloc']
+	log_data_dump_keys: str		= None
  
 	opt_obj_key:			str		= 'e'
 	opt_obj_op: Callable = property(lambda _: lambda x: x.std())
-
+	
 	class data(PlugIn):
 		n_b: int = 64
 	
@@ -74,15 +124,7 @@ class Pyfig(PyfigBase):
 		n_equil_step:int        = property(lambda _: 1000//_.n_corr)
 
 		def __init__(ii, parent=None) -> None:
-
 			super().__init__(parent=parent)
-			# 	_system_id = property(lambda _: 
-			# 	'_'.join([
-			# 		f'{a_z_i:.0f}-{a_i[0]:.2f}-{a_i[1]:.2f}-{a_i[2]:.2f}' 
-			# 	for a_z_i, a_i in zip(_.a_z, _.a)
-			# ]))
-			# ii.ignore = ['hf', 'mol']
-			ii.system_name = ii.system_name
 
 			from pyscf import gto
 
@@ -90,8 +132,7 @@ class Pyfig(PyfigBase):
 				atom=ii.system_id, basis='sto3g', unit='bohr'
 			)
 
-			# print(ii._system_id.replace('-', ' ').replace('_', ';'))
-			print(ii.system_id)
+			print('\npyfig:pyscf: ', ii.system_id, [type(v) for v in ii.system_id], sep='\n')
 			mol.spin = ii.spin
 			mol.charge = ii.charge
 			mol.build()
@@ -101,6 +142,26 @@ class Pyfig(PyfigBase):
 			ii._hf = hf
 			ii._mol = mol
 
+		def record_summary(ii, summary: dict=None, opt_obj_all: list=None) -> None:
+
+			columns = ["charge_spin_az0-az1-..._pmu", "Energy", "Error (+/- std)"]
+			atomic_id = "-".join([str(int(float(i))) for i in ii.a_z.flatten()])
+			spin_and_charge = f'{ii.charge}_{ii.spin}'
+			geometric_hash = f'{ii.a.mean():.0f}'
+			exp_metaid = '_'.join([atomic_id, spin_and_charge, geometric_hash])
+			
+			if len(opt_obj_all)==0:
+				opt_obj_all = [0.0]
+				print('no opt_obj_all, setting to 0.0')
+			else:
+				data = [exp_metaid, np.array(opt_obj_all).mean(), np.array(opt_obj_all).std()]
+
+			print('pyfig:app:record_summary:Result ', data, sep='\n')
+			Result = wandb.Table(columns=columns)
+			Result.add_data(*data)
+			wandb.log(dict(Result=Result) | (summary or {}))
+
+			return True
 
 	class model(PyfigBase.model):
 		compile_ts: 	bool	= False
@@ -170,12 +231,6 @@ class Pyfig(PyfigBase):
 	class wb(PyfigBase.wb):
 		wb_mode = 'online'
 
-	class tag(PlugIn):
-		pre: str = 'pre'
-		train: str = 'train'
-		eval: str = 'eval'
-		record: str = 'record'
-
 	zweep: str = ''
 
 	def __init__(ii, notebook: bool=False, sweep: dict={}, c_init: dict={}, **other_arg) -> None:
@@ -195,16 +250,6 @@ class Pyfig(PyfigBase):
 				n_eval_step   = 50,
 				debug	= True,
 			)
-
-		### under construction
-		# import sys
-		# print(sys.argv[0][1:])
-		# if any(['init_accelerate' in k for k in sys.argv[0][1:].split(' ')]):
-		# 	print('loading accelerate')
-		# 	from accelerate import accel
-		# 	accel = accel()
-		# 	c_init.update(dict(accel=accel))
-		### under construction
 
 		print('\npyfig:init')
 		super().__init__(notebook=notebook, c_init=c_init, sweep=sweep, **other_arg)
@@ -378,62 +423,6 @@ class Pyfig(PyfigBase):
 
 
 		"""
-
-		# 
-		# )
-
-		# python run.py --time 03:00:00 --submit --multimode max_mem:opt_hypam --exp_name sweep~memopt --zweep a_z-16-17
-		# python run.py --time 03:00:00 --submit --multimode max_mem:opt_hypam --exp_name sweep~memopt --zweep "[[16],[17]]"
-		# python run.py --time 03:00:00 --submit --multimode max_mem:opt_hypam --exp_name sweep~memopt --zweep a_z-5-6-7-8-9-10-11-12-13-14-15-16-17-18-19-20-21-22-23-24-25-26-27-28-29-30
-
-
-		# python run.py --submit --mode train --n_det 1 --n_step 10000 --a_z [4] --exp_name stab~4 --n_pre_step 1000
-		# python run.py --submit --mode train --n_det 1 --n_step 10000 --a_z [16] --exp_name stab~16 --n_pre_step 1000
-		# python run.py --submit --dist hf_accel --n_gpu 2 --exp_name demo~opt_hypam --mode opt_hypam --time 12:00:00 --system O2_neutral_triplet
-		# a_z		= 	Param(values=[[i,] for i in range(5, 50)], dtype=int),
-		# get_mem_max 15
-
-		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 01:00:00 --mode --max_mem
-
-		# 26 / 1 / 23
-		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist naive
-		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist naive --cudnn_benchmark
-		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist hf_accel
-		# python run.py --submit --a_z [16] --exp_name speed1~cudnn-dist --time 00:20:00 --dist hf_accel --cudnn_benchmark
-
-		# python run.py --submit --cudnn_benchmark --exp_name opt_hypam1~O2 --mode opt_hypam-record --time 12:00:00 --n_step 500 --n_b 512
-
-		# python run.py --submit --a_z [16] --dist naive --cudnn_benchmark --exp_name sweep-n_b --mode max_mem --time 12:00:00
-		# python run.py --submit --dist naive --cudnn_benchmark --exp_name sweep-a_z --group_exp --time 00:10:00
-		# python run.py --submit --exp_name dist --group_exp --time 01:00:00 --a_z [30] --dist naive --mode max_mem --n_gpu 10
-		# python run.py --submit --exp_name dist --group_exp --time 01:00:00 --a_z [30] --dist hf_accel --mode max_mem --n_gpu 10
-		# for a_z in [[i,] for i in range(10, 60, 2)]:
-		# 	run_d = dict(a_z=a_z)
-
-	def record_app(ii, opt_obj_all: list):
-
-		atomic_id = "-".join([str(int(float(i))) for i in ii.app.a_z.flatten()])
-		spin_and_charge = f'{ii.app.charge}_{ii.app.spin}'
-		geometric_hash = f'{ii.app.a.mean():.0f}'
-		exp_metaid = '_'.join([atomic_id, spin_and_charge, geometric_hash])
-
-		columns = ["charge_spin_az0-az1-..._pmu", "Energy", "Error (+/- std)"]
-		data = [exp_metaid, np.array(opt_obj_all).mean(), np.array(opt_obj_all).std()]
-
-		print('post_process:data = \n', data)
-
-		Result = wandb.Table(columns=columns)  # , data=data
-		Result.add_data(*data)
-		# wandb.Table(dataframe=my_df)
-		wandb.log(dict(Result=Result))
-
-		return True
-
-		# api = wandb.Api()
-		# run = api.run(c.wb.wb_run_path)
-		# c: dict = run.config
-		# history = run.scan_history(keys=['e',])
-		# opt_obj = np.asarray([row['e'] for row in history])
 
 """  
 # pyfig

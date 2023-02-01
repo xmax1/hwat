@@ -443,31 +443,3 @@ class PyfigDataset(Dataset):
 			setattr(ii, k, v)
 
 		return ii.data
-
-"""
-s_u = torch.tanh(ii.v_u_fb_after(s_u)) # (n_b, n_u(r), n_sv)    # n_sv//2)
-		s_d = torch.tanh(ii.v_d_fb_after(s_d)) # (n_b, n_d(r), n_sv)    # n_sv//2)
-
-		# Map to orbitals for multiple determinants
-		# s_wu = ii.wu(s_u).unsqueeze(1).tensor_split(ii.n_det, dim=-1), dim=1) # (n_b, n_det, n_u(r), n_u)
-		# s_wd = ii.wd(s_d).unsqueeze(1).tensor_split(ii.n_det, dim=-1), dim=1) # (n_b, n_det, n_d(r), n_d)
-		
-		s_wu = ii.wu(s_u).reshape(n_b, ii.n_u, ii.n_u, ii.n_det) # (n_b, n_det, n_d, n_d)
-		s_wd = ii.wd(s_d).reshape(n_b, ii.n_d, ii.n_d, ii.n_det) # (n_b, n_det, n_d, n_d)
-		
-		# assert s_wd.shape == (n_b, ii.n_det, ii.n_d, ii.n_d)
-		ra_u, ra_d = torch.split(ra, [ii.n_u, ii.n_d], dim=1) # (n_b, n_u(r), n_a, 3), (n_b, n_d(r), n_a, 3)
-
-		exp_u = torch.exp(-torch.linalg.vector_norm(ra_u, dim=-1)) # (n_b, n_u(r), n_a)
-		exp_d = torch.exp(-torch.linalg.vector_norm(ra_d, dim=-1)) # (n_b, n_d(r), n_a)
-
-		sum_a_exp_u = exp_u.sum(dim=-1, keepdim=True)[..., None] # n_b, n_u(r)
-		sum_a_exp_d = exp_d.sum(dim=-1, keepdim=True)[..., None] # n_b, n_d(r)
-
-		orb_u = s_wu * sum_a_exp_u # (n_b, n_u(r), n_u(orb), n_det) 
-		orb_d = s_wd * sum_a_exp_d # (n_b, n_d(r), n_d(orb), n_det)
-	
-		orb_u = orb_u.transpose(-1, 1) # (n_b, n_det, n_u(r), n_u(orb))
-		orb_d = orb_d.transpose(-1, 1) # (n_b, n_det, n_u(r), n_u(orb))
-
-"""

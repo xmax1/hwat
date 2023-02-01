@@ -44,12 +44,12 @@ class naive(PyfigBase.dist):
 	)
 
 	@torch.no_grad()
-	def dist_sync(ii, v_d: dict) -> list[torch.Tensor]:
+	def dist_sync(ii, v_d: dict, sync_method: str) -> list[torch.Tensor]:
 
 		step = gen_time_id()
 
 		v_path = (ii._p.exchange_dir / f'{step}_{ii._p.dist.dist_id}').with_suffix('.pk')
-		v_mean_path = add_to_Path(v_path, '-mean')
+		v_sync_path = add_to_Path(v_path, '-sync')
 		
 		try:
 			gc.disable()
@@ -73,12 +73,17 @@ class naive(PyfigBase.dist):
 			for i, p in enumerate(k_path_all):
 				leaves = [load(p),] if i==0   else [*leaves, load(p)]
 
-			v_mean = [np.stack(l).mean(axis=0) for l in zip(*leaves)]
+			v_sync = [np.stack(l) for l in zip(*leaves)]
+			
+			if sync_method == ii._p.tag.mean:
+				v_sync = [np.mean(v, axis=0) for v in v_sync]
+			elif sync_method == ii._p.tag.gather:
+				pass
 
 			try:
 				gc.disable()
 				for p in k_path_all:
-					dump(add_to_Path(p, '-mean'), v_mean)
+					dump(add_to_Path(p, '-sync'), v_sync)
 			except Exception as e:
 				print(e)
 			finally:
@@ -92,7 +97,7 @@ class naive(PyfigBase.dist):
 
 		gc.disable()
 		try:
-			v_sync_leaves = load(v_mean_path)  # Speed: Only load sync vars
+			v_sync_leaves = load(v_sync_path)  # Speed: Only load sync vars
 			v_sync_leaves = [torch.tensor(data=v, device=ref.device, dtype=ref.dtype, requires_grad=False) 
 				if isinstance(ref, torch.Tensor) else v 
 				for v, ref in zip(v_sync_leaves, v_ref_leaves)]
@@ -102,7 +107,7 @@ class naive(PyfigBase.dist):
 			v_sync = v_d
 			print(e)
 		finally: # ALWAYS EXECUTED
-			v_mean_path.unlink()
+			v_sync_path.unlink()
 			gc.enable()
 		return v_sync
 
@@ -123,7 +128,7 @@ class hf_accel(PyfigBase.dist):
 		f'accelerate launch {dict_to_cmd(_.dist_c.d, exclude_false=True)} {_._p.run_name} \ "{cmd}" '
 	) # ! backslash must come between run.py and cmd and "cmd" needed
 		
-	sync_step: int			= 5
+	sync_step: int = 5
 
 	class dist_c(PlugIn):
 		multi_gpu = True
@@ -143,11 +148,18 @@ class hf_accel(PyfigBase.dist):
 		)
 
 	@torch.no_grad()
-	def dist_sync(ii, v_d: dict[str:torch.Tensor]) -> list[torch.Tensor]:
+	def dist_sync(ii, v_d: dict[str:torch.Tensor], sync_method: str) -> list[torch.Tensor]:
 		v_flat, treespec = optree.tree_flatten(v_d)
 		v_sync_flat: list[torch.Tensor] = ii.accel.gather(v_flat)
+		
 		for i, (v, v_ref) in enumerate(zip(v_sync_flat, v_flat)):
-			v = v.reshape(-1, *v_ref.shape).mean(dim=0)
+			v = v.reshape(-1, *v_ref.shape)
+
+			if sync_method == ii._p.tag.mean:
+				v = v.mean(dim=0)
+			elif sync_method == ii._p.tag.gather:
+				pass
+
 			v_sync_mean = [v] if i==0 else [*v_sync_mean, v]
 		v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync_mean)
 		return v_sync

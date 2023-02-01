@@ -210,6 +210,7 @@ def type_me(v, v_ref=None, is_cmd_item=False):
 	
 	if is_cmd_item:
 		try:
+			v_og = deepcopy(v)
 			v = format_cmd_item(v)
 			
 			if v.startswith('[['):
@@ -225,8 +226,9 @@ def type_me(v, v_ref=None, is_cmd_item=False):
 			booleans = ['True', 'true', 't', 'False', 'false', 'f']
 			if v in booleans: 
 				return booleans.index(v) < 3  # 0-2 True 3-5 False
+		
 		except Exception as e:
-			print('type me issue: ', v, v_ref, is_cmd_item, e)
+			print('utils:type_me:exception \nog|v|v_ref|is_cmd_item|exception\n', v_og, v, v_ref, is_cmd_item, e)
 	
 	if v_ref is not None:
 		
@@ -548,12 +550,15 @@ class Metrix:
 	
 	opt_obj: 	   float = None
 	opt_obj_all:    list = None
+
+	summary: 	   dict = None
 	
-	def __init__(ii, mode: str):
+	def __init__(ii, mode: str, init_summary: dict= None):
 		
 		ii.mode = mode
-
 		ii.opt_obj_all = []
+		
+		ii.summary = init_summary or {}
 
 		torch.cuda.empty_cache()
 		torch.cuda.reset_peak_memory_stats()
@@ -583,8 +588,11 @@ class Metrix:
 			log_kv = dict(filter(lambda kv: kv[0] in log_exp_stats_keys, deepcopy(v_cpu_d).items()))
 
 			exp_stats = {'exp_stats': {ii.mode: {ii.phase: log_kv}}}
+
 		else:
 			exp_stats = {}
+
+		ii.exp_stats = exp_stats
 		return exp_stats
 	
 	def to_dict(ii):

@@ -407,21 +407,21 @@ class Pyfig(PyfigBase):
 					p.unlink()
 				gc.enable()
 
-		v_mean_path = add_to_Path(v_path, '-mean')
+		v_sync_path = add_to_Path(v_path, '-mean')
 		while v_path.exists():
-			while not v_mean_path.exists():
+			while not v_sync_path.exists():
 				sleep(0.02)
 			sleep(0.02)
 		try:
 			gc.disable()
-			v_sync = load(v_mean_path)  # Speed: Only load sync vars
+			v_sync = load(v_sync_path)  # Speed: Only load sync vars
 			v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync)
 		except Exception as e:
 			print(e)
 			gc.enable()
 			v_sync = v_tr
 		finally: # ALWAYS EXECUTED
-			v_mean_path.unlink()
+			v_sync_path.unlink()
 			gc.enable()
 			return v_sync
 
