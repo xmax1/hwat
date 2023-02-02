@@ -100,12 +100,13 @@ import time
 def opt_hypam(objective: Callable, c: PyfigBase):
 	print('hypam opt create/get study')
  
+	# how to id the different gpus give rank is 0 for 
 	
 	if not c.dist.head:
 		while not len(list(c.exp_dir.glob('*.db'))):
 			print('waiting for opt storage...')
 			sleep(5.)
-		sleep(c.dist.gpu_i)
+		sleep(c.dist.rank)
 	
 		study = optuna.load_study(study_name=c.sweep.sweep_name, storage=c.sweep.storage)
 	else:
@@ -114,7 +115,7 @@ def opt_hypam(objective: Callable, c: PyfigBase):
 			study_name		= c.sweep.sweep_name,
 			load_if_exists 	= True, 
 			storage			= c.sweep.storage,
-			sampler 		= lo_ve(path=c.exp_dir/'sampler.pk') or optuna.samplers.TPESampler(seed=c.dist.gpu_i),
+			sampler 		= lo_ve(path=c.exp_dir/'sampler.pk') or optuna.samplers.TPESampler(seed=c.dist.rank),
 			pruner			= optuna.pruners.MedianPruner(n_warmup_steps=10),
 		)
 

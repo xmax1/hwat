@@ -30,13 +30,13 @@ from .pyfig_utils import PlugIn, PyfigBase
 from torch import nn
 
 this_dir = Path(__file__).parent
-hostname = os.environ['HOSTNAME']
+hostname = os.environ('HOSTNAME', None)
+
 
 class naive(PyfigBase.dist):
 	
 	dist_name: 	str		= 'naive'
-	sync_step:      int     = 5
-
+	head: 		bool 	= property(lambda _: _.rank==0 or (_._p.tag.opt_hypam in _._p.mode))
 	launch_cmd: Callable 	= property(lambda _: 
 		lambda submit_i, cmd: 
 		f'export RANK={submit_i} \
@@ -111,92 +111,97 @@ class naive(PyfigBase.dist):
 			gc.enable()
 		return v_sync
 
+try:
+	import accelerate
 
-import accelerate
+	split_batches= True
+	mixed_precision= 'no' # 'fp16, 'bf16'
 
-split_batches= True
-mixed_precision= 'no' # 'fp16, 'bf16'
+	class hf_accel(PyfigBase.dist):
 
-class hf_accel(PyfigBase.dist):
-	dist_name: str		= 'hf_accel'
-	accel: accelerate.Accelerator = None
-	split_batches: bool		= False  # if True, reshapes data to (n_gpu, batch_size//n_gpu, ...)
-	mixed_precision: str	= 'no' # 'fp16, 'bf16'
+		dist_name: str		= 'hf_accel'
 
-	launch_cmd:	Callable  	= property(lambda _: 
-		lambda submit_i, cmd: 
-		f'accelerate launch {dict_to_cmd(_.dist_c.d, exclude_false=True)} {_._p.run_name} \ "{cmd}" '
-	) # ! backslash must come between run.py and cmd and "cmd" needed
+		accel: accelerate.Accelerator = None
 		
-	sync_step: int = 5
+		split_batches: bool		= False  # if True, reshapes data to (n_gpu, batch_size//n_gpu, ...)
+		mixed_precision: str	= 'no' # 'fp16, 'bf16'
 
-	class dist_c(PlugIn):
-		multi_gpu = True
-		machine_rank = '0'
-		same_network = True
-		main_process_port = property(lambda _: find_free_port()) # 
-		num_processes =  property(lambda _: str(_._p._p.resource.n_gpu))
-		num_machines =  property(lambda _: str(_._p._p.resource.n_node))
+		launch_cmd:	Callable  	= property(lambda _: 
+			lambda submit_i, cmd: 
+			f'accelerate launch {dict_to_cmd(_.dist_c.d, exclude_false=True)} {_._p.run_name} \ "{cmd}" '
+		) # ! backslash must come between run.py and cmd and "cmd" needed
+			
+		sync_step: int = 5
 
-	def __init__(ii, parent=None):
-		super().__init__(parent=parent)
+		class dist_c(PlugIn):
+			multi_gpu = True
+			machine_rank = '0'
+			same_network = True
+			main_process_port = property(lambda _: find_free_port()) # 
+			num_processes =  property(lambda _: str(_._p._p.resource.n_gpu))
+			num_machines =  property(lambda _: str(_._p._p.resource.n_node))
 
-		ii.plugin_ignore += ['accel']
+		def __init__(ii, parent=None):
+			super().__init__(parent=parent)
 
-		ii.accel = accelerate.Accelerator(
-			split_batches=getattr(ii, 'split_batches'), mixed_precision=getattr(ii, 'mixed_precision')
-		)
+			ii.plugin_ignore += ['accel']
 
-	@torch.no_grad()
-	def dist_sync(ii, v_d: dict[str:torch.Tensor], sync_method: str) -> list[torch.Tensor]:
-		v_flat, treespec = optree.tree_flatten(v_d)
-		v_sync_flat: list[torch.Tensor] = ii.accel.gather(v_flat)
-		
-		for i, (v, v_ref) in enumerate(zip(v_sync_flat, v_flat)):
-			v = v.reshape(-1, *v_ref.shape)
+			ii.accel = accelerate.Accelerator(
+				split_batches=getattr(ii, 'split_batches'), mixed_precision=getattr(ii, 'mixed_precision')
+			)
 
-			if sync_method == ii._p.tag.mean:
-				v = v.mean(dim=0)
-			elif sync_method == ii._p.tag.gather:
-				pass
+		@torch.no_grad()
+		def dist_sync(ii, v_d: dict[str:torch.Tensor], sync_method: str) -> list[torch.Tensor]:
+			v_flat, treespec = optree.tree_flatten(v_d)
+			v_sync_flat: list[torch.Tensor] = ii.accel.gather(v_flat)
+			
+			for i, (v, v_ref) in enumerate(zip(v_sync_flat, v_flat)):
+				v = v.reshape(-1, *v_ref.shape)
 
-			v_sync_mean = [v] if i==0 else [*v_sync_mean, v]
-		v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync_mean)
-		return v_sync
+				if sync_method == ii._p.tag.mean:
+					v = v.mean(dim=0)
+				elif sync_method == ii._p.tag.gather:
+					pass
 
-	def backward(ii, loss: torch.Tensor, create_graph=False):
-		ii.accel.backward(loss, create_graph=create_graph)
+				v_sync_mean = [v] if i==0 else [*v_sync_mean, v]
+			v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync_mean)
+			return v_sync
 
-	def dist_set_device(ii, device=None):
-		print('dist:accel: getting devices with accelerate ', ii.accel._get_devices())
-		ii._device = ii.accel.device
-		return ii._device
+		def backward(ii, loss: torch.Tensor, create_graph=False):
+			ii.accel.backward(loss, create_graph=create_graph)
 
-	def dist_set_seed(ii, seed=None):
-		from accelerate.utils import set_seed
-		print('setting seed w accelerate ' )
-		ii._seed = seed or ii._p.seed
-		set_seed(ii._seed, device_specific=True)
-  
-	def prepare(ii, *arg, **kw):
-		print(ii.accel.device, ii.accel.is_main_process, ii.accel.is_local_main_process, sep='\n')
-		return ii.accel.prepare(*arg, **kw)  # docs:accelerate
+		def dist_set_device(ii, device=None):
+			print('dist:accel: getting devices with accelerate ', ii.accel._get_devices())
+			ii._device = ii.accel.device
+			return ii._device
 
-	def unwrap(ii, model:nn.Module):
-		return ii.accel.unwrap_model(model)
+		def dist_set_seed(ii, seed=None):
+			from accelerate.utils import set_seed
+			print('setting seed w accelerate ' )
+			ii._seed = seed or ii._p.seed
+			set_seed(ii._seed, device_specific=True)
+	
+		def prepare(ii, *arg, **kw):
+			print(ii.accel.device, ii.accel.is_main_process, ii.accel.is_local_main_process, sep='\n')
+			return ii.accel.prepare(*arg, **kw)  # docs:accelerate
 
-	@property
-	def _docs(ii,):
-		"""
-		accel attrs
-		**device** (torch.device) -- The device to use.
-		**distributed_type** ([~utils.DistributedType]) -- The distributed training configuration.
-		**local_process_index** (int) -- The process index on the current machine.
-		**mixed_precision** (str) -- The configured mixed precision mode.
-		**num_processes** (int) -- The total number of processes used for training.
-		**optimizer_step_was_skipped** (bool) -- Whether or not the optimizer update was skipped (because of gradient overflow in mixed precision), in which case the learning rate should not be changed.
-		**process_index** (int) -- The overall index of the current process among all processes.
-		**state** ([~state.AcceleratorState]) -- The distributed setup state.
-		**sync_gradients** (bool) -- Whether the gradients are currently being synced across all processes.
-		**use_distributed** (bool) -- Whether the current configuration is for distributed training.
-		"""
+		def unwrap(ii, model:nn.Module):
+			return ii.accel.unwrap_model(model)
+
+		@property
+		def _docs(ii,):
+			"""
+			accel attrs
+			**device** (torch.device) -- The device to use.
+			**distributed_type** ([~utils.DistributedType]) -- The distributed training configuration.
+			**local_process_index** (int) -- The process index on the current machine.
+			**mixed_precision** (str) -- The configured mixed precision mode.
+			**num_processes** (int) -- The total number of processes used for training.
+			**optimizer_step_was_skipped** (bool) -- Whether or not the optimizer update was skipped (because of gradient overflow in mixed precision), in which case the learning rate should not be changed.
+			**process_index** (int) -- The overall index of the current process among all processes.
+			**state** ([~state.AcceleratorState]) -- The distributed setup state.
+			**sync_gradients** (bool) -- Whether the gradients are currently being synced across all processes.
+			**use_distributed** (bool) -- Whether the current configuration is for distributed training.
+			"""
+except Exception as e:
+	print('likely need to install hugging face accelerate package mk ', e)

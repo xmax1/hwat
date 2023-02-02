@@ -18,8 +18,20 @@ import pprint
 import numpy as np
 import optree
 import paramiko
-import yaml
 import torch
+
+
+class TryImportThis:
+	def __init__(ii, package: str=None):
+		ii.package = package
+
+	def __enter__(ii):
+		return ii
+
+	def __exit__(ii, type, value, traceback):
+		if type and type is ImportError:
+			print(f'Could not import {ii.package}.')
+		return True
 
 ### load (lo) and save (ve) lo_ve things 
 
@@ -373,7 +385,7 @@ if torch:
 
 	fancy = dict()
 
-	def compute_metrix(v: dict, source='', sep='/'):
+	def compute_metrix(v: dict|list|torch.Tensor|np.ndarray, parent='', sep='/', debug=False):
 
 		items = {}
 
@@ -386,24 +398,22 @@ if torch:
 		
 		if isinstance(v, dict):
 			for k_item, v_item in v.items():
-				k = source + sep + k_item
-				items |= compute_metrix(v_item, source=k, sep=sep)
+				k = parent + sep + k_item
+				items |= compute_metrix(v_item, parent=k, sep=sep)
 
 		elif isinstance(v, torch.Tensor):
 			v = v.detach().cpu().numpy()
 
 		if np.isscalar(v):
-			items[source] = v
+			items[parent] = v
 
 		elif isinstance(v, (np.ndarray, np.generic)):
 			
-			items[source + r'_\mu$'] = v.mean()
-			std_name = 'std' + sep + source + r'_\sigma$' if v.std() else 'trash/std' + sep + source + r'_\sigma$' 
+			items[parent + r'_\mu$'] = v.mean()
+			std_name = 'std'+sep+parent + r'_\sigma$' if int(v.std()) else 'trash/std' + sep + parent + r'_\sigma$' 
 			items[std_name] = v.std()
 			
-			
-
-		return flat_any(items)
+		return items
 		
 
 
@@ -416,67 +426,6 @@ if torch:
 		return optree.tree_unflatten(treespec=tree_spec, leaves=leaves)
 
 
-### Jax things
-def import_jax():
-
-	import jax
-	from flax.core.frozen_dict import FrozenDict
-	from jax import random as rnd
-
-	def gen_rng(rng, n_device):
-		""" rng generator for multi-gpu experiments """
-		rng, rng_p = torch.split(rnd.split(rng, n_device+1), [1,])
-		return rng.squeeze(), rng_p	
-
-	def compute_metrix(d:dict, mode='tr', fancy=None, ignore = [], _d = {}):
-		
-		for k,v in d.items():
-			if any([ig in k for ig in ignore+['step']]):
-				continue 
-			
-			if not fancy is None:
-				k = fancy.get(k, k)
-
-			v = jax.device_get(v)
-			
-			if isinstance(v, FrozenDict):
-				v = v.unfreeze()
-			
-			v_mean = jax.tree_map(lambda x: x.mean(), v) if not np.isscalar(v) else v
-			v_std = jax.tree_map(lambda x: x.std(), v) if not np.isscalar(v) else 0.
-
-			group = mode
-			if 'grad' in k:
-				group = mode + '/grad'
-			elif 'param' in k:
-				group += '/param'
-				
-			_d = collect_stats(k, v_mean, _d, p=group, suf=r'_\mu$')
-			_d = collect_stats(k, v_std, _d, p=group+'/std', suf=r'_\sigma$')
-
-		return _d
-
-	### test things
-	def test_print_fp16_no_cast():
-		x = torch.ones([1], dtype='float16')
-		print(x)  # FAILS
-
-	def test_print_fp16():
-		x = torch.ones([1], dtype='float16')
-		x = x.astype('float16')
-		print(x)  # OK
-
-	def test_print_fp32():
-		x = torch.ones([1], dtype='float16')
-		x = x.astype('float16')
-		x = x.astype('float32')
-		print(x)  # OK
-
-	def test_print_fp32_to_fp16_cast():
-		x = torch.ones([1], dtype='float32')
-		x = x.astype('float16')
-		print(x)  # FAILS
-  
 ### exit handling 
 # NB: !Important! Distribution if 1 gpu fails the others continue without this
 import atexit
@@ -502,6 +451,7 @@ class ExitHooks(object):
 
 	def exc_handler(self, exc_type, exc, *args):
 		self.exception = exc
+import traceback
 
 hooks = ExitHooks()
 hooks.hook()
@@ -515,6 +465,7 @@ def exit_foo():
 			# sys.exit(1)
 			# return
 		else:
+			print(traceback.format_exc())
 			run_cmds(f'scancel {os.environ["SLURM_JOBID"]}')
 			with open(fail_flag, 'w') as f:
 				f.write(code)
@@ -568,15 +519,14 @@ class Metrix:
 		opt_obj_key: str, 
 		opt_obj_op: Callable, 
 		v_cpu_d: dict, 
-		log_exp_stats_keys: dict[str:np.ndarray]= None, 
-		every: int= None
+		log_exp_stats_keys: dict[str:np.ndarray]= None,
+		log_eval_keys: dict[str:np.ndarray]= None,
+		this_is_noop: bool = False,
 	) -> dict:
 
-		if not (step % every) or (every is None):
-
+		if not this_is_noop:
+			
 			ii.step, dstep = step, step - ii.step
-
-			dstep = every or dstep 
 
 			ii.t_per_it, ii.t0 = (time() - ii.t0)/dstep, time()
 			ii.max_mem_alloc = torch.cuda.max_memory_allocated() // 1024 // 1024
@@ -585,15 +535,29 @@ class Metrix:
 			ii.opt_obj = opt_obj_op(v_cpu_d[opt_obj_key])
 			ii.opt_obj_all += [ii.opt_obj,]
 
+			overview = dict(opt_obj=ii.opt_obj, t_per_it=ii.t_per_it, max_mem_alloc=ii.max_mem_alloc)
+
+			log_eval_keys = log_eval_keys or None
+			log_exp_stats_keys = log_exp_stats_keys or None
+
+			if ii.mode=='eval':
+				log_exp_stats_keys = log_eval_keys
+			
+			if log_exp_stats_keys is None:
+				log_exp_stats_keys = v_cpu_d.keys()
+
 			log_kv = dict(filter(lambda kv: kv[0] in log_exp_stats_keys, deepcopy(v_cpu_d).items()))
 
-			exp_stats = {'exp_stats': {ii.mode: {ii.phase: log_kv}}}
+			ii.exp_stats = {ii.mode: {ii.phase: {'exp_stats': dict(all=(log_kv or {}), overview=overview)}}}
 
 		else:
-			exp_stats = {}
+			ii.exp_stats = {}
 
-		ii.exp_stats = exp_stats
-		return exp_stats
+		return ii.exp_stats
 	
 	def to_dict(ii):
 		return {k: getattr(ii, k) for k in ii.exp_stats}
+
+
+
+

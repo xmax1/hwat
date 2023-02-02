@@ -1,3 +1,5 @@
+
+import sys
 from pathlib import Path
 import numpy as np
 from datetime import datetime
@@ -34,24 +36,11 @@ python run.py --submit --n_gpu 2 --n_b 2 --mode train --_debug --dist_name naive
 
 
 # advanced test
-c_test = dict(
-	n_sv     = 16,
-	n_pv     = 8,
-	n_fb     = 2,
-	n_det    = 2,
-	n_b 	 = 4,
-	multimode = 'max_mem-record:opt_hypam-record:train-record:eval-record',  # profile
-	n_step   = 50,
-	n_pre_step   = 50,
-	n_eval_step   = 50,
-	debug	= True,
-	exp_name = 'adv_test',
-)
-parameters = dict(
-	n_gpu			=	Param(values=[1,  2], dtype=int),
-	dist_name		= 	Param(values=['naive', 'hf_accel'], dtype=str), 
-	
-)
+config in __init__
+
+python run.py --submit --_debug
+python run.py --submit --_debug --zweep-n_gpu-1-2-4-8-10
+python run.py --submit --run_sweep --_debug
 
 """
 
@@ -67,8 +56,8 @@ class Pyfig(PyfigBase):
 	group_exp: 			bool	= False
 	lo_ve_path: 		str 	= '' # for LOad & saVE -> lo_ve
 
-	mode: 				str		= ''
-	multimode: 			str		= 'train:eval'
+	mode: 				str		= '' # one or the other
+	multimode: 			str		= ''
 
 	debug: 				bool    = False
 	run_sweep:      	bool    = False
@@ -82,16 +71,14 @@ class Pyfig(PyfigBase):
 	n_eval_step:        int   	= 100
 	n_total_step: 	 	int   	= property(lambda _: _.n_step + _.n_pre_step + _.n_eval_step)
 
-	step: 				int 	= None
-	log_metric_n_times:	int   	= 20
-	log_state_n_times:	int   	= 2
+	step: 				int 	= None  # needed for state load
 
-	### maybe deprecated ###
-	log_metric_step: 	int   	= property(lambda _: 2 if _.debug else _.n_step//20)
-	log_state_step: 	int   	= property(lambda _: 2 if _.debug else _.n_step//5)
-	### maybe deprecated ###
+	log_metric_nper_phase:int   = 20
+	log_state_nper_phase:int   	= 2
+	is_logging_process: bool 	= property(lambda _: _.mode==_.tag.opt_hypam or _.dist.head)
+	# is_log_step: Callable = lambda mode, step, : phase==c.tag.eval % _.log_metric_nper_phase == 0)
 
-	log_exp_stats_keys: str		= ['e', 't_per_it', 'max_mem_alloc']
+	log_exp_stats_keys: str		= None  # ['e', 't_per_it', 'max_mem_alloc']
 	log_data_dump_keys: str		= None
  
 	opt_obj_key:			str		= 'e'
@@ -104,6 +91,8 @@ class Pyfig(PyfigBase):
 
 		system_name: str		= ''
 		system_id = property(lambda _: [[int(a_z_i), a_i.tolist()] for a_z_i, a_i in zip(_.a_z, _.a)])
+		system_id_path: str = property(lambda _: _._p.dump_dir / f'{_.system_id}.txt')
+
 
 		charge:     int         = 0
 		spin:       int         = 0
@@ -122,6 +111,7 @@ class Pyfig(PyfigBase):
 		n_d:        int         = property(lambda _: _.n_e - _.n_u)
 		
 		n_equil_step:int        = property(lambda _: 1000//_.n_corr)
+
 
 		def __init__(ii, parent=None) -> None:
 			super().__init__(parent=parent)
@@ -162,6 +152,9 @@ class Pyfig(PyfigBase):
 			wandb.log(dict(Result=Result) | (summary or {}))
 
 			return True
+		
+		def post_init_update(ii):
+			return systems.get(ii.system_name, {})
 
 	class model(PyfigBase.model):
 		compile_ts: 	bool	= False
@@ -206,19 +199,19 @@ class Pyfig(PyfigBase):
 
 		parameters: 	dict 	= dict(
 			# dtype			=	Param(values=[torch.float32, torch.float64], dtype=str), # !! will not work
-			# n_b			=	Param(values=[512, 1024, 2048], dtype=int), # 
-
 			opt_name		=	Param(values=['AdaHessian',  'RAdam'], dtype=str),
 			lr				=	Param(domain=(0.0001, 1.), log=True),
 			sch_max_lr		=	Param(values=[0.1, 0.01, 0.001], dtype=float),
 			weight_decay	= 	Param(domain=[0.0, 1.], dtype=float, condition=['AdaHessian',]),
 			hessian_power	= 	Param(values=[0.5, 1.], dtype=float, condition=['AdaHessian',]),
-
-			# n_sv	= 	Param(values=[16, 32, 64], dtype=int),
-			# n_pv	= 	Param(values=[16, 32, 64], dtype=int),
-			# n_det	= 	Param(values=[1, 2, 4, 8], dtype=int),
-			# n_fb	= 	Param(values=[1, 2, 3, 4], dtype=int),
-			# n_b	= 	Param(values=[512, 1024, 2048, 4096], dtype=int),
+		)
+		
+		_model_sweep_parameters: dict = dict(
+			n_sv	= 	Param(values=[16, 32, 64], dtype=int),
+			n_pv	= 	Param(values=[16, 32, 64], dtype=int),
+			n_det	= 	Param(values=[1, 2, 4, 8], dtype=int),
+			n_fb	= 	Param(values=[1, 2, 3, 4], dtype=int),
+			n_b		= 	Param(values=[512, 1024, 2048, 4096], dtype=int)
 		)
 
 	class dist(naive):
@@ -235,8 +228,7 @@ class Pyfig(PyfigBase):
 
 	def __init__(ii, notebook: bool=False, sweep: dict={}, c_init: dict={}, **other_arg) -> None:
 
-		import sys
-		print('--_debug' in sys.argv, sys.argv)
+		print('--_debug' in sys.argv, sys.argv, sep='\n')
 		if '--_debug' in sys.argv:
 			c_init = dict(
 				n_sv     = 16,
@@ -244,17 +236,26 @@ class Pyfig(PyfigBase):
 				n_fb     = 2,
 				n_det    = 2,
 				n_b 	 = 4,
-				multimode = 'max_mem-record:opt_hypam-record:train-record:eval-record',  # profile
+				multimode = 'max_mem:opt_hypam:train:eval',  # profile
 				n_step   = 50,
 				n_pre_step   = 50,
 				n_eval_step   = 50,
 				debug	= True,
+				exp_name = 'adv_test',
 			)
+
+			sweep = dict(
+				parameters = dict(
+					n_gpu			=	Param(values=[1,  2], dtype=int),
+					dist_name		= 	Param(values=['naive', 'hf_accel'], dtype=str), 
+			))
+			sweep = None
+
 
 		print('\npyfig:init')
 		super().__init__(notebook=notebook, c_init=c_init, sweep=sweep, **other_arg)
 
-		ii.update(systems.get(ii.app.system_name, {}))
+		ii.update(ii.)
 
 		ii.run_local_or_submit()
 

@@ -85,7 +85,7 @@ class Ansatz_fb(nn.Module):
 		ii.w_final = nn.Linear(ii.n_det, 1, bias=False)
 
 		ii.register_buffer('a', a.detach().clone().requires_grad_(False), persistent=False)    # tensor
-		ii.register_buffer('eye', torch.eye(ii.n_e)[None, :, :, None].requires_grad_(False), persistent=False)
+		ii.register_buffer('eye', torch.eye(ii.n_e)[None, :, :, None].requires_grad_(False), persistent=False) # ! persistent moves with model to device etc
 		ii.register_buffer('ones', torch.ones((1, ii.n_det)).requires_grad_(False), persistent=False)
 		ii.register_buffer('zeros', torch.zeros((1, ii.n_det)).requires_grad_(False), persistent=False)
   

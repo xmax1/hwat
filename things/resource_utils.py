@@ -33,7 +33,7 @@ from .utils import get_cartesian_product, type_me, run_cmds, flat_any
 from torch import nn
 
 this_dir = Path(__file__).parent
-hostname = os.environ['HOSTNAME']
+hostname = os.environ('HOSTNAME', None)
 
 from .pyfig_utils import PlugIn, PyfigBase
 
@@ -57,6 +57,7 @@ class niflheim(PyfigBase.resource):
 	n_device_env:	str		= 'CUDA_VISIBLE_DEVICES'
 	# n_device:       int     = property(lambda _: sum(c.isdigit() for c in os.environ.get(_.n_device_env, '')))
 	n_device:       int     = property(lambda _: len(os.environ.get(_.n_device_env, '').replace(',', '')))
+
 
 	class slurm_c(PlugIn):
 		export			= 'ALL'

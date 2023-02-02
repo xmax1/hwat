@@ -9,9 +9,8 @@ import numpy as np
 import torch
 import optree
 
-from ..utils import debug_dict, dict_to_cmd, flat_any
+from ..utils import flat_any
 from ..pyfig_utils import PyfigBase, PlugIn 
-from ..utils import type_check_v
 from ..utils import get_max_n_from_filename
 from ..pyfig_utils import lo_ve
 
@@ -51,30 +50,44 @@ def gen_profile(
 	return init_d
 
 
-def get_max_mem_c(fn: Callable, c: PyfigBase, max_mem_min=8, max_max_mem=20, **kw) -> dict:
+def flat_dict(d:dict, items:list[tuple]=None):
+	items = items or []
+	for k,v in d.items():
+		if isinstance(v, dict):
+			items.extend(flat_dict(v, items=items).items())
+		else:
+			items.append((k, v))
+	return dict(items)
 	
+
+def get_max_mem_c(fn: Callable, c: PyfigBase, max_mem_min=8, max_max_mem=20, **kw) -> dict:
 	import traceback
 
 	t = torch.cuda.get_device_properties(0).total_memory // 1024 // 1024
 	r = torch.cuda.memory_reserved(0)
 	a = torch.cuda.memory_allocated(0)
+
 	print('get_max_mem_c:total memory on device: ', t)
 
 	for n_b_power in range(max_mem_min, max_max_mem):
 		try:
 			
 			n_b = n_b=2**n_b_power
-			c.update(dict(n_b = n_b, mode='train', n_step = 30))
+			c.update(dict(n_b= n_b))
+
 			v_run = fn(c=c)
 
-			mem_used = v_run['max_mem_alloc']
+			max_mem_alloc_key = [k for k in flat_any(v_run).keys() if c.tag.max_mem_alloc in k][0]
+			mem_used = flat_any(v_run)[max_mem_alloc_key]
+
 			print(f'n_b {n_b} used {mem_used} out of {t}')
 
 			torch.cuda.empty_cache()
 			
 			if mem_used > t/2:
 				print('get_max_mem: b_s is ', n_b)
-				return dict(n_b=n_b, n_b_max=n_b, max_mem_alloc=mem_used)
+				v_run[c.tag.c_update_next] = dict(n_b=n_b)
+				return v_run
 
 		except Exception as e:
 			print(traceback.format_exc())

@@ -26,7 +26,7 @@ from .utils import mkdir, iterate_n_dir, gen_time_id, add_to_Path, dump, load
 from .utils import get_cartesian_product, type_me, run_cmds, flat_any 
 
 this_file_path = Path(__file__) 
-hostname = os.environ['HOSTNAME']
+hostname = os.environ('HOSTNAME', None)
 
 class PlugIn:
 	_p = None
@@ -187,7 +187,6 @@ class PyfigBase:
 		
 		_device: 		str		= 'cpu'
 		_gpu_id_cmd:	str		= 'nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'
-		_srun_cmd: 		str		= 'srun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label --export=RANK={submit_i}'
 
 		plugin_ignore: 	list	= ['launch_cmd']
 
@@ -227,15 +226,30 @@ class PyfigBase:
 		script:			Callable= None
 		device_log_path:Callable= None
 
+
 	class tag(PlugIn):
+		data: str		= 'data'
+		max_mem_alloc: str = 'max_mem_alloc'
+
 		pre: str = 'pre'
 		train: str = 'train'
 		eval: str = 'eval'
+		opt_hypam: str = 'opt_hypam'
+		max_mem: str = 'max_mem'
+
 		record: str = 'record'
-		mean: str = 'mean'
-		next_run: str = 'next_run'
+
+		mode_next: str = 'mode_next'
+		c_update_next: str = 'c_update_next'
+		v_init_next: str = 'v_init_next'
+		send_to_next: str = 'send_to_next'
+
+		lo_ve_path: str = 'lo_ve_path'
+		
 		gather: str = 'gather'
-		next_run_c_update: str = 'next_run_c_update'
+		mean: str = 'mean'
+
+
 
 
 	home:					Path	= Path().home()
@@ -253,10 +267,10 @@ class PyfigBase:
 	fail_dir: 				Path    = property(lambda _: Path(_.exp_dir, 'fail'))
 	log_dir: 				Path    = property(lambda _: _.cluster_dir)
 
-	next_run_state_path:	Path	= property(lambda _: Path(_.state_dir, f'{_.run_id}_success.state'))
+	state_next_path:	Path	= property(lambda _: Path(_.state_dir, f'{_.run_id}_success.state'))
 
 	_ignore_f = ['commit', 'pull', 'backward', 'accel', 'plugin_ignore']
-	_ignore_c = ['parameters', 'scf']
+	_ignore_c = ['parameters', 'scf', 'tag']
 	ignore: list = ['ignore', 'd', 'cmd', 'sub_ins', 'd_flat'] + _ignore_f + _ignore_c
 	_group_i: int = 0
 	_sub_ins: dict = {}
