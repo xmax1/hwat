@@ -30,7 +30,7 @@ from .pyfig_utils import PlugIn, PyfigBase
 from torch import nn
 
 this_dir = Path(__file__).parent
-hostname = os.environ('HOSTNAME', None)
+hostname = os.environ.get('HOSTNAME', None)
 
 
 class naive(PyfigBase.dist):

@@ -40,6 +40,7 @@ config in __init__
 
 python run.py --submit --_debug
 python run.py --submit --_debug --zweep-n_gpu-1-2-4-8-10
+python run.py --submit --_debug --mode opt_hypam --n_b 2 --n_gpu 2 --exp_name demo~opt
 python run.py --submit --run_sweep --_debug
 
 """
@@ -92,7 +93,6 @@ class Pyfig(PyfigBase):
 		system_name: str		= ''
 		system_id = property(lambda _: [[int(a_z_i), a_i.tolist()] for a_z_i, a_i in zip(_.a_z, _.a)])
 		system_id_path: str = property(lambda _: _._p.dump_dir / f'{_.system_id}.txt')
-
 
 		charge:     int         = 0
 		spin:       int         = 0
@@ -200,9 +200,9 @@ class Pyfig(PyfigBase):
 		parameters: 	dict 	= dict(
 			# dtype			=	Param(values=[torch.float32, torch.float64], dtype=str), # !! will not work
 			opt_name		=	Param(values=['AdaHessian',  'RAdam'], dtype=str),
+			weight_decay	= 	Param(domain=[0.0, 1.], dtype=float, condition=['AdaHessian',]),
 			lr				=	Param(domain=(0.0001, 1.), log=True),
 			sch_max_lr		=	Param(values=[0.1, 0.01, 0.001], dtype=float),
-			weight_decay	= 	Param(domain=[0.0, 1.], dtype=float, condition=['AdaHessian',]),
 			hessian_power	= 	Param(values=[0.5, 1.], dtype=float, condition=['AdaHessian',]),
 		)
 		
@@ -246,16 +246,17 @@ class Pyfig(PyfigBase):
 
 			sweep = dict(
 				parameters = dict(
-					n_gpu			=	Param(values=[1,  2], dtype=int),
-					dist_name		= 	Param(values=['naive', 'hf_accel'], dtype=str), 
+					n_gpu			=	dict(values=[1,  2], dtype=int),
+					dist_name		= 	dict(values=['naive', 'hf_accel'], dtype=str), 
+					opt_name		=	dict(values=['AdaHessian',  'RAdam'], dtype=str),
+					weight_decay	= 	dict(domain=[0.0, 1.], dtype=float, condition=['AdaHessian',]),
 			))
-			sweep = None
 
 
 		print('\npyfig:init')
 		super().__init__(notebook=notebook, c_init=c_init, sweep=sweep, **other_arg)
 
-		ii.update(ii.)
+		ii.update(ii.app.post_init_update())
 
 		ii.run_local_or_submit()
 

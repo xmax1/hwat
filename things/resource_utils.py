@@ -33,7 +33,7 @@ from .utils import get_cartesian_product, type_me, run_cmds, flat_any
 from torch import nn
 
 this_dir = Path(__file__).parent
-hostname = os.environ('HOSTNAME', None)
+hostname = os.environ.get('HOSTNAME', None)
 
 from .pyfig_utils import PlugIn, PyfigBase
 

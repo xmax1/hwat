@@ -39,13 +39,18 @@ def str_lower_eq(a: str, b:str):
 
 def objective(trial: Trial, c: PyfigBase, run: Callable):
 	c_update_next = get_hypam_from_study(trial, c.sweep.parameters)
+	
 	print('trial')
 	pprint.pprint(c_update_next)
+
 	c.mode = 'train'
 	v_run = run(c=c, c_update=c_update_next)
-	c.mode = 'eval-dark'
-	v_run = run(c=c, v_init=v_run.get('v_init_next', {}))
-	return np.stack(v_run['opt_obj_all']).mean()
+	c.mode = 'eval'
+	v_run = run(c=c, v_init=v_run.get(c.tag.v_init_next, {}))
+
+	dummy = [np.array([0.0]), np.array([0.0])]
+	opt_obj_all = v_run.get(c.tag.v_cpu_d_prev, {}).get(c.tag.opt_obj_all, dummy)
+	return np.asarray(opt_obj_all).mean()
 
 
 def suggest_hypam(trial: optuna.Trial, name: str, v: Param):

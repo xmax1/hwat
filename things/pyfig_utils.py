@@ -26,7 +26,7 @@ from .utils import mkdir, iterate_n_dir, gen_time_id, add_to_Path, dump, load
 from .utils import get_cartesian_product, type_me, run_cmds, flat_any 
 
 this_file_path = Path(__file__) 
-hostname = os.environ('HOSTNAME', None)
+hostname = os.environ.get('HOSTNAME', None)
 
 class PlugIn:
 	_p = None
@@ -92,6 +92,9 @@ class Param(PlugIn):
 		ii.sample = sample
 		ii.step_size = step_size
 		ii.condition = condition
+	
+	def get(ii, key, dummy=None):
+		return getattr(ii, key, dummy)
 
 class PyfigBase:
 
@@ -230,6 +233,7 @@ class PyfigBase:
 	class tag(PlugIn):
 		data: str		= 'data'
 		max_mem_alloc: str = 'max_mem_alloc'
+		opt_obj_all: str = 'opt_obj_all'
 
 		pre: str = 'pre'
 		train: str = 'train'
@@ -243,6 +247,7 @@ class PyfigBase:
 		c_update_next: str = 'c_update_next'
 		v_init_next: str = 'v_init_next'
 		send_to_next: str = 'send_to_next'
+		v_cpu_d_prev: str = 'v_cpu_d_prev'
 
 		lo_ve_path: str = 'lo_ve_path'
 		
