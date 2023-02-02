@@ -38,6 +38,7 @@ python run.py --submit --n_gpu 2 --n_b 2 --mode train --_debug --dist_name naive
 # advanced test
 config in __init__
 
+python run.py --submit --a_z [4] --exp_name sanity
 python run.py --submit --_debug
 python run.py --submit --_debug --zweep-n_gpu-1-2-4-8-10
 python run.py --submit --_debug --mode opt_hypam --n_b 2 --n_gpu 2 --exp_name demo~opt

@@ -398,7 +398,7 @@ if torch:
 		
 		if isinstance(v, dict):
 			for k_item, v_item in v.items():
-				k = parent + sep + k_item
+				k = ((parent + sep) if parent else '') + k_item
 				items |= compute_metrix(v_item, parent=k, sep=sep)
 
 		elif isinstance(v, torch.Tensor):
@@ -410,8 +410,8 @@ if torch:
 		elif isinstance(v, (np.ndarray, np.generic)):
 			
 			items[parent + r'_\mu$'] = v.mean()
-			std_name = 'std'+sep+parent + r'_\sigma$' if int(v.std()) else 'trash/std' + sep + parent + r'_\sigma$' 
-			items[std_name] = v.std()
+			if v.std():
+				items['std'+sep+parent + r'_\sigma$'] = v.std()
 			
 		return items
 		
