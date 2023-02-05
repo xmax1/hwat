@@ -26,8 +26,7 @@ from functools import partial
 import numpy as np
 from .utils import get_max_n_from_filename
 
-from .utils import dict_to_cmd, cmd_to_dict, dict_to_wandb, debug_dict
-from .utils import mkdir, iterate_n_dir, gen_time_id, add_to_Path, dump, load
+from .utils import dict_to_cmd
 from .utils import get_cartesian_product, type_me, run_cmds, flat_any 
 
 from torch import nn
@@ -37,13 +36,14 @@ hostname = os.environ.get('HOSTNAME', None)
 
 from .pyfig_utils import PlugIn, PyfigBase
 
+import math 
 
 class niflheim(PyfigBase.resource):
 	_p: PyfigBase   = None
 
 	env: str     	= ''
 	n_gpu: int 		= 1
-	n_node: int		= 1
+	n_node: int 	= property(lambda _: int(math.ceil(_.n_gpu/10))) 
 
 	architecture:   str 	= 'cuda'
 	nifl_gpu_per_node: int  = property(lambda _: 10)
@@ -61,12 +61,12 @@ class niflheim(PyfigBase.resource):
 
 	class slurm_c(PlugIn):
 		export			= 'ALL'
-		nodes           = '1' 			# (MIN-MAX) 
 		cpus_per_gpu   = 8				# 1 task 1 gpu 8 cpus per task 
 		partition       = 'sm3090'
 		time            = '0-00:10:00'  # D-HH:MM:SS
-		gres            = property(lambda _: 'gpu:RTX3090:' + (str(_._p.n_gpu) if int(_.nodes) == 1 else '10'))
-		ntasks          = property(lambda _: _._p.n_gpu)
+		nodes           = property(lambda _: str(_._p.n_node)) 			# (MIN-MAX) 
+		gres            = property(lambda _: 'gpu:RTX3090:' + str(min(10, _._p.n_gpu)))
+		ntasks          = property(lambda _: _._p.n_gpu if int(_.nodes)==1 else int(_.nodes)*80)
 		job_name        = property(lambda _: _._p._p.exp_name)
 		output          = property(lambda _: _._p._p.cluster_dir/'o-%j.out')
 		error           = property(lambda _: _._p._p.cluster_dir/'e-%j.err')
@@ -99,6 +99,7 @@ class niflheim(PyfigBase.resource):
 		export NUMEXPR_NUM_THREADS=1
 		export OMP_NUM_THREADS=8
 		export OPENBLAS_NUM_THREADS=1
+		export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
 		echo $PWD
 		"""

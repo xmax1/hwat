@@ -111,6 +111,7 @@ class naive(PyfigBase.dist):
 			gc.enable()
 		return v_sync
 
+
 try:
 	import accelerate
 
@@ -122,7 +123,8 @@ try:
 		dist_name: str		= 'hf_accel'
 
 		accel: accelerate.Accelerator = None
-		
+		ready: bool = property(lambda _: _.accel is not None)
+
 		split_batches: bool		= False  # if True, reshapes data to (n_gpu, batch_size//n_gpu, ...)
 		mixed_precision: str	= 'no' # 'fp16, 'bf16'
 
@@ -130,41 +132,82 @@ try:
 			lambda submit_i, cmd: 
 			f'accelerate launch {dict_to_cmd(_.dist_c.d, exclude_false=True)} {_._p.run_name} \ "{cmd}" '
 		) # ! backslash must come between run.py and cmd and "cmd" needed
-			
-		sync_step: int = 5
+
+		class hostfile(PlugIn):
+			slots = 10 # !!! max per resource fix
+			ip = property(lambda _: dict(
+				ip0 = _.slots,
+				ip1 = _.slots,
+			))
+
+		# class _dist_c_multinode(PlugIn):
+		# 	compute_environment: LOCAL_MACHINE
+		# 	distributed_type: DEEPSPEED
+		# 	fsdp_config: {}
+		# 	machine_rank: 0 # 1 in the second node
+		# 	main_process_ip: 192.xxx.x.xx
+		# 	main_process_port: 29500
+		# 	main_training_function: main
+		# 	mixed_precision: fp16
+		# 	num_machines: 2
+		# 	num_processes: 4
+		# 	use_cpu: false
+			# class deepspeed_c(PlugIn):
+			# 	deepspeed_multinode_launcher: standard
+			# 	gradient_accumulation_steps: 1
+			# 	gradient_clipping: 1.0
+			# 	offload_optimizer_device: none
+			# 	offload_param_device: none
+			# 	zero3_init_flag: false
+			# 	zero_stage: 2
 
 		class dist_c(PlugIn):
 			multi_gpu = True
-			machine_rank = '0'
-			same_network = True
+			machine_rank = property(lambda _: '0')
+			# same_network = True
 			main_process_port = property(lambda _: find_free_port()) # 
 			num_processes =  property(lambda _: str(_._p._p.resource.n_gpu))
 			num_machines =  property(lambda _: str(_._p._p.resource.n_node))
+			num_cpu_threads_per_process = property(lambda _: str(_._p._p.resource.slurm_c.cpus_per_gpu))
 
 		def __init__(ii, parent=None):
 			super().__init__(parent=parent)
-
 			ii.plugin_ignore += ['accel']
+			ii.init()
 
+		def init(ii):
 			ii.accel = accelerate.Accelerator(
 				split_batches=getattr(ii, 'split_batches'), mixed_precision=getattr(ii, 'mixed_precision')
 			)
+		
+		def wait_for_everyone(ii):
+			ii.accel.wait_for_everyone()
+
+		def end(ii):
+			ii.accel.wait_for_everyone()
+			ii.accel.free_memory()
+			try:
+				ii.accel.end_training()
+			except Exception as e:
+				print(e)
+			del ii.accel
+			ii.accel = None
+			print('hf_accel end. Make sure to reinit')
 
 		@torch.no_grad()
 		def dist_sync(ii, v_d: dict[str:torch.Tensor], sync_method: str) -> list[torch.Tensor]:
-			v_flat, treespec = optree.tree_flatten(v_d)
-			v_sync_flat: list[torch.Tensor] = ii.accel.gather(v_flat)
+			# v_flat, treespec = optree.tree_flatten(v_d)
+
+			if sync_method == ii._p.tag.mean:
+				v_sync: list[torch.Tensor] = ii.accel.reduce(v_d, reduction='mean')
+
+			elif sync_method == ii._p.tag.gather:
+				v_sync: list[torch.Tensor] = ii.accel.gather(v_d)
+
+			else:
+				raise ValueError(f'Unknown sync method {sync_method}')
 			
-			for i, (v, v_ref) in enumerate(zip(v_sync_flat, v_flat)):
-				v = v.reshape(-1, *v_ref.shape)
-
-				if sync_method == ii._p.tag.mean:
-					v = v.mean(dim=0)
-				elif sync_method == ii._p.tag.gather:
-					pass
-
-				v_sync_mean = [v] if i==0 else [*v_sync_mean, v]
-			v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync_mean)
+			# v_sync = optree.tree_unflatten(treespec=treespec, leaves=v_sync_flat)
 			return v_sync
 
 		def backward(ii, loss: torch.Tensor, create_graph=False):
@@ -175,15 +218,16 @@ try:
 			ii._device = ii.accel.device
 			return ii._device
 
-		def dist_set_seed(ii, seed=None):
+		def dist_set_seed(ii, seed):
 			from accelerate.utils import set_seed
-			print('setting seed w accelerate ' )
-			ii._seed = seed or ii._p.seed
-			set_seed(ii._seed, device_specific=True)
+			print('setting seed w accelerate ', seed)
+			set_seed(seed, device_specific=True)
+			return seed
 	
 		def prepare(ii, *arg, **kw):
-			print(ii.accel.device, ii.accel.is_main_process, ii.accel.is_local_main_process, sep='\n')
-			return ii.accel.prepare(*arg, **kw)  # docs:accelerate
+			print('dist:hf_accel:prepare: device,is_main,is_local', \
+				ii.accel.device, ii.accel.is_main_process, ii.accel.is_local_main_process, sep='\n')
+			return ii.accel.prepare(*arg, **kw) 
 
 		def unwrap(ii, model:nn.Module):
 			return ii.accel.unwrap_model(model)
@@ -203,5 +247,6 @@ try:
 			**sync_gradients** (bool) -- Whether the gradients are currently being synced across all processes.
 			**use_distributed** (bool) -- Whether the current configuration is for distributed training.
 			"""
+
 except Exception as e:
 	print('likely need to install hugging face accelerate package mk ', e)

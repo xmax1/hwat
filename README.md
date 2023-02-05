@@ -79,7 +79,7 @@ message Steen 8 node 4h block
 - 
 
 # FIX 
-- Pretrain on diag gaussian
+- pre on diag gaussian
 - Loop over dense
 - Do arrays roll from right
 

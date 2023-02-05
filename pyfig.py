@@ -8,7 +8,7 @@ from typing import Callable, Any
 
 from things.pyfig_utils import PyfigBase, Param, PlugIn
 from things.resource_utils import niflheim
-from things.distribute_utils import naive, hf_accel
+from things.distribute_utils import naive
 
 from dump.systems import systems
 from dump.user_secret import user
@@ -17,9 +17,82 @@ import wandb
 
 """ 
 # issues
+* ** *** **** ***** importance
 - type_me argument parsing fails for empty lists. Error is caught but unsure if other effects so far. 
 - paths and dirs need to be strings, not Nones
-- 
+- exp_name something/something~something is not parsed correctly
+- on niflheim, use export TMPDIR=/tmp for the node local scratch space.
+- on niflheim, special scratch space /home/scratch2/$USER/ across nodes
+- / not allowed in exp_name
+- fail flag does not work
+- all dirs created when not needed
+- generalised to numpy and torch tensors conversions with None and other catches ****
+- informed syntax for flat calls ***
+- sync forced by run loop function *
+- naive distribution doesn't synchronize the opt hypam correct
+- run_local_or_submit --> if: run_submit statement. Follow 'external condition' or 'this_is_noop' pattern
+- group exp method clean -> create_new_exp_dir is property
+- float64 torch
+- include in opt_hypam *
+- distribution schema 
+	- include docs in base classes
+	- distribute / resource
+		- tasks -> threads -> processes -> nodes -> gpus -> cpus -> rank... 
+
+- DISTRIBUTION OF HF_ACCEL 
+- 1. write a hostfile (plugin)
+Distributed GPUs:
+  Arguments related to distributed GPU training.
+
+  --gpu_ids GPU_IDS     What GPUs (by id) should be used for training on this machine as a comma-seperated list
+  --same_network        Whether all machines used for multinode training exist on the same local network.
+  --machine_rank MACHINE_RANK
+                        The rank of the machine on which this script is launched.
+  --main_process_ip MAIN_PROCESS_IP
+                        The IP address of the machine of rank 0.
+  --main_process_port MAIN_PROCESS_PORT
+                        The port to use to communicate with the machine of rank 0.
+  --rdzv_conf RDZV_CONF
+                        Additional rendezvous configuration (<key1>=<value1>,<key2>=<value2>,...).
+  --max_restarts MAX_RESTARTS
+                        Maximum number of worker group restarts before failing.
+  --monitor_interval MONITOR_INTERVAL
+                        Interval, in seconds, to monitor the state of workers.
+- -2 to switch off sync_step / logging etc 
+
+- pyfig 'create_new' needed to pass a deepcopy object to a run mode ** 
+
+
+
+# Create the summary run.
+# summary = wandb.init(project="optuna",
+# 					name="summary",
+# 					job_type="logging")
+
+# Getting the study trials.
+# trials = study.trials
+
+# WandB summary.
+# for step, trial in enumerate(trials):
+# 	# Logging the loss.
+# 	summary.log({"mse": trial.value}, step=step)
+
+# 	# Logging the parameters.
+# 	for k, v in trial.params.items():
+# 		summary.log({k: v}, step=step)
+
+
+# distribution
+- local rank: rank on a node
+- global rank: rank across nodes
+- group rank: rank within a group (ie node)
+You can think of world as a group containing all the processes for your distributed training.
+
+# patterns
+- use of 'external condition' or 'this_is_noop' pattern
+- main method and shortcut
+	- group_exp vs ~
+	- run_sweep vs zweep 
 
 # useful 
 - variable descriptions things/pyfig_def.py
@@ -38,11 +111,37 @@ python run.py --submit --n_gpu 2 --n_b 2 --mode train --_debug --dist_name naive
 # advanced test
 config in __init__
 
-python run.py --submit --a_z [4] --exp_name sanity
-python run.py --submit --_debug
-python run.py --submit --_debug --zweep-n_gpu-1-2-4-8-10
-python run.py --submit --_debug --mode opt_hypam --n_b 2 --n_gpu 2 --exp_name demo~opt
-python run.py --submit --run_sweep --_debug
+# debug 1
+
+python run.py --submit --a_z [4] --exp_name ~be --n_gpu 2 --dist_name naive --n_b 2048
+python run.py --submit --a_z [4] --exp_name ~be --n_gpu 2 --dist_name hf_accel --n_b 2048
+
+
+python run.py --submit --_debug --exp_name debug/debug
+python run.py --submit --_debug --zweep n_gpu-1-4-int --dist_name hf_accel --exp_name debug/debug
+python run.py --submit --_debug --mode opt_hypam --n_b 2 --n_gpu 2 --exp_name demo~opt --dist_name naive --exp_name debug/debug
+python run.py --submit --_debug --multimode max_mem:opt_hypam:train:eval --n_step 20 --n_b 2 --exp_name ~debug_mode --time 00:30:00 
+
+
+# debug 2
+python run.py --submit --time 01:00:00 --system O2_neutral_triplet --exp_name sys-O2 --multimode train:eval
+python run.py --submit --time 01:00:00 --system O2_neutral_triplet --exp_name sys-O2 --multimode pre:train:eval
+python run.py --submit --time 01:00:00 --system O2_neutral_triplet --dist_name hf_accel --exp_name O2-demo --multimode pre:train:eval
+python run.py --submit --time 04:00:00 --system O2_neutral_triplet --dist_name naive --zweep n_gpu-1-2-4-8-10-20-int --exp_name ~scale --multimode max_mem:opt_hypam:pre:train:eval --n_step 1000
+python run.py --submit --time 04:00:00 --system O2_neutral_triplet --dist_name naive --n_gpu 20 --n_node 2 --exp_name sweep-2node --multimode max_mem:opt_hypam:pre:train:eval --n_step 1000
+python run.py --submit --time 01:00:00 --system O2_neutral_triplet --dist_name hf_accel --n_gpu 20 --n_node 2 --exp_name demo/2node_sweep
+python run.py --submit --time 01:00:00 --mode opt_hypam --n_gpu 2 --n_step 1000 --n_step_eval 200 --n_step_pre 200 --exp_name demo/opt_hypam
+python run.py --submit --time 01:00:00 --system O2_neutral_triplet --dist_name hf_accel --n_gpu 2 --exp_name demo/all --multimode max_mem:opt_hypam:pre:train:eval
+
+# run 1
+- base model 
+- max mem only head
+
+python run.py --submit --time 01:00:00 --system O2_neutral_triplet --dist_name hf_accel --zweep-n_gpu-1-2-4-8-10 --exp_name O2_scaling --multimode max_mem:opt_hypam
+python run.py --submit --time 01:00:00 --system O2_neutral_triplet --dist_name hf_accel --zweep-n_gpu-1-2-4-8-10 --exp_name O2_scaling --multimode max_mem:opt_hypam
+
+
+
 
 """
 
@@ -59,26 +158,35 @@ class Pyfig(PyfigBase):
 	lo_ve_path: 		str 	= '' # for LOad & saVE -> lo_ve
 
 	mode: 				str		= '' # one or the other
-	multimode: 			str		= ''
+	multimode: 			str		= 'pre:train:eval'
 
 	debug: 				bool    = False
 	run_sweep:      	bool    = False
 	
 	seed:           	int   	= 808017424 # grr
 	dtype:          	str   	= None # torch.float32  # keep torch out ofthe namespace for now
-	cudnn_benchmark: 	bool 	= False
+	cudnn_benchmark: 	bool 	= True
 
-	n_step:         	int   	= 1000
-	n_pre_step:    		int   	= 250
-	n_eval_step:        int   	= 100
-	n_total_step: 	 	int   	= property(lambda _: _.n_step + _.n_pre_step + _.n_eval_step)
+	n_default_step: 	int 	= 1000
+	n_train_step:   	int   	= 0
+	n_pre_step:    		int   	= 0
+	n_eval_step:        int   	= 0
+	n_opt_hypam_step:   int   	= 0
+	n_max_mem_step:     int   	= 0
+	n_step:         	dict   	= property(lambda _: dict(
+		n_train_step		=_.n_train_step, 
+		n_pre_step			=_.n_pre_step, 
+		n_eval_step			=_.n_eval_step, 
+		n_opt_hypam_step	=_.n_opt_hypam_step, 
+		n_max_mem_step		=_.n_max_mem_step
+		).get(f'n_{_.mode}_step') or _.n_default_step
+	)
 
 	step: 				int 	= None  # needed for state load
 
-	log_metric_nper_phase:int   = 20
-	log_state_nper_phase:int   	= 2
+	n_log_metric:		int  	= 100
+	n_log_state:		int  	= 4
 	is_logging_process: bool 	= property(lambda _: _.mode==_.tag.opt_hypam or _.dist.head)
-	# is_log_step: Callable = lambda mode, step, : phase==c.tag.eval % _.log_metric_nper_phase == 0)
 
 	log_exp_stats_keys: str		= None  # ['e', 't_per_it', 'max_mem_alloc']
 	log_data_dump_keys: str		= None
@@ -86,11 +194,11 @@ class Pyfig(PyfigBase):
 	opt_obj_key:			str		= 'e'
 	opt_obj_op: Callable = property(lambda _: lambda x: x.std())
 	
+
 	class data(PlugIn):
-		n_b: int = 64
+		n_b: int = 1024
 	
 	class app(PlugIn):
-
 		system_name: str		= ''
 		system_id = property(lambda _: [[int(a_z_i), a_i.tolist()] for a_z_i, a_i in zip(_.a_z, _.a)])
 		system_id_path: str = property(lambda _: _._p.dump_dir / f'{_.system_id}.txt')
@@ -103,7 +211,10 @@ class Pyfig(PyfigBase):
 		n_corr:     int         = 20
 		n_equil_step:int		= 0
 		acc_target: int         = 0.5
+		init_data_scale: float  = 5.0
 
+		_hf 	= None
+		_mol 	= None
 		hf: 	   Any          = property(lambda _: _._hf)
 		mol: 	   Any	        = property(lambda _: _._mol)
 
@@ -113,10 +224,10 @@ class Pyfig(PyfigBase):
 		
 		n_equil_step:int        = property(lambda _: 1000//_.n_corr)
 
-
-		def __init__(ii, parent=None) -> None:
-			super().__init__(parent=parent)
-
+		def init_app(ii):
+			""" 
+			- want this to happen after pyfig is updated
+			"""
 			from pyscf import gto
 
 			mol: gto.Mole = gto.Mole(
@@ -157,6 +268,9 @@ class Pyfig(PyfigBase):
 		def post_init_update(ii):
 			return systems.get(ii.system_name, {})
 
+	class debug_c(PlugIn):
+		max_power: int = 8
+
 	class model(PyfigBase.model):
 		compile_ts: 	bool	= False
 		compile_func:	bool	= False
@@ -172,8 +286,10 @@ class Pyfig(PyfigBase):
 		n_pv:           int     = 32
 		n_fb:           int     = 3
 		n_det:          int     = 4
+		n_final_out:	int     = 1
 		
 		n_fbv:          int     = property(lambda _: _.n_sv*3+_.n_pv*2)
+
 
 	class opt(PyfigBase.opt):
 		_available_opt: list 	= ['AdaHessian', 'RAdam']
@@ -186,13 +302,13 @@ class Pyfig(PyfigBase):
 
 		class scheduler(PlugIn):
 			_prefix: 	str 	= 'sch_'
-			n_scheduler_step: 	int   	= property(lambda _: _._p._p.n_step + _._p._p.n_pre_step)
 
 			sch_default:str 	='OneCycleLR'
 
 			sch_name: 	str		= 'OneCycleLR'
 			sch_max_lr:	float 	= 0.01
 			sch_epochs: int 	= 1
+
 
 	class sweep(PyfigBase.sweep):
 		sweep_method: 	str		= 'grid'
@@ -226,33 +342,50 @@ class Pyfig(PyfigBase):
 		wb_mode = 'online'
 
 	zweep: str = ''
+	_submit_debug: bool = False
 
 	def __init__(ii, notebook: bool=False, sweep: dict={}, c_init: dict={}, **other_arg) -> None:
 
-		print('--_debug' in sys.argv, sys.argv, sep='\n')
 		if '--_debug' in sys.argv:
+			print('--_debug' in sys.argv, sys.argv, sep='\n')
 			c_init = dict(
-				n_sv     = 16,
-				n_pv     = 8,
-				n_fb     = 2,
-				n_det    = 2,
-				n_b 	 = 4,
-				multimode = 'max_mem:opt_hypam:train:eval',  # profile
-				n_step   = 50,
-				n_pre_step   = 50,
-				n_eval_step   = 50,
-				debug	= True,
-				exp_name = 'adv_test',
+				n_sv     		= 16,
+				n_pv     		= 8,
+				n_fb     		= 2,
+				n_det    		= 2,
+				n_b 	 		= 4,
+				n_default_step  = 30,
+				n_trial   		= 6,
+				a_z 			= [4,], # int
+				debug			= True,
+				submit 			= True,
+				n_log_metric	= 10,
+				n_log_state		= 0,
+				exp_name 		= '~4',	
+				time 			= '00:10:00',
 			)
 
-			sweep = dict(
-				parameters = dict(
-					n_gpu			=	dict(values=[1,  2], dtype=int),
-					dist_name		= 	dict(values=['naive', 'hf_accel'], dtype=str), 
-					opt_name		=	dict(values=['AdaHessian',  'RAdam'], dtype=str),
-					weight_decay	= 	dict(domain=[0.0, 1.], dtype=float, condition=['AdaHessian',]),
-			))
+		def run_debug():
+			print('Running debug')
+			cmds = [ \
+			'python run.py --_debug --mode train',
+			'python run.py --_debug --multimode max_mem:opt_hypam:pre:train:eval --time 01:00:00',
+			'python run.py --_debug --multimode pre:train:eval --time 01:00:00 --n_gpu 2 --dist_name hf_accel',
+			'python run.py --_debug --multimode max_mem:opt_hypam:pre:train:eval --time 01:00:00 --n_gpu 2 --dist_name naive',
+			'python run.py --_debug --multimode max_mem:opt_hypam:pre:train:eval --time 01:00:00 --n_gpu 20 --dist_name naive',
+			'python run.py --_debug --multimode pre:train:eval --time 01:00:00 --n_gpu 20 --dist_name naive',
+			# 'python run.py --_debug --multimode max_mem:opt_hypam:pre:train:eval --time 01:00:00 --n_gpu 20 --dist_name hf_accel',
+			# does not work yet: deepspeed, hostfile, needed
+			]
+			from things.utils import run_cmds
+			for cmd in cmds:
+				run_cmds(cmd, silent=False)
+			sys.exit()
 
+
+		if '--_submit_debug' in sys.argv:
+			print('submit_debug' in sys.argv, sys.argv, sep='\n')
+			run_debug()
 
 		print('\npyfig:init')
 		super().__init__(notebook=notebook, c_init=c_init, sweep=sweep, **other_arg)
@@ -283,12 +416,16 @@ class Pyfig(PyfigBase):
 		""" todo
 		# now
 		- clean pyfig 
-		- accel finish with split dataloader
+		- list different ranks
 
 		# soon
 		- export model to latex math
 		- ignore issue, how to consistently ignore an attr
-
+		- everything either numpy or deep learning framework
+		- c.to('numpy') puts everything as np array
+		- automatically have everything as numpy arrays?
+		- log keys system 
+		- simple metrics collecter and logger (also generalises logger)
 
 		# later
 		- autogen a configurable demo graph of code, which looks at the model
@@ -297,7 +434,7 @@ class Pyfig(PyfigBase):
 
 		""" run list
 		- 20 gpus
-		- pretraining
+		- preing
 
 		
 		"""
@@ -438,7 +575,7 @@ class Pyfig(PyfigBase):
 
 - https://jvmc.readthedocs.io/en/latest/index.html
 
-- normalised pretraining
+- normalised preing
 - save eval r and stats compressed (5 min)
 
 - estimated time until finished from # electrons, batch size 

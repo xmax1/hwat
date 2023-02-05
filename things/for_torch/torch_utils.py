@@ -17,6 +17,20 @@ from ..pyfig_utils import lo_ve
 from torch import nn
 
 
+def try_convert(k, v, device, dtype):
+	try:
+		v = v.to(dtype)
+		print(f'{k} to dtype', dtype)
+	except Exception as e:
+		print(f'\n*not* converting {k} to dtype', dtype)
+	try:
+		v = v.to(device)
+		print(f'\n{k} to device', device)
+	except Exception as e:
+		print(f'\n*not* {k} to device', device)
+	return v
+	
+
 def gen_profile(
 	fn: Callable,
 	c: PyfigBase, 
@@ -60,16 +74,18 @@ def flat_dict(d:dict, items:list[tuple]=None):
 	return dict(items)
 	
 
-def get_max_mem_c(fn: Callable, c: PyfigBase, max_mem_min=8, max_max_mem=20, **kw) -> dict:
+def get_max_mem_c(fn: Callable, c: PyfigBase, min_power=8, max_power=20, **kw) -> dict:
+	print('\nget_max_mem_c:total')
+	
 	import traceback
 
 	t = torch.cuda.get_device_properties(0).total_memory // 1024 // 1024
 	r = torch.cuda.memory_reserved(0)
 	a = torch.cuda.memory_allocated(0)
 
-	print('get_max_mem_c:total memory on device: ', t)
+	print('memory on device: ', t)
 
-	for n_b_power in range(max_mem_min, max_max_mem):
+	for n_b_power in range(min_power, max_power):
 		try:
 			
 			n_b = n_b=2**n_b_power
@@ -77,22 +93,21 @@ def get_max_mem_c(fn: Callable, c: PyfigBase, max_mem_min=8, max_max_mem=20, **k
 
 			v_run = fn(c=c)
 
-			max_mem_alloc_key = [k for k in flat_any(v_run).keys() if c.tag.max_mem_alloc in k][0]
-			mem_used = flat_any(v_run)[max_mem_alloc_key]
+			v_cpu_d = flat_any(v_run[c.tag.v_cpu_d])
+			keys = [k for k in v_cpu_d.keys() if c.tag.max_mem_alloc in k]
+			max_mem_alloc = v_cpu_d[keys[0]]
 
-			print(f'n_b {n_b} used {mem_used} out of {t}')
-
-			torch.cuda.empty_cache()
+			print(f'n_b {n_b} used {max_mem_alloc} out of {t}')
 			
-			if mem_used > t/2:
-				print('get_max_mem: b_s is ', n_b)
-				v_run[c.tag.c_update_next] = dict(n_b=n_b)
-				return v_run
+			if max_mem_alloc > t/2:
+				print('get_max_mem n_b: ', n_b)
+				v_run[c.tag.c_update].update(dict(n_b= n_b))
+				return v_run or {}
 
 		except Exception as e:
 			print(traceback.format_exc())
-			print('v_run max_mem: ', v_run)
-			raise Exception
+			print('error: e', v_run)
+			return v_run or {}
 
 
 def detach_tree(v_d: dict):
@@ -145,7 +160,6 @@ def get_opt(
 
 
 
-
 def get_scheduler(
 	sch_name: str = None,
 	sch_max_lr: float = None,
@@ -165,140 +179,3 @@ def get_scheduler(
 		return get_scheduler(scheduler_name=default, max_lr=sch_max_lr, epochs=sch_epochs, n_step=n_scheduler_step)
 
 	return scheduler
-
-
- 
-def load(c: PyfigBase, path: Path=None, **things_to_load):
-
-	load_keys = list(things_to_load.keys())
-	path = path or c.lo_ve_path
-	
-	if path.suffix == '':
-		step = c.step or get_max_n_from_filename(path)
-		path = c.lo_ve_path / '{mode}_{group_i}_i{step}.state'.format(c.mode, c.group_i, step)
-
-	state: dict = lo_ve(path=path)
-	state_keys = state.keys()
-	if not all([k in list(state_keys) for k in load_keys]):
-		sys.exit(f'!!! tried to load {load_keys} from {state_keys} path {c.state_dir} step {c.step}')
-
-	new_state = {}
-	for k,v in things_to_load.items():
-		if k in ['model', 'opt',] :
-			v: nn.Module
-			new_state[k] = v.load_state_dict(state[k])
-		else:
-			new_state[k] = state[k]
-
-	return (c, *new_state.values())
-
-# import threading, torch, time, pynvml
-
-# def preload_pytorch():
-#     torch.ones((1, 1)).cuda()
-
-# def gpu_mem_used(id):
-#     handle = pynvml.nvmlDeviceGetHandleByIndex(id)
-#     info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-#     return int(info.used/2**20)
-
-# def gpu_mem_used_no_cache(id):
-#     torch.cuda.empty_cache()
-#     return gpu_mem_used(id)
-
-# def peak_monitor_start():
-#     global peak_monitoring
-#     peak_monitoring = True
-
-#     # this thread samples RAM usage as long as the current epoch of the fit loop is running
-#     peak_monitor_thread = threading.Thread(target=peak_monitor_func)
-#     peak_monitor_thread.daemon = True
-#     peak_monitor_thread.start()
-
-# def peak_monitor_stop():
-#     global peak_monitoring
-#     peak_monitoring = False
-
-# def peak_monitor_func():
-#     global nvml_peak, peak_monitoring
-#     nvml_peak = 0
-#     id = torch.cuda.current_device()
-
-#     while True:
-#         nvml_peak = max(gpu_mem_used(id), nvml_peak)
-#         if not peak_monitoring: break
-#         time.sleep(0.001) # 1msec
-
-
-# def consume_gpu_ram(n): return torch.ones((n, n)).cuda()
-# def consume_gpu_ram_256mb(): return consume_gpu_ram(2**13)
-
-# peak_monitoring = False
-# nvml_peak = 0
-# preload_pytorch()
-# pynvml.nvmlInit()
-# id = torch.cuda.current_device()
-
-# # push the pytorch's peak gauge high up and then release the memory
-# z = [consume_gpu_ram_256mb() for i in range(4)] # 1GB
-# del z
-
-# peak_monitor_start()
-# nvml_before = gpu_mem_used_no_cache(id)
-# cuda_before = int(torch.cuda.memory_allocated()/2**20)
-
-# # should be: 256 used, 512 peaked
-# c1 = consume_gpu_ram_256mb()
-# c2 = consume_gpu_ram_256mb()
-# del c1
-
-# # code finished
-# peak_monitor_stop()
-# nvml_after = gpu_mem_used_no_cache(id)
-# cuda_after = int(torch.cuda.memory_allocated()/2**20)
-# cuda_peak  = int(torch.cuda.max_memory_allocated()/2**20)
-# print("nvml:", nvml_after-nvml_before, nvml_peak-nvml_before)
-# print("cuda:", cuda_after-cuda_before, cuda_peak-cuda_before)
-
-# if c.model.compile_ts:
-# 		# os.environ['PYTORCH_NVFUSER_DISABLE_FALLBACK'] = '1'
-# 		model = torch.jit.script(model, r.clone())
-		
-# 	if c.model.compile_func:
-# 		pass
-# 		# https://pytorch.org/tutorials/intermediate/nvfuser_intro_tutorial.html
-  
-# 	if c.model.optimise_ts:
-# 		pass
-# 		# from torch.utils.mobile_optimizer import optimize_for_mobile
-# 		# optimized_torchscript_model = optimize_for_mobile(torchscript_model)
-# 		# The optimized model can then be saved and deployed in mobile apps:
-# 		# optimized_torchscript_model.save("optimized_torchscript_model.pth")
-
-# 	if c.model.optimise_aot:
-# 		# https://pytorch.org/functorch/stable/notebooks/aot_autograd_optimizations.html
-# 		pass
-
-# 	if c.model.functional:
-# 		pass
-
-# torch.backends.cudnn.benchmark = True
-# torch.manual_seed(c.seed)
-
-# print('__Python VERSION:', sys.version)
-# print('__pyTorch VERSION:', torch.__version__)
-# print('__CUDA VERSION')
-# from subprocess import call
-# # call(["nvcc", "--version"]) does not work
-# ! nvcc --version
-# print('__CUDNN VERSION:', torch.backends.cudnn.version())
-# print('__Number CUDA Devices:', torch.cuda.device_count())
-# print('__Devices')
-# call(["nvidia-smi", "--format=csv", "--query-gpu=index,name,driver_version,memory.total,memory.used,memory.free"])
-# print('Active CUDA Device: GPU', torch.cuda.current_device())
-# print ('Available devices ', torch.cuda.device_count())
-# print ('Current cuda device ', torch.cuda.current_device())
-
-# from subprocess import call
-# call(["nvidia-smi", "--format=csv", "--query-gpu=index,name,driver_version,memory.total,memory.used,memory.free"])
-

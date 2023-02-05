@@ -37,19 +37,19 @@ parameters: 	dict 	= dict(
 def str_lower_eq(a: str, b:str):
 	return a.lower()==b.lower()
 
-def objective(trial: Trial, c: PyfigBase, run: Callable):
-	c_update_next = get_hypam_from_study(trial, c.sweep.parameters)
+def objective(trial: Trial, run_trial: Callable, c: PyfigBase):
 	
-	print('trial')
-	pprint.pprint(c_update_next)
+	print('trial: ', trial.number)
+	c_update = get_hypam_from_study(trial, c.sweep.parameters)
+	pprint.pprint(c_update)
 
 	c.mode = 'train'
-	v_run = run(c=c, c_update=c_update_next)
+	v_run: dict = run_trial(c=c, c_update_trial= c_update)
 	c.mode = 'eval'
-	v_run = run(c=c, v_init=v_run.get(c.tag.v_init_next, {}))
+	v_run: dict = run_trial(c=c, v_init_trial= v_run.get(c.tag.v_init, {}), c_update_trial= v_run.get('c_update', {}))
 
 	dummy = [np.array([0.0]), np.array([0.0])]
-	opt_obj_all = v_run.get(c.tag.v_cpu_d_prev, {}).get(c.tag.opt_obj_all, dummy)
+	opt_obj_all = v_run.get(c.tag.v_cpu_d, {}).get(c.tag.opt_obj_all, dummy)
 	return np.asarray(opt_obj_all).mean()
 
 
@@ -82,8 +82,9 @@ def suggest_hypam(trial: optuna.Trial, name: str, v: Param):
 	raise Exception(f'{v} not supported in hypam opt')
 
 from copy import deepcopy
+from .pyfig_utils import Param
 
-def get_hypam_from_study(trial: optuna.Trial, sweep_p: dict) -> dict:
+def get_hypam_from_study(trial: optuna.Trial, sweep_p: dict[str, Param]) -> dict:
 
 	c_update = {}
 	for name, param in sweep_p.items():
@@ -103,24 +104,24 @@ def get_hypam_from_study(trial: optuna.Trial, sweep_p: dict) -> dict:
 import time
 
 def opt_hypam(objective: Callable, c: PyfigBase):
-	print('hypam opt create/get study')
- 
-	# how to id the different gpus give rank is 0 for 
-	
+	print('opt_hypam:create_study rank,head,is_logging_process', c.dist.rank, c.dist.head, c.is_logging_process)
+
 	if not c.dist.head:
+		print('opt_hypam:waiting_for_storage rank,head,is_logging_process', c.dist.rank, c.dist.head, c.is_logging_process)
 		while not len(list(c.exp_dir.glob('*.db'))):
-			print('waiting for opt storage...')
 			sleep(5.)
-		sleep(c.dist.rank)
-	
-		study = optuna.load_study(study_name=c.sweep.sweep_name, storage=c.sweep.storage)
+		sleep(5.)
+		study = optuna.load_study(study_name= c.sweep.sweep_name, storage=c.sweep.storage)
+
+
 	else:
+		print('opt_hypam:creating_study rank,head', c.dist.rank, c.dist.head)
 		study = optuna.create_study(
 			direction 		= "minimize",
 			study_name		= c.sweep.sweep_name,
 			load_if_exists 	= True, 
 			storage			= c.sweep.storage,
-			sampler 		= lo_ve(path=c.exp_dir/'sampler.pk') or optuna.samplers.TPESampler(seed=c.dist.rank),
+			sampler 		= lo_ve(path=c.exp_dir/'sampler.pk') or optuna.samplers.TPESampler(seed=c.seed),
 			pruner			= optuna.pruners.MedianPruner(n_warmup_steps=10),
 		)
 
@@ -136,5 +137,4 @@ def opt_hypam(objective: Callable, c: PyfigBase):
 	print(Path('.'), '\nstudy:best_param = \n', best_param)
 	debug_dict(d=study, msg='study')
 	debug_dict(d=study.trials, msg='trials')
-
-	return 
+	return best_param

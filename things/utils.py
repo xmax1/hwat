@@ -271,14 +271,14 @@ def type_me(v, v_ref=None, is_cmd_item=False):
 
 ### run things
 
-def run_cmds(cmd: str|list, cwd:str | Path='.', silent=False, _res=[]):
+def run_cmds(cmd: str|list, cwd:str | Path='.', silent=True, _res=[]):
 	for cmd_1 in (cmd if isinstance(cmd, list) else [cmd,]): 
 		try:
 			cmd_1 = [c.strip() for c in cmd_1.split(' ')]
 			_res = subprocess.run(cmd_1, cwd=str(cwd), capture_output=True, text=True)
 			if not silent:
 				print(f'Run: {cmd_1} at {cwd}')
-				print('stdout:', _res.stdout.replace("\n", " "), 'stderr:', _res.stderr.replace("\n", ";"))
+				print('stdout:', _res.stdout, 'stderr:', _res.stderr, sep='\n')
 		except Exception as e:
 			if not silent:
 				print(cmd_1, e)
@@ -410,7 +410,7 @@ if torch:
 		elif isinstance(v, (np.ndarray, np.generic)):
 			
 			items[parent + r'_\mu$'] = v.mean()
-			if v.std():
+			if v.std() and debug:
 				items['std'+sep+parent + r'_\sigma$'] = v.std()
 			
 		return items
@@ -429,57 +429,24 @@ if torch:
 ### exit handling 
 # NB: !Important! Distribution if 1 gpu fails the others continue without this
 import atexit
-
-
-
-import atexit
 import sys
-
-class ExitHooks(object):
-	def __init__(self):
-		self.exit_code = None
-		self.exception = None
-
-	def hook(self):
-		self._orig_exit = sys.exit
-		sys.exit = self.exit
-		sys.excepthook = self.exc_handler
-
-	def exit(self, code=0):
-		self.exit_code = code
-		self._orig_exit(code)
-
-	def exc_handler(self, exc_type, exc, *args):
-		self.exception = exc
-import traceback
-
-hooks = ExitHooks()
-hooks.hook()
-
 def exit_foo():
 	fail_flag = os.environ.get('FAIL_FLAG')
 	def write_exit(code=''):
 		if fail_flag is None:
-			# sys.exit(f'Exit code {code}')
 			print(f'Exit code {code}')
-			# sys.exit(1)
-			# return
 		else:
 			print(traceback.format_exc())
 			run_cmds(f'scancel {os.environ["SLURM_JOBID"]}')
 			with open(fail_flag, 'w') as f:
 				f.write(code)
-	if hooks.exit_code is not None:
-		print("death by ", hooks.exit_code)
-		write_exit(code=hooks.exit_code)
-		
-	elif hooks.exception is not None:
-		print("death by exception: %s" % hooks.exception)
-		write_exit(code=hooks.exit_code)
+	def my_excepthook(exc_type, value, tb):
+		sys.__excepthook__(exc_type, value, tb)
+		write_exit(code=exc_type)
 
-	else:
-		print("natural death")
+	sys.excepthook = my_excepthook
 atexit.register(exit_foo)
+
 
 def find_free_port():
 	port = np.random.randint(49152, 65535)
@@ -489,75 +456,88 @@ def find_free_port():
 	return port
 
 import numpy as np
+from typing import Callable
 
 class Metrix:
 	t0: 		   float = time()
 	step: 		   int 	 = 0
 	mode: str = None
-	phase: str = None
 
 	max_mem_alloc: float = None
 	t_per_it: 	   float = None
 	
 	opt_obj: 	   float = None
 	opt_obj_all:    list = None
+	overview: 		dict = None
+	exp_stats: 		dict = None
 
 	summary: 	   dict = None
 	
-	def __init__(ii, mode: str, init_summary: dict= None):
+	def __init__(ii, 
+		mode: str, 
+		init_summary: dict,
+		opt_obj_key: str, 
+		opt_obj_op: Callable 	= None, 
+		log_exp_stats_keys: list= None,
+		log_eval_keys: list		= None,
+	):
 		
-		ii.mode = mode
-		ii.opt_obj_all = []
-		
-		ii.summary = init_summary or {}
+		apply_mean = lambda x: x.mean()
 
-		torch.cuda.empty_cache()
+		ii.mode = mode
+
+		ii.summary = init_summary 		or {}
+		ii.opt_obj_key = opt_obj_key 	or 'loss'
+		ii.opt_obj_op = opt_obj_op 		or apply_mean
+
+		ii.log_exp_stats_keys = log_exp_stats_keys 	# if None, log all
+		ii.log_eval_keys = log_eval_keys 			# if None, log all
+
+		ii.opt_obj_all = []
+
 		torch.cuda.reset_peak_memory_stats()
 
 	def tick(ii, 
 		step: int, 
-		opt_obj_key: str, 
-		opt_obj_op: Callable, 
 		v_cpu_d: dict, 
-		log_exp_stats_keys: dict[str:np.ndarray]= None,
-		log_eval_keys: dict[str:np.ndarray]= None,
 		this_is_noop: bool = False,
 	) -> dict:
+		""" can only tick once per step """
+		if this_is_noop:
+			return {}
 
-		if not this_is_noop:
-			
-			ii.step, dstep = step, step - ii.step
+		dstep = step - ii.step
+		ii.step = step
 
-			ii.t_per_it, ii.t0 = (time() - ii.t0)/dstep, time()
-			ii.max_mem_alloc = torch.cuda.max_memory_allocated() // 1024 // 1024
-			torch.cuda.reset_peak_memory_stats()
+		ii.t_per_it, ii.t0 = (time() - ii.t0)/dstep, time()
+		ii.max_mem_alloc = torch.cuda.max_memory_allocated() // 1024 // 1024
+		torch.cuda.reset_peak_memory_stats()
 
-			ii.opt_obj = opt_obj_op(v_cpu_d[opt_obj_key])
-			ii.opt_obj_all += [ii.opt_obj,]
+		ii.opt_obj = ii.opt_obj_op(v_cpu_d.get(ii.opt_obj_key, np.array([0.0, 0.0])))
+		ii.opt_obj_all += [ii.opt_obj,]
 
-			overview = dict(opt_obj=ii.opt_obj, t_per_it=ii.t_per_it, max_mem_alloc=ii.max_mem_alloc)
+		ii.overview = dict(
+			opt_obj= ii.opt_obj, 
+			t_per_it= ii.t_per_it,
+			max_mem_alloc= ii.max_mem_alloc,
+			opt_obj_all= ii.opt_obj_all,
+		)
 
-			log_eval_keys = log_eval_keys or None
-			log_exp_stats_keys = log_exp_stats_keys or None
+		if ii.log_exp_stats_keys is None:
+			log_exp_stats_keys = v_cpu_d.keys()
 
-			if ii.mode=='eval':
-				log_exp_stats_keys = log_eval_keys
-			
-			if log_exp_stats_keys is None:
-				log_exp_stats_keys = v_cpu_d.keys()
+		log_kv = dict(filter(lambda kv: kv[0] in log_exp_stats_keys, deepcopy(v_cpu_d).items()))
 
-			log_kv = dict(filter(lambda kv: kv[0] in log_exp_stats_keys, deepcopy(v_cpu_d).items()))
-
-			ii.exp_stats = {ii.mode: {ii.phase: {'exp_stats': dict(all=(log_kv or {}), overview=overview)}}}
-
-		else:
-			ii.exp_stats = {}
+		ii.exp_stats = {'exp_stats': dict(all=(log_kv or {}), overview= ii.overview)}
 
 		return ii.exp_stats
-	
-	def to_dict(ii):
-		return {k: getattr(ii, k) for k in ii.exp_stats}
 
-
-
+	def tock(ii, step, v_cpu_d):
+		import pprint
+		if step==ii.step:
+			ii.step -= 1
+		_ = ii.tick(step, v_cpu_d, this_is_noop=False)
+		print('', 'overview:', sep='\n')
+		pprint.pprint({k:np.asarray(v).mean() for k,v in ii.overview.items()})
+		return ii.overview
 

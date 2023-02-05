@@ -48,7 +48,10 @@ class Ansatz_fb(nn.Module):
 		n_fb, 
 		n_pv, 
 		n_sv, 
+		n_final_out,
 		a, 
+		mol,
+		hf,
 		*, 
 		with_sign=False):
 		super(Ansatz_fb, ii).__init__()
@@ -63,6 +66,7 @@ class Ansatz_fb(nn.Module):
 		ii.n_pv = n_pv                # latent dimension for 2-electron
 		ii.n_sv = n_sv                # latent dimension for 1-electron
 		ii.n_sv_out = 3*n_sv+2*n_pv
+		ii.n_final_out = n_final_out  # number of output channels
 
 		ii.n_a = len(a)
 
@@ -82,15 +86,18 @@ class Ansatz_fb(nn.Module):
 		ii.w_spin_d = nn.Linear(ii.n_sv, ii.n_d * ii.n_det)
 		ii.w_spin = [ii.w_spin_u, ii.w_spin_d]
 
-		ii.w_final = nn.Linear(ii.n_det, 1, bias=False)
+		ii.w_final = nn.Linear(ii.n_det, ii.n_final_out, bias=False)
 
+		device, dtype = a.device, a.dtype
 		ii.register_buffer('a', a.detach().clone().requires_grad_(False), persistent=False)    # tensor
-		ii.register_buffer('eye', torch.eye(ii.n_e)[None, :, :, None].requires_grad_(False), persistent=False) # ! persistent moves with model to device etc
-		ii.register_buffer('ones', torch.ones((1, ii.n_det)).requires_grad_(False), persistent=False)
-		ii.register_buffer('zeros', torch.zeros((1, ii.n_det)).requires_grad_(False), persistent=False)
-  
-		debug_dict(msg='model buffers', buffers=list(ii.buffers()))
+		ii.register_buffer('eye', torch.eye(ii.n_e)[None, :, :, None].requires_grad_(False).to(device, dtype), persistent=False) # ! persistent moves with model to device etc
+		ii.register_buffer('ones', torch.ones((1, ii.n_det)).requires_grad_(False).to(device, dtype), persistent=False)
+		ii.register_buffer('zeros', torch.zeros((1, ii.n_det)).requires_grad_(False).to(device, dtype), persistent=False)
+		ii.register_buffer('mo_coef', torch.tensor(hf.mo_coeff).requires_grad_(False).to(device, dtype), persistent=False) # (n_b, n_e, n_mo)
 
+		ii.mol = mol
+
+		debug_dict(msg='model buffers', buffers=list(ii.buffers()))
 
 	def forward(ii, r: Tensor) -> Tensor:
 		
@@ -140,7 +147,12 @@ class Ansatz_fb(nn.Module):
 		s_u, s_d = torch.split(s_v, [ii.n_u, ii.n_d], dim=1) # (n_b, n_u, 3n_sv+2n_pv), (n_b, n_d, 3n_sv+2n_pv)
 		orb_u = ii.compute_orb_from_stream(s_u, ra_u, spin=0) # (n_b, n_u, n_u, n_det)
 		orb_d = ii.compute_orb_from_stream(s_d, ra_d, spin=1) # (n_b, n_d, n_d, n_det)
-		return orb_u, orb_d
+		### under construction ###
+		# makes sure the final weight is in the preing loop for distribution
+		zero = (orb_u + orb_d)*0.0
+		zero = ii.w_final(zero.sum(dim=(-1,-2)))[..., None, None]
+		### under construction ###
+		return orb_u+zero, orb_d+zero
 
 	def compute_embedding(ii, r: Tensor, ra: Tensor) -> tuple[Tensor, Tensor]:
 		n_b, n_e, _ = r.shape
@@ -183,16 +195,23 @@ class Ansatz_fb(nn.Module):
 		orb = s_w * sum_a_exp # (n_b, n_u(r), n_u(orb), n_det) 
 		return orb.transpose(-1, 1) # (n_b, n_det, n_u(r), n_u(orb))
 
-	def compute_hf_orb(ii, r: Tensor, mol: Any, hf: Any):
+	def compute_hf_orb(ii, r: Tensor):
 		n_b, n_e, _ = r.shape
 		r_hf = r.reshape(-1, 3) # (n_b*n_e, 3)
 		r_hf = r_hf.detach().cpu().numpy()
-		ao = mol.eval_gto('GTOval', r_hf) # (n_b*n_e, n_ao)
+
+		# gto_op = 'GTOval_sph_deriv1' if deriv else 'GTOval_sph'
+		# ao_values = self.mol.eval_gto(gto_op, electrons)
+		# mo_values = tuple(np.matmul(ao_values, coeff) for coeff in coeffs)
+		# if self.restricted:
+		# 	mo_values *= 2
+		# return mo_values
+
+		ao = ii.mol.eval_gto('GTOval', r_hf) # (n_b*n_e, n_ao)
 		ao = ao.reshape(n_b, n_e, -1) # (n_b, n_e, n_ao)
-		mo_coef = torch.tensor(hf.mo_coeff).to(device=r.device, dtype=r.dtype).requires_grad_(True) # (n_b, n_e, n_mo)
-		ao = torch.tensor(ao).to(device=r.device, dtype=r.dtype).requires_grad_(True) # (n_b, n_e, n_mo)
-		mo = torch.einsum("bea,sao->sbeo", ao, mo_coef)
-		mo = mo.unsqueeze(2).tile((1, 1, ii.n_det, 1, 1))
+		ao = torch.tensor(ao).to(device=r.device, dtype=r.dtype).detach() # (n_b, n_e, n_mo)
+		mo = torch.einsum("bea,sao->sbeo", ao, ii.mo_coef)
+		mo = mo.unsqueeze(2).tile((1, 1, ii.n_det, 1, 1))  # n_spin, n_b, n_det, n_mo, n_mo
 		return mo[0][..., :ii.n_u, :ii.n_u], mo[1][..., :ii.n_d, :ii.n_d]
 
 
@@ -359,17 +378,38 @@ def is_a_larger(a: Tensor, b: Tensor) -> Tensor:
 	b_is_larger = (a_is_larger-1.)*-1. # 1 when b bigger
 	return a_is_larger, b_is_larger
 
+
+def sample_pre(model: Ansatz_fb, data: Tensor, p_1: Tensor):
+	"""
+	data: (n_b, n_e, 3)
+	p_1: (n_b, n_e)
+	"""
+	mu, md = model.compute_hf_orb(data) # (n_b, n_det, n_e, n_e)
+	m = torch.stack([mu, md], dim=0) # (2, n_b, n_det, n_e, n_e)
+	m = m.mean(dim=2) # (2, n_b, n_e, n_e)
+	p_pre = torch.diagonal(m, dim1=-2, dim2=-1).prod(dim=-1).prod(dim=0) # (2, n_b)
+	p_pre = p_pre / p_pre.sum()
+	p_1 = p_1 / p_1.sum()
+	return (p_1 + p_pre) / 2.
+
+
 @torch.no_grad()
 def sample_b(
-	model: nn.Module, 
-	data: Tensor, 
-	deltar: Tensor, 
-	n_corr: int=10
+	model: nn.Module=None, 
+	data: Tensor=None, 
+	deltar: Tensor=None, 
+	n_corr: int=10,
+	pre: bool=False,
+	unwrap: Callable= None,
+	**kw
 ):
 	""" metropolis hastings sampling with automated step size adjustment """
 	device, dtype = data.device, data.dtype
 
 	p_0 = torch.exp(model(data))**2
+	if pre:
+		unwrap_model = unwrap(model)
+		p_0 = sample_pre(unwrap_model, data, p_0)
 
 	deltar_1 = torch.clip(deltar + 0.01*torch.randn_like(deltar), min=0.005, max=0.5)
 	
@@ -381,8 +421,9 @@ def sample_b(
 			
 			data_1 = data + torch.randn_like(data, device=device, dtype=dtype, layout=torch.strided)*dr_test
 			p_1 = torch.exp(model(data_1))**2
-			
-
+			if pre:
+				p_1 = sample_pre(unwrap_model, data_1, p_1)
+				
 			alpha = torch.rand_like(p_1, device=device, dtype=dtype, layout=torch.strided)
 			a_larger, b_larger = is_a_larger(p_1/p_0, alpha)
 
@@ -409,37 +450,56 @@ def sample_b(
 
 from torch.utils.data import Dataset
 from pyfig import Pyfig
+from functools import partial
+from things.pyfig_utils import PyfigBase
 
 
 class PyfigDataset(Dataset):
 
-	def __init__(ii, 
-		c: Pyfig,
-		model: nn.Module,
-		init_scale: float=0.1
-	):
+	def __init__(ii, c: Pyfig, state: dict=None):
 
-		ii.model = model
-		ii.n_b = c.data.n_b
+		state = state or {}
 
 		ii.n_step = c.n_step
 		ii.n_corr = c.app.n_corr
-		ii.deltar = torch.tensor([0.02,], device=c.device, dtype=c.dtype).requires_grad_(False)
-		ii.center_points = get_center_points(c.app.n_e, c.app.a)
+		ii.mode = c.mode
+		ii.n_b = c.data.n_b
 
-		ii.data = ii.center_points \
-			+ init_scale * torch.randn(size=(c.data.n_b, *ii.center_points.shape)).to(c.device, c.dtype)
+		print('hwat:dataset: init')
+		center_points = get_center_points(c.app.n_e, c.app.a).detach()
+		device, dtype = center_points.device, center_points.dtype
 
-		print('dataset:init data', ii.data.shape, 'deltar', ii.deltar.shape, 'center_points', ii.center_points.shape)
+		def init_data(n_b, trailing_shape) -> torch.Tensor:
+			shift = c.app.init_data_scale * torch.randn(size=(n_b, *trailing_shape)).requires_grad_(False).to(device, dtype)
+			return center_points + shift 
+
+		new_data = init_data(ii.n_b, center_points.shape)
+
+		ii.data = state.get('data', new_data.requires_grad_(False).to(device, dtype))
+		ii.deltar = state.get('deltar', torch.tensor([0.02,]).requires_grad_(False).to(device, dtype))
+		
+		tmp = {'data': ii.data, 'deltar': ii.deltar, 'center_points': center_points, 'a': c.app.a}
+		print('dataset:init_dataset', [[k, v.shape, v.device, v.dtype] for k, v in tmp.items()])
+
+		ii.wait = c.dist.wait_for_everyone
+
+	def init_dataset(ii, c: PyfigBase, device, dtype, model= None, **kw) -> torch.Tensor:
+		ii.data = ii.data.to(device, dtype)
+		ii.deltar = ii.deltar.to(device, dtype)
+		ii.v_d = {'data': ii.data, 'deltar': ii.deltar}
+		
+		print('dataset:init_dataset sampler is pretraining ', ii.mode==c.tag.pre) 
+		ii.sample = partial(sample_b, model=model, n_corr=ii.n_corr, pre=ii.mode==c.tag.pre, unwrap=c.dist.unwrap)
+
+		for _ in range(100):
+			ii.v_d = ii.sample(**ii.v_d)
+
+		print('dataset:init_dataset', [[k, v.shape, v.device, v.dtype] for k, v in ii.v_d.items()])
 
 	def __len__(ii):
-		return ii.n_b * ii.n_step
+		return ii.n_step
 
 	def __getitem__(ii, i):
-
-		v_d = sample_b(ii.model, ii.data, ii.deltar, n_corr=ii.n_corr)
-
-		for k,v in v_d.items():
-			setattr(ii, k, v)
-
-		return ii.data
+		ii.wait()
+		ii.v_d = ii.sample(**ii.v_d)
+		return ii.v_d

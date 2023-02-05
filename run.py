@@ -1,14 +1,16 @@
 import numpy as np
 import wandb
-from collections import OrderedDict
 
 from typing import Callable
 
 import torch
-from torch.optim.lr_scheduler import _LRScheduler
+from torch import Tensor
 from torch.optim import Optimizer
+from torch.utils.data import DataLoader
+from hwat import PyfigDataset
+
 from functorch import make_functional_with_buffers, vmap
-from things.for_torch.torch_utils import get_opt, get_scheduler, load
+from things.for_torch.torch_utils import get_opt, get_scheduler
 from things.utils import npify_tree, compute_metrix
 
 from functools import partial
@@ -24,49 +26,59 @@ from things.utils import Metrix
 from pyfig import Pyfig 
 
 
-def init_exp(c: Pyfig, c_update: dict=None, **kw):
+def init_exp(c: Pyfig, state: dict= None):
 
-	c.update((c_update or {}) | (kw or {}))
+	state = state or {}
+
+	torch.cuda.empty_cache()
+	torch.backends.cudnn.benchmark = c.cudnn_benchmark
+
+	if not c.dist.ready:
+		c.dist.init()
 
 	c.set_seed()
 	c.set_dtype()
 	c.set_device()
 	c.to(framework='torch')
-
-	torch.backends.cudnn.benchmark = c.cudnn_benchmark
+	c.app.init_app()
 
 	model: torch.nn.Module = c.partial(Model).to(dtype=c.dtype)
-	model_fn, param, buffer = make_functional_with_buffers(model)
+	if state.get('model'):
+		model.load_state_dict(state['model'])
+	
+	model_to_fn: torch.nn.Module = c.partial(Model, mol=None).to(dtype=c.dtype)
+	model_fn, param, buffer = make_functional_with_buffers(model_to_fn)
 	model_fn_vmap = vmap(model_fn, in_dims=(None, None, 0))
 
 	### under construction ###
-	from hwat import PyfigDataset
-	from torch.utils.data import DataLoader
-	dataset = PyfigDataset(c, model)
+	dataset = PyfigDataset(c, state=state)
 	def custom_collate(batch):
 		return batch[0] 
 	dataloader = DataLoader(dataset, batch_size= 1, collate_fn= custom_collate)  # c.data.n_b otherwise because of the internal sampler
 	### under construction ###
 
-	opt = get_opt(**c.opt.d_flat)(model.parameters())
-	scheduler = get_scheduler(**c.opt.scheduler.d_flat)(opt)
+	opt: Optimizer = get_opt(**c.opt.d_flat)(model.parameters())
+	if state.get('opt'):
+		opt.load_state_dict(state['opt'])
 
-	if c.lo_ve_path:
-		print('init: loading config, modelm and opt \n', )
-		c, model, opt = load(c, path=c.lo_ve_path, things_to_load=dict(model= model, opt= opt))
-		pprint.pprint(c.d)
+	### under construction ###
+	# pre_opt = get_opt(**c.opt.pre_opt.d_flat)(model.named_parameters())
+	### under construction ###
+	scheduler = get_scheduler(**c.opt.scheduler.d_flat, n_scheduler_step=c.n_step)(opt)
+	if state.get('scheduler'):
+		scheduler.load_state_dict(state['scheduler'])
 
 	model, dataloader, opt, scheduler = c.dist.prepare(model, dataloader, opt, scheduler)
 
-	if 'train' in c.mode:
-		model.train()
-	elif c.mode=='eval':
+	model.train()
+	if c.tag.eval in c.mode:
 		model.eval()
 
 	compute_loss = partial(loss_fn, mode=c.mode, model_fn=model_fn_vmap, model=model)
 
-	model.to(device=c.device)
-	print('run:init: ', next(model.parameters()).device, next(model.parameters()).dtype, model, opt, scheduler, sep='\n')
+	device = next(model.parameters()).device
+	dtype = next(model.parameters()).dtype
+	dataloader.dataset.init_dataset(c, device, dtype, model=model)
 
 	return model, dataloader, compute_loss, opt, scheduler
 
@@ -75,7 +87,7 @@ def loss_fn(
 	data: torch.Tensor=None,
 	model:torch.nn.Module=None,
 	model_fn: Callable=None,
-	phase: str = 'train',
+	debug: bool = False,
 	**kw, 
 ):
 
@@ -93,162 +105,193 @@ def loss_fn(
 		e_mean_dist = torch.mean(torch.absolute(torch.median(e) - e))
 		e_clip = torch.clip(e, min=e-5*e_mean_dist, max=e+5*e_mean_dist)
 		energy = (e_clip - e_clip.mean())
-		
-	loss, grads, params = None, None, None
 
-	if 'train' in c.mode:
 		# if the other loss variable is detached, then the gradients are not computed
 		# sometimes, the one of the variables doesn't have gradients and you forget
+		# Parameters which did not receive grad for rank 0: w_final.weight
+		# error when a weight is not included in all gather
+	model: Model
 
-		if phase==c.tag.pre:
-			model: Model
+	if c.tag.pre in c.mode:
 
-			# unwrap_model = c.dist.unwrap(model)
-			m_orb_u, m_orb_d = model.compute_hf_orb(data, c.app.mol, c.app.hf)
-			m_orb = model.full_det_from_spin_det(m_orb_u, m_orb_d)
-			
-			data = data.detach().requires_grad_(True)
-			orb_u, orb_d = model.compute_orb(data)
-			orb = model.full_det_from_spin_det(orb_u, orb_d)
-			
-			loss = ((orb - m_orb)**2).mean(0).sum()
-			
-		elif phase==c.tag.train:
-			loss = ((energy / c.app.a_z.sum()) * model(data)).mean()
+		model = c.dist.unwrap(model)
 
-		else:
-			raise ValueError('phase not recognised: ', phase)
+		m_orb_ud = model.compute_hf_orb(data.detach())
+		orb_ud = model.compute_orb(data.detach())
+		
+		# m_orb = model.full_det_from_spin_det(*m_orb_ud)
+		# orb = model.full_det_from_spin_det(*orb_ud)
+		# eye = torch.eye(m_orb.shape[-1], device=m_orb.device, dtype=m_orb.dtype)
+		# loss = ((orb**2 - m_orb**2) * eye).mean(0).sum()
+		
+		loss = sum([(o - mo)**2 for o, mo in zip(orb_ud, m_orb_ud)]).mean(0).sum() / c.app.n_e
 
-	return loss, dict(data=data, e=e, pe=pe, ke=ke)
+	elif c.tag.train in c.mode:
+		loss = ((energy / c.app.a_z.sum()) * model(data)).mean()
+	
+	else:
+		loss, grads, params, loss_debug = None, None, None, {}
+
+	return loss, dict(loss= loss, e= e, pe= pe, ke= ke) 
+
 
 @torch.no_grad()
-def update(model, grads, opt, scheduler):
-	for k, p in model.named_parameters():
-		if not (p.grad is None):
-			g = grads.get(k)
-			p.grad.copy_(g if g is not None else torch.zeros_like(p))
-	opt.step()
+def update(model, grads, opt, scheduler, step=0, debug=False):
+	for i, (k, p) in enumerate(model.named_parameters()):
+		g = grads.get(k)
+
+		if g is None: # p.grad = torch.zeros_like(p) doesn't work
+			p.grad = torch.zeros_like(p)
+			g = torch.zeros_like(p)
+		
+		if debug and step==1:
+			print('update: i,k,g,p.req_grad,p: ', i, k, g.mean(), p.requires_grad, p.mean(), sep='\n')
+		
+		p.grad.copy_(g)
+
+	torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
+
 	scheduler.step()
+	opt.step()
+
 
 from things.utils import flat_any
 
 
-def run(c: Pyfig=None, c_update: dict=None, v_init: dict=None, **kw):
+def smrz(**kw):
+	summary = {}
+	for k, v_obj in kw.items():
+		if k in 'model':
+			summary['n_param'] = sum(p.numel() for p in v_obj.parameters())
+	return summary
 
 
-	model, dataloader, compute_loss, opt, scheduler = init_exp(c, c_update, **kw)
-	
-	initial_state_metrix = dict(n_param=sum(p.numel() for p in model.parameters()))
-	metrix = Metrix(mode=c.mode, init_summary=initial_state_metrix)
+def determine_log_step(step, n_step, n_log_metric):
+	if step==1:
+		print('determine_log_step: step, n_step, n_log_metric: ', step, n_step, n_log_metric, sep='\t')
+
+	if n_log_metric==0:
+		log = False
+	elif n_log_metric<n_step:
+		assert step <= n_step
+		log = True
+	else:
+		log = (step % (c.n_step//c.n_log_metric))==0
+	return log
+
+
+def run(c: Pyfig=None, v_init: dict= None, c_update: dict= None, **kw):
+
+	c.update((c_update or {}) | (kw or {}))
+
+	state: dict = lo_ve(path= c.lo_ve_path) if c.lo_ve_path else None
+	state = {k:torch.tensor(v) if isinstance(v, np.ndarray) else v for k,v in (state or {}).items()}
+
+	model, dataloader, compute_loss, opt, scheduler = init_exp(c, state)
+	model.requires_grad_(True)
+
+	init_summary = smrz(model=model)
+
+	metrix = Metrix(c.mode, init_summary, c.opt_obj_key, opt_obj_op= c.opt_obj_op)
 
 	print('depreciating v_init: keys=', (v_init or {}).keys())
 	print('run: ', c.mode, 'c_update: ', c_update, 'v_init:', v_init, sep='\n')
 
-	v_init = v_init or dict()
 	v_cpu_d = dict()
-
-	subrtne = (
-		(c.tag.pre, c.n_pre_step),
-		(c.tag.train, c.n_step),
-		(c.tag.eval, c.n_eval_step),
-	)
-
-	rtne = {
-		c.tag.train : (subrtne[0], subrtne[1]),
-		c.tag.eval	: (subrtne[2],),
-	}
+	v_init 	= v_init or dict()
 
 	c.start()
-
-	for phase, n_phase_step in rtne[c.mode.split('-')[0]]: # ! because of the -option
-		metrix.phase = phase
-
-		for (rel_step, step), data in zip(enumerate(range(1, n_phase_step+1), 1), dataloader):
+	lo_ve_path_fn = lambda mode, group_i, step: c.state_dir / f'{mode}_{group_i}_{step}.state'
+	
+	def run_loop():
+		""" wrap in function to force sync """
+		for step, loader_d in enumerate(dataloader, start=1):
 
 			model.zero_grad(set_to_none=True)
 
-			loss, v_d = compute_loss(data, model=model, phase=phase)
+			loss, v_d = compute_loss(loader_d['data'], model=model, debug=c.debug)
 
 			if c.tag.train in c.mode:
-
 				create_graph = c.opt.opt_name.lower()=='AdaHessian'.lower()
 				c.dist.backward(loss, create_graph=create_graph)
-				no_none = filter(lambda kv: not (kv[1].grad is None), model.named_parameters())
-				v_d['grads'] = {k:p.grad.detach() for k,p in no_none}
+				v_d['grads'] = {k: (p.grad.detach()) for k,p in model.named_parameters()}
 
 
+			v_d |= deepcopy(loader_d)
 			v_d = c.dist.sync(v_d, sync_method=c.tag.mean, this_is_noop= not (step % c.dist.sync_step))
 
 
-			if c.tag.train in c.mode:
-
-				update(model, v_d['grads'], opt, scheduler)
-
-				v_d['grads'] = {k:g.cpu().numpy() for k,g in v_d['grads'].items()}
+			if c.tag.train in c.mode and c.dist.head:
+				update(model, v_d['grads'], opt, scheduler, step, c.debug)
+				v_d['grads'] = {k:g.detach().cpu().numpy() for k,g in v_d['grads'].items()}
 				v_d['params'] = {k:p.detach().cpu().numpy() for k,p in model.named_parameters()}
 
+			### start : logging : cpu only ###
+			log_metrix = determine_log_step(step, c.n_step, c.n_log_metric)
+			log_state = determine_log_step(step, c.n_step, c.n_log_state)
+			is_first_or_middle_or_final = step==1 or step==c.n_step or step==c.n_step//2
 
-			###--- cpu only from here ---###
-			
-			log_metrix = not (step % n_phase_step//c.log_metric_nper_phase)
-			log_state = not (step % n_phase_step//c.log_state_nper_phase)
-			log_final = step==n_phase_step
-			is_log_step = log_metrix or log_state or log_final
+			v_cpu_d: dict = npify_tree(v_d)
 
-			if c.is_logging_process and is_log_step:
-
-				v_cpu_d = npify_tree(v_d)
-
-				if log_metrix:
-					v_metrix = metrix.tick(step,
-						opt_obj_key= c.opt_obj_key, opt_obj_op= c.opt_obj_op, v_cpu_d= v_cpu_d,
-						log_exp_stats_keys=c.log_exp_stats_keys
-					)
-					v_metrix = compute_metrix(v_metrix, sep='/')
-					wandb.log(v_metrix, step=step)
-
-				if log_state:
-					lo_ve(path=c.state_dir/f'{c.mode}_{phase}_i{step}.state', data=v_cpu_d)
-
-			if rel_step==1 or rel_step==n_phase_step:
-				print(f'{c.mode} {phase} step {step} of {n_phase_step} done')
-				first_and_last = \
-					{k:f'{float(v) if not isinstance(v, (np.ndarray, np.generic)) else float(v.mean()):.2f}' 
-					for k,v in flat_any(v_cpu_d).items()}
+			if is_first_or_middle_or_final:
+				print(f'{c.mode} step {step} of {c.n_step} done')
+				first_and_last = {}
+				for k,v in flat_any(v_cpu_d).items():
+					if v is None:
+						first_and_last[k] = None
+					elif isinstance(v, (np.ndarray, np.generic)):
+						first_and_last[k] = float(v.mean())
+					else:
+						first_and_last[k] = float(v)
 				pprint.pprint(first_and_last)
 
-	v_cpu_d |= v_metrix  # ! how better to do this?
+
+			if c.is_logging_process:
+
+				if log_state:
+
+					if c.tag.eval in c.mode:
+						state = dict(e= v_cpu_d.get('e'), r= v_cpu_d.get('r'))
+					else:
+						state = deepcopy(v_cpu_d)
+					
+					lo_ve(path= lo_ve_path_fn(c.mode, c.group_i, step), data= state)
+				
+				if log_metrix:
+					v_metrix = metrix.tick(step, v_cpu_d= v_cpu_d)
+					v_metrix = compute_metrix(v_metrix, sep= '/', debug= c.debug) 
+					wandb.log(v_metrix, step= step, commit= True)
+	
+		return v_cpu_d
+
+
+	v_cpu_d = run_loop()
+	v_cpu_d = metrix.tock(c.n_step, v_cpu_d)
 
 	c.to(framework='numpy')
 
-	torch.cuda.empty_cache()
-
 	if c.dist.head:
-		c.app.record_summary(summary= metrix.summary, opt_obj_all=metrix.opt_obj_all)
+		c.app.record_summary(summary= metrix.summary, opt_obj_all= metrix.opt_obj_all)
 
-		if c.log_data_dump_keys is not None:
-			
-			v_data_dump: dict = c.dist.sync(v_cpu_d, sync_method=c.tag.gather)
+		### under construction ###
+		# if c.log_data_dump_keys is not None:
+ 		# 	v_data_dump: dict = c.dist.sync(v_cpu_d['summary'], sync_method=c.tag.gather) 
+		# 	data_dump = dict(filter(lambda kv: kv[0] in c.log_data_dump_keys, v_data_dump.items()))
+		# 	lo_ve(path=(c.exp_dir/c.run_id).with_suffix('.npz'), data=data_dump)
+		### under construction ###
 
-			data_dump = dict(filter(lambda kv: kv[0] in c.log_data_dump_keys, v_data_dump.items()))
-
-			lo_ve(path=(c.exp_dir/c.run_id).with_suffix('.npz'), data=data_dump)
-
-	v_run = dict(v_init_next= dict(v_cpu_d_prev= v_cpu_d), c_update_next= dict())
-
-	if v_init.get(c.tag.mode_next, '')==c.tag.eval:
-		path = c.state_next_path
-		lo_ve(path=path, data=v_cpu_d)
-		v_run[c.tag.v_init_next].setdefault(c.tag.lo_ve_path, path)
+	v_init= dict(lo_ve_path= lo_ve_path_fn(c.mode, c.group_i, c.n_step))
+	v_run = dict(v_init= v_init, c_update= v_init, v_cpu_d= v_cpu_d)
 
 	c.end()
+	torch.cuda.empty_cache()
 
-	return v_run
-
-
+	return v_run or {}  # !!! where None?
 
 
 if __name__ == "__main__":
+
+	import traceback
 	
 	allowed_mode_all = 'train:eval:max_mem:opt_hypam:profile:train-eval'
 
@@ -257,147 +300,108 @@ if __name__ == "__main__":
 
 	class RunMode:
 
-		def __call__(ii, c: Pyfig, v_init: dict=None, c_update: dict=None):
-			try:
+		def __call__(ii, c: Pyfig, v_run_prev: dict=None):
 
-				fn = getattr(ii, c.mode.split('-')[0])
-				
-				v_run = fn(c=c, c_update=c_update, v_init=v_init)
+			fn = getattr(ii, c.mode.split('-')[0])
 
-			except Exception as e:
-				import traceback
-				print(f'RunMode:fail \n', c.mode, e, v_init, c_update, '\nc=\n')
-				print(traceback.format_exc())
-				pprint.pprint(c.d)
-				v_run = {}
+			print('run:', c.mode, 'c_update', pprint.pformat(v_run_prev))
 
+			v_run = fn(c=c, v_init= v_run_prev.get('v_init'), c_update= v_run_prev.get('c_update'))
 			return v_run
 
-		def opt_hypam(ii, c: Pyfig, c_update: dict=None, v_init: dict=None):
+		def opt_hypam(ii, c: Pyfig, v_init: dict= None, c_update: dict= None):
+
 			from things.opt_hypam_utils import opt_hypam, objective
 			import os
 
-
-			# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-			c_update['n_b'] = 2
-			# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-
-			os.environ['RANK'] = '0'
+			
+			# os.environ['RANK'] = '0'
 			assert c.dist.dist_name=='naive'
+			assert c.is_logging_process is True
 
-			def _run(*arg, **kw):
+			def run_trial(c, v_init_trial: dict= None, c_update_trial: dict= None):
 				try:
-					v_run = run(*arg, **kw)
+					# trial overloads the 
+					v_run = run(c, v_init= v_init | v_init_trial, c_update= c_update | c_update_trial)
 				except Exception as e:
 					print('trial failed: ', e)
 					v_run = {}
-				return v_run
+				return v_run 
 
-			print(
-				'run:opt_hypam: ', c.mode, 'c_update', \
-				pprint.pformat(c_update), 'v_init', \
-				pprint.pformat({k:(True if isinstance(v, (np.ndarray, np.generic)) else v) for k,v in flat_any(v_init).items()}), 
-				sep='\n'
-			)
-			objective = partial(objective, c=c, run=_run)
+			from copy import deepcopy
+			sync_step = deepcopy(c.dist.sync_step)
+			c.dist.sync_step = -2
+
+			objective = partial(objective, run_trial= run_trial, c=c)
 			v_run = opt_hypam(objective, c)
 
-			# Create the summary run.
-			# summary = wandb.init(project="optuna",
-			# 					name="summary",
-			# 					job_type="logging")
+			c.dist.sync_step = sync_step
+			return v_run or {}
 
-			# Getting the study trials.
-			# trials = study.trials
-
-			# WandB summary.
-			# for step, trial in enumerate(trials):
-			# 	# Logging the loss.
-			# 	summary.log({"mse": trial.value}, step=step)
-
-			# 	# Logging the parameters.
-			# 	for k, v in trial.params.items():
-			# 		summary.log({k: v}, step=step)
-
-			return v_run
-
-		def max_mem(ii, c: Pyfig, c_update: dict=None, v_init: dict=None):
+		def max_mem(ii, c: Pyfig, v_init: dict= None, c_update: dict= None):
+			print('\nrun:max_mem')
 			from things.for_torch.torch_utils import get_max_mem_c
 			
-			c.mode = c.tag.train
-			c.n_step = 30
+			path = c.exchange_dir / 'max_mem.flag'
 
-			print(
-				'run:max_mem: ', c.mode, 'c_update', \
-				pprint.pformat(c_update), 'v_init', \
-				pprint.pformat({k:(True if isinstance(v, (np.ndarray, np.generic)) else v) for k,v in flat_any(v_init).items()}), 
-				sep='\n'
-			)
-			v_run = get_max_mem_c(run, c=c)
+			if c.dist.rank==0:
+				c_mem = deepcopy(c._memory())
+				c.n_train_step = 30
+				c.mode = c.tag.train
 
+				min_power = 5 # 2**5 = 32 walkers
+				max_power = c.debug_c.max_power if c.debug else 20 # 2**20 = 1 million walkers
+				v_run = get_max_mem_c(run, c=c, min_power= min_power, max_power= max_power)
+
+				c.update(c_mem | v_run.get('c_update', {}))
+				path.write_text(f'{c.n_b}')
+			else:
+				print('max_mem:waiting rank,', c.dist.rank)
+				from time import sleep
+				while not path.exists():
+					sleep(10)
+				sleep(c.dist.rank)
+				c.n_b = int(path.read_text())
+				print('max_mem:updated n_b', c.n_b)
+			
+			pprint.pprint(v_run)
+			return v_run or {}
+
+		def train(ii, c: Pyfig, v_init: dict= None, c_update: dict= None):
+			print('\nrun:train')
+			v_run = run(c=c, v_init= v_init, c_update= c_update)
 			return v_run
 
-		def train(ii, c: Pyfig, c_update: dict=None, v_init: dict=None):
-			print(
-				'run:train:', c.mode, 'c_update', \
-				pprint.pformat(c_update), 'v_init', \
-				pprint.pformat({k:(True if isinstance(v, (np.ndarray, np.generic)) else v) for k,v in flat_any(v_init).items()}), 
-				sep='\n'
-			)
-			v_run = run(c=c, v_init=v_init)
+		def pre(ii, c: Pyfig, v_init: dict= None, c_update: dict= None):
+			print('\nrun:pre')
+			v_run = run(c=c, v_init= v_init, c_update= c_update)
 			return v_run
 			
-		def eval(ii, c: Pyfig, c_update: dict=None, v_init: dict=None):
-
-			data_prev = v_init.get(c.tag.v_cpu_d_prev, {}).get(c.tag.data, None)
-			lo_ve_path = v_init.get(c.tag.lo_ve_path, None)
-
-			assert data_prev is not None and lo_ve_path is not None, 'eval: data_prev or lo_ve_path is None'
-			
-			v_init[c.tag.data] = data_prev
-			v_init[c.tag.lo_ve_path] = lo_ve_path
-
-
-			print(
-				'run:eval:', c.mode, 'c_update', \
-				pprint.pformat(c_update), 'v_init', \
-				pprint.pformat({k:(True if isinstance(v, (np.ndarray, np.generic)) else v) for k,v in flat_any(v_init).items()}), 
-				sep='\n'
-			)
-			v_run = run(c=c, v_init=v_init)
-			
+		def eval(ii, c: Pyfig, v_init: dict= None, c_update: dict= None):
+			print('\nrun:eval')
+			v_run = run(c=c, v_init= v_init, c_update= c_update)
 			return v_run
 
-		def profile(ii, c: Pyfig, c_update: dict=None, v_init: dict=None):
-			from things.for_torch.torch_utils import gen_profile
-
-			c.mode = 'train'
-			
-			fn = partial(run, c=c, v_init=v_init)
-			v_run = gen_profile(fn, c)
-			
-			return v_run
 
 	run_mode = RunMode()
 
-	res, v_run = dict(), dict(v_init_next=dict())
+	res = dict()
+
+	# v_run: mode, v_init, c_update
+	v_run = dict(mode= None, v_init=dict(), c_update=dict())
 
 	mode_all = (c.mode or c.multimode or c.tag.train).split(':') 
+	
 	print('run.py:run_loop:mode: = \n ***', mode_all, '***')
 	for mode_i, mode in enumerate(mode_all):
+		print('run.py:run_loop:mode: = \n ***', mode, '***')
 
 		c.mode = mode
 
-		c_update_next = v_run.get('c_update_next', {})
-		v_init_next = v_run.get('v_init_next', {})
+		v_run = run_mode(c, v_run_prev= v_run)
 
-		mode_next_i = mode_i+1
-		if mode_next_i < len(mode_all):
-			v_init_next.setdefault(c.tag.mode_next, mode_all[mode_next_i]) 
-		
-		v_run = run_mode(c, v_init=v_init_next, c_update=c_update_next)
-
-		res[mode] = deepcopy(v_run)
-
-	
+		if not v_run is None:
+			v_run['mode'] = mode
+			res[mode] = deepcopy(v_run)
+		else:
+			v_run = {}

@@ -120,8 +120,9 @@ class PyfigBase:
 	n_eval_step:        int   	= 0
 	n_pre_step:    		int   	= 0
 
-	log_metric_step:	int   	= 0
-	log_state_step: 	int   	= 0
+	n_log_metric:		int  	= 100
+	n_log_state:		int  	= 4
+	is_logging_process: bool    = False
 
 	lo_ve_path:			str 	= ''
 
@@ -174,7 +175,8 @@ class PyfigBase:
 	class dist(PlugIn):
 		
 		dist_name: 	str			= None  # options: accelerate, naive
-		sync_step:		int		= 5
+		sync_step:		int		= 1
+		ready: 			bool	= True
 
 		rank_env_name: 	str		= 'RANK'
 		launch_cmd:		str		= property(lambda _: 
@@ -195,6 +197,12 @@ class PyfigBase:
 
 		class dist_c(PlugIn):
 			pass
+		
+		def end(ii):
+			pass
+
+		def wait_for_everyone(ii):
+			pass
 
 		def sync(ii, v_d: dict, sync_method: str, this_is_noop: bool=False) -> list[Any]:
 			if this_is_noop or ii.n_process==1:
@@ -207,14 +215,38 @@ class PyfigBase:
 
 		def backward(ii, loss, create_graph=False):
 			loss.backward(create_graph=create_graph)
-
+		
 		def prepare(ii, *arg, **kw):
+			from .for_torch.torch_utils import try_convert
+
+			print('\ndist:prepare: ')
+
+			for k, v in kw.items():
+				kw[k] = try_convert(k, v, ii._p.device, ii._p.dtype)
+			
+			new_arg = []
+			for i, v in enumerate(arg):
+				# arg[i] = try_convert(i, v, ii._p.device, ii._p.dtype)
+				new_arg += [try_convert(v, v, ii._p.device, ii._p.dtype)]
+
 			return list(arg) + list(kw.values())
 
-		def dist_set_seed(ii, seed):
+		def dist_set_seed(ii, seed) -> int:
+			import torch
+			seed = seed + int(ii.rank)
+			torch.random.manual_seed(seed)
 			return seed
 		
 		def dist_set_device(ii, device):
+			import torch
+			device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+			if not device=='cpu':
+				device_int = torch.cuda.current_device()
+				torch_n_device = torch.cuda.device_count()
+				cuda_visible_devices = os.environ['CUDA_VISIBLE_DEVICES']
+				print('CUDA_VISIBLE_DEVICES:', cuda_visible_devices, device_int, torch_n_device)
+			print('pyfig: Device is ', device)
+			ii._device = device
 			return device
 		
 		def dist_set_dtype(ii, dtype):
@@ -222,6 +254,7 @@ class PyfigBase:
 
 		def unwrap(ii, model):
 			return model
+
 
 	class resource(PlugIn):
 		submit: 		bool	= False
@@ -243,18 +276,18 @@ class PyfigBase:
 
 		record: str = 'record'
 
-		mode_next: str = 'mode_next'
-		c_update_next: str = 'c_update_next'
-		v_init_next: str = 'v_init_next'
-		send_to_next: str = 'send_to_next'
-		v_cpu_d_prev: str = 'v_cpu_d_prev'
+		# v_run contains
+		v_cpu_d: str = 'v_cpu_d'
+		v_init: str = 'v_init'
+		c_update: str = 'c_update'
 
+		# at the end of a run, lo_ve path goes into c_update
 		lo_ve_path: str = 'lo_ve_path'
-		
+		# which is assigned state_dir / state_name
+		state_name: str = '{mode}_{group_i}_{step}.state' 
+
 		gather: str = 'gather'
 		mean: str = 'mean'
-
-
 
 
 	home:					Path	= Path().home()
@@ -281,6 +314,7 @@ class PyfigBase:
 	_sub_ins: dict = {}
 	step: int = -1
 	zweep: str = ''
+	pid: int = property(lambda _: _.dist.rank)
 
 	def __init__(ii, 
 		notebook:bool=False,  		# removes sys_arg for notebooks
@@ -301,54 +335,42 @@ class PyfigBase:
 
 		update = flat_any((c_init or {})) | flat_any((other_arg or {})) | (sys_arg or {})
 
-		### under construction ###
-		from .distribute_utils import naive, hf_accel
+		try:
+			print('\nupdate')
+			pprint.pprint(update)
+			ii.update(update)
+			print('\npyfig:init: initial configuration')
+			pprint.pprint(ii.d)
 
-		plugin_repo = dict(
-			dist_name = dict(
-				hf_accel=hf_accel,
-				naive = naive,
-			),
-		)
+			if ii.debug:
+				os.environ['debug'] = 'True'
+				ii.debug_log([sys_arg, dict(os.environ.items()), ii.d], 
+				[f'log_sys_arg_{ii.pid}.log', f'log_env_run_{ii.pid}.log', f'log_d_{ii.pid}.log'])
 
-		new_sub_cls = dict(filter(lambda kv: kv[0] in plugin_repo, update.items()))
-		[update.pop(k) for k in new_sub_cls.keys()]
-		for plugin, plugin_version in new_sub_cls.items():
-			print('adding plugin:', plugin, plugin_version, '...')
-			sub_cls = plugin_repo[plugin][plugin_version]
-			plugin = plugin.split('_')[0]
-			ii.init_sub_cls(sub_cls=sub_cls, name=plugin)
-
-		### under construction ###
-
-		print('update')
-		pprint.pprint(update)
-		ii.update(update)
-
-		if ii.debug:
-			os.environ['debug'] = 'True'
-
-		ii.debug_log([sys_arg, dict(os.environ.items()), ii.d], ['log_sys_arg.log', 'log_env_run.log', 'log_d.log'])
+		except Exception as e:
+			print('init error:', e)
+			raise e
 
 	def start(ii):
 
-		if ii.dist.head:
+		if ii.is_logging_process:
+			print('start:init:logging')
 			assert ii.resource.submit == False
 
-			print('start:wb:init creating the group')
-			ii.setup_exp_dir(group_exp= ii.group_exp, force_new_id= False)
+			if not ii.exp_id:
+				if not ii.exp_dir.exists():
+					print('start:creating exp_dir, current exp_id= ', ii.exp_id)
+					ii.setup_exp_dir(group_exp= ii.group_exp, force_new_id= False)
 
 			ii._group_i += 1
-		
 			ii.run_id = ii.exp_id + '.' + ii.mode + '.' + str(ii._group_i)
-			ii.wb.wb_run_path = f'{ii.wb.entity}/{ii.project}/{ii.run_id}'  # no / no : - in mode _ in names try \ + | .
+		
+			ii.wb.wb_run_path = f'{ii.wb.entity}/{ii.project}/{ii.run_id}'  # no no :,/ - in mode _ in names try \ + | .
 			# ii.run_id = '.'.join(ii.run_id.split('.'))  
 			
 			print('start:wb:init:exp_dir = \n ***', ii.exp_dir, '***')
 			print('start:wb:init:wb_run_path = \n ***', ii.wb.wb_run_path, '***')
 			print('start:wb:init:run_id = \n ***', ii.run_id, '***')
-
-			ii.setup_exp_dir(group_exp= False, force_new_id= False)
 
 			tags = [str(s) for s in [*ii.mode.split('-'), ii.exp_id, ii._group_i]]
 			
@@ -366,7 +388,7 @@ class PyfigBase:
 				reinit 		= not (ii.wb.run is None)
 			)
 
-			os.environ['FAIL_FLAG'] = str(Path(ii.fail_dir, ii.exp_name + ii.run_id))
+			os.environ['FAIL_FLAG'] = str(Path(ii.exp_dir, ii.run_id))
 			print(ii.wb.run_url)
 			print('exp_dir: ', ii.exp_dir)
 			
@@ -377,38 +399,43 @@ class PyfigBase:
 			ii.wb.run.finish()
 		except:
 			pass
+		try: 
+			ii.dist.end()
+		except Exception as e:
+			print('end error:', e)
+			raise e
+			
 
 	def run_local_or_submit(ii):
 
 		if ii.resource.submit:
-			print('submitting to cluster')
-			ii.resource.submit = False # docs:submit
+			try: 
+				print('submitting to cluster')
+				ii.resource.submit = False # docs:submit
 
-			run_or_sweep_d = ii.get_run_or_sweep_d()
+				run_or_sweep_d = ii.get_run_or_sweep_d()
 
-			for i, run_d in enumerate(run_or_sweep_d):
+				for i, run_d in enumerate(run_or_sweep_d):
 
-				if ii.run_sweep or ii.wb.wb_sweep or ii.zweep:
-					group_exp = not i==0
-				else:
-					group_exp = ii.group_exp
+					ii.setup_exp_dir(group_exp= False, force_new_id= True)
 
-				ii.setup_exp_dir(group_exp= group_exp, force_new_id= True)
-				base_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, 
-							ignore=ii.ignore+['resource','dist_c','slurm_c','parameters'])
-				run_d = base_d | run_d
+					ii.update(run_d)
+					c_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, 
+					ignore=ii.ignore+['resource','dist_c','slurm_c','parameters'])
 
-				ii.debug_log([dict(os.environ.items()), run_d], ['log-submit_env.log', 'log-submit_d.log'])
+					ii.resource.cluster_submit(c_d)
+					ii.debug_log([dict(os.environ.items()), run_d], ['log-submit_env.log', 'log-submit_d.log'])
 
-				ii.resource.cluster_submit(run_d)
-
+					ii.save_code_state()
 				print('log_group_url: \t\t\t',  ii.wb.run_url)
 				print('exp_dir: \t\t\t', ii.exp_dir)
 				print('exp_log: \t\t\t', ii._debug_paths['device_log_path'])
 
-			ii.save_code_state()
-			
-			sys.exit('Exiting from submit.')
+				sys.exit('Success, exiting from submit.')
+			except Exception as e:
+				print(e)
+				sys.exit('Error in submit.')
+
 
 	def save_code_state(ii, exts = ['.py', '.ipynb', '.md']):
 		import shutil
@@ -471,24 +498,24 @@ class PyfigBase:
 			group_exp = group_exp or ('~' in exp_name)
 			sweep_dir = 'sweep'*ii.run_sweep
 			exp_group_dir = Path(ii.dump_exp_dir, sweep_dir, exp_name)
-			exp_group_dir = iterate_n_dir(exp_group_dir, group_exp=group_exp) # pyfig:setup_exp_dir does not append -{i} if group allowed
+			exp_group_dir = iterate_n_dir(exp_group_dir, group_exp= group_exp) # pyfig:setup_exp_dir does not append -{i} if group allowed
 			ii.exp_name = exp_group_dir.name
 
 		print('exp_dir: ', ii.exp_dir) 
 		[mkdir(p) for _, p in ii._paths.items()]
 	
 	def get_run_or_sweep_d(ii,):
+		if ii.zweep: 
+			ii.run_sweep = True
+			zweep = ii.zweep.split('-')
+			zweep_v = zweep[0]
+			t = zweep[-1]
+			print('pyfig:zweep: ', zweep_v, t, zweep[1:-1])
+			return [{zweep_v: ([i] if t=='list' else int(i))} for i in zweep[1:-1]] 
 		
 		if not (ii.run_sweep or ii.wb.wb_sweep):
 			""" single run takes c from base in submit loop """
 			c = [dict(),] 
-			if ii.zweep: 
-				ii.run_sweep = True
-				# param-start-end-if anything  id-n_step-  i/a + c in range()
-				# else categorical tuple
-				zweep = ii.zweep.split('-')
-				t = zweep[-1]
-				c = [{zweep[0]: [i] if t=='list' else int(i)} for i in zweep[1:-1]] 
 			return c
 	
 		if ii.wb.wb_sweep:
@@ -548,31 +575,45 @@ class PyfigBase:
 		d = flat_any(args if args else {}) | ii.d_flat | (kw or {})
 		d_k = inspect.signature(f.__init__).parameters.keys()
 		d = {k:v for k,v in d.items() if k in d_k} 
+		print('pyfig:partial setting for ', f.__name__, )
+		pprint.pprint(d)
 		return f(**d)
 
 	def update(ii, _arg: dict=None, c_update: dict=None, **kw):
 		print('\npyfig:update')
 
 		c_update = (_arg or {}) | (c_update or {}) | (kw or {})
-		
-		arg = flat_any(c_update)
-		
+		c_update = flat_any(c_update)
 		c_keys = list(ii.d_flat.keys())
-		
-		arg = dict(filter(lambda kv: kv[0] in c_keys, arg.items()))
+		arg = dict(filter(lambda kv: kv[0] in c_keys, c_update.items()))
+
+		from .distribute_utils import naive, hf_accel
+		plugin_repo = dict(
+			dist_name = dict(
+				hf_accel	= hf_accel,
+				naive		= naive,
+			),
+		)
 
 		for k_update, v_update in deepcopy(arg).items():
-			is_updated = walk_ins_tree(ii, k_update, v_update)
-			if not is_updated:
 
-				if k_update=='dtype': # !!! pyfig:fix: Special case, generalify
-					ii.dtype = v_update
-					print('dtype: --- ', v_update)
-				else:
+			if k_update=='dtype': # !!! pyfig:fix: Special case, generalify
+				ii.dtype = v_update
+				print('dtype: --- ', v_update)
+
+			elif k_update in plugin_repo:
+				plugin = plugin_repo[k_update][v_update]
+				plugin_name = k_update.split('_')[0]
+				print('adding plugin:', plugin_name, plugin, '...')
+				ii.init_sub_cls(sub_cls=plugin, name=plugin_name)
+			else:
+				is_updated = walk_ins_tree(ii, k_update, v_update)
+				if not is_updated:
 					print(f'not updated: k={k_update} v={v_update} type={type(v_update)}')
 
 		not_arg = dict(filter(lambda kv: kv[0] not in c_keys, arg.items()))
-		debug_dict(msg='update:not = \n', not_arg=not_arg)
+		if not_arg:
+			debug_dict(msg='update:not = \n', not_arg = not_arg)
 		
 	@staticmethod
 	def log(info: dict|str, path: Path, group_exp: bool=True):
@@ -603,40 +644,24 @@ class PyfigBase:
 		print('pyfig: dtype is ', ii.dtype)
 		return ii.dtype
 
-	def set_device(ii, device: str=None):
-		import torch
-		if device:
-			ii.device = device
-		elif not torch.cuda.is_available(): 
-			print('Running on cpu', ii.dist.dist_id)
-			ii.device = 'cpu'
-		elif ii.dist.dist_name=='hf_accel':
-			print('Getting device from dist plugin', ii.dist.dist_name)
-			print(dir(ii.dist))
-			ii.device = ii.dist.dist_set_device(ii.device)
-		else:
-			device_int = torch.cuda.current_device()
-			torch_n_device = torch.cuda.device_count()
-			cuda_visible_devices = os.environ['CUDA_VISIBLE_DEVICES']
-			print('CUDA_VISIBLE_DEVICES:', cuda_visible_devices)
-			ii.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+	def set_device(ii, device: str= None):
+		ii.device = ii.dist.dist_set_device(device or ii.device)
 		print('pyfig: Device is ', ii.device)
 		return ii.device
 
-	def set_seed(ii, seed=None):
-		print('\npyfig:set_seed:')
-
-		if callable(getattr(ii.dist, 'dist_set_seed')):
-			print(f'dist plugin setting seed')
-			seed = ii.dist.dist_set_seed(ii.seed)
-		else:
-			import torch
-			print(f'pyfig setting seed')
-			seed = ii.seed + ii.dist.rank
-			torch.random.manual_seed(ii.seed)
-		ii.seed = seed
+	def set_seed(ii, seed = None):
+		import time
+		print('pyfig:init seed=', ii.seed)
+		print('pyfig:init seed:arg =', seed)
+		seed = seed or ii.seed
+		print(f'dist plugin setting seed', seed)
+		ii.seed = ii.dist.dist_set_seed((seed + int(time.time()*10000)) % 2**32-2) # !!! pyfig:fix: seed is not set well
+		assert ii.seed is not None, 'check seed passed back from dist plugin'
 		print('pyfig:set_seed seed=', ii.seed)
 		return ii.seed
+
+	def _memory(ii, sub_ins=True, attr=True, _prop=False, _ignore=[]):
+		return ins_to_dict(ii, attr=attr, sub_ins=sub_ins, prop=_prop, ignore=ii.ignore+_ignore)
 
 def walk_ins_tree(
 	ins: type, 
