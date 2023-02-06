@@ -35,20 +35,30 @@ hostname = os.environ.get('HOSTNAME', None)
 
 class naive(PyfigBase.dist):
 	
+	_nsync: int = 0
 	dist_name: 	str		= 'naive'
 	head: 		bool 	= property(lambda _: _.rank==0 or (_._p.tag.opt_hypam in _._p.mode))
+	sync_step:  int 	= 5
 	launch_cmd: Callable 	= property(lambda _: 
-		lambda submit_i, cmd: 
-		f'export RANK={submit_i} \
-		\nsrun --gpus=1 --cpus-per-task=4 --ntasks=1 --exclusive --label python -u {_._p.run_name} {cmd} '
+		lambda node_i, submit_i, cmd: 
+		f'\nexport RANK={submit_i} \
+		\necho $SLURM_JOB_NODELIST \
+		\nsrun --ntasks=1 --gres=gpu:1 --cpus-per-task=8 --ntasks=1 --exclusive --label python -u {_._p.run_name} {cmd} '
 	)
 
+	# bash line to access slurm job nodelist array
+	# node1=$SLURM_JOB_NODELIST[0]
+	"""
+	- --gres=gpu:1 	: 1 gpu per task (launched with srun)
+	- --cpus-per-task=8 : 8 cpus per task
+	- --ntasks=8 : 8 tasks per node
+	- --exclusive : exclusive use of the node
+	- --label : label the output
+	- --gpus-per-task=1 : 1 gpu per task"""
 	@torch.no_grad()
-	def dist_sync(ii, v_d: dict, sync_method: str) -> list[torch.Tensor]:
+	def dist_sync(ii, v_d: dict, sync_method: str, step= 0) -> list[torch.Tensor]:
 
-		step = gen_time_id()
-
-		v_path = (ii._p.exchange_dir / f'{step}_{ii._p.dist.dist_id}').with_suffix('.pk')
+		v_path = (ii._p.exchange_dir / f'step{ii._nsync}_rank{ii.rank}_{ii.dist_id}').with_suffix('.pk')
 		v_sync_path = add_to_Path(v_path, '-sync')
 		
 		try:
@@ -63,12 +73,14 @@ class naive(PyfigBase.dist):
 		finally:
 			gc.enable()
 		
-		if ii.head:
+		if not ii.rank:
 
 			n_ready = 0
 			while n_ready < ii._p.resource.n_gpu:
-				k_path_all = list(ii._p.exchange_dir.glob(f'{step}_*'))
+				k_path_all = list(ii._p.exchange_dir.glob(f'step{ii._nsync}_*'))
 				n_ready = len(k_path_all)
+				print(n_ready)
+				sleep(2)
 
 			for i, p in enumerate(k_path_all):
 				leaves = [load(p),] if i==0   else [*leaves, load(p)]
@@ -83,7 +95,7 @@ class naive(PyfigBase.dist):
 			try:
 				gc.disable()
 				for p in k_path_all:
-					dump(add_to_Path(p, '-sync'), v_sync)
+					dump(add_to_Path(p, f'-sync'), v_sync)
 			except Exception as e:
 				print(e)
 			finally:
@@ -92,8 +104,8 @@ class naive(PyfigBase.dist):
 				gc.enable()
 
 		while v_path.exists():
-			sleep(0.02)
-		sleep(0.02)
+			sleep(0.05)
+		sleep(0.05)
 
 		gc.disable()
 		try:
@@ -109,6 +121,8 @@ class naive(PyfigBase.dist):
 		finally: # ALWAYS EXECUTED
 			v_sync_path.unlink()
 			gc.enable()
+
+		ii._nsync += 1
 		return v_sync
 
 
@@ -119,7 +133,7 @@ try:
 	mixed_precision= 'no' # 'fp16, 'bf16'
 
 	class hf_accel(PyfigBase.dist):
-
+		sync_step:  int 	= 5
 		dist_name: str		= 'hf_accel'
 
 		accel: accelerate.Accelerator = None
@@ -129,7 +143,7 @@ try:
 		mixed_precision: str	= 'no' # 'fp16, 'bf16'
 
 		launch_cmd:	Callable  	= property(lambda _: 
-			lambda submit_i, cmd: 
+			lambda node_i, submit_i, cmd: 
 			f'accelerate launch {dict_to_cmd(_.dist_c.d, exclude_false=True)} {_._p.run_name} \ "{cmd}" '
 		) # ! backslash must come between run.py and cmd and "cmd" needed
 

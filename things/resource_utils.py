@@ -45,9 +45,8 @@ class niflheim(PyfigBase.resource):
 	n_gpu: int 		= 1
 	n_node: int 	= property(lambda _: int(math.ceil(_.n_gpu/10))) 
 
-	architecture:   str 	= 'cuda'
-	nifl_gpu_per_node: int  = property(lambda _: 10)
-	device_log_path: str 	= '' 
+	architecture:   	str 	= 'cuda'
+	nifl_gpu_per_node: 	int  = property(lambda _: 10)
 
 	job_id: 		str  	= property(lambda _: os.environ.get('SLURM_JOBID', 'No SLURM_JOBID available.'))  # slurm only
 
@@ -61,7 +60,7 @@ class niflheim(PyfigBase.resource):
 
 	class slurm_c(PlugIn):
 		export			= 'ALL'
-		cpus_per_gpu   = 8				# 1 task 1 gpu 8 cpus per task 
+		cpus_per_gpu    = 8				# 1 task 1 gpu 8 cpus per task 
 		partition       = 'sm3090'
 		time            = '0-00:10:00'  # D-HH:MM:SS
 		nodes           = property(lambda _: str(_._p.n_node)) 			# (MIN-MAX) 
@@ -128,10 +127,15 @@ class niflheim(PyfigBase.resource):
 
 		dist_name = ii._p.dist.dist_name
 		n_submit = 1 if dist_name=='hf_accel' else ii.n_gpu
+		nodes = iter(range(ii.n_node))
+
 		for submit_i in range(n_submit):
+			if submit_i % 10 == 0:
+				node_i = next(nodes)
 			print(f'\ndistribution: {dist_name} submit_i: {submit_i}')
 			cmd = dict_to_cmd(job, exclude_none=True)
-			body += f'{ii._p.dist.launch_cmd(submit_i, cmd)} 1> {ii.device_log_path(rank=submit_i)} 2>&1 & \n'
+			body += f'{ii._p.dist.launch_cmd(node_i, submit_i, cmd)} 1> {ii.device_log_path(rank=submit_i)} 2>&1 & \n'
+			
 			
 		body += '\nwait \n'
 		body += '\necho End \n'
@@ -155,5 +159,8 @@ class niflheim(PyfigBase.resource):
 		return Slurm(**ii.slurm_c.d)
 
 	def device_log_path(ii, rank=0):
-		return ii._p.exp_dir/(str(rank)+"_device.log") # + ii._p.hostname.split('.')[0])
+		if not rank:
+			return ii._p.exp_dir/(str(rank)+"_device.log") # + ii._p.hostname.split('.')[0])
+		else:
+			return ii._p.cluster_dir/(str(rank)+"_device.log")
 

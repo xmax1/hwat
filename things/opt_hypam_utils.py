@@ -37,16 +37,19 @@ parameters: 	dict 	= dict(
 def str_lower_eq(a: str, b:str):
 	return a.lower()==b.lower()
 
+import torch 
+
 def objective(trial: Trial, run_trial: Callable, c: PyfigBase):
 	
 	print('trial: ', trial.number)
 	c_update = get_hypam_from_study(trial, c.sweep.parameters)
 	pprint.pprint(c_update)
 
-	c.mode = 'train'
-	v_run: dict = run_trial(c=c, c_update_trial= c_update)
-	c.mode = 'eval'
-	v_run: dict = run_trial(c=c, v_init_trial= v_run.get(c.tag.v_init, {}), c_update_trial= v_run.get('c_update', {}))
+	try:
+		v_run: dict = run_trial(c= c, c_update_trial= c_update)
+	except torch.cuda.OutOfMemoryError as e:
+		print('trial out of memory')
+		return float("inf")
 
 	dummy = [np.array([0.0]), np.array([0.0])]
 	opt_obj_all = v_run.get(c.tag.v_cpu_d, {}).get(c.tag.opt_obj_all, dummy)
@@ -57,8 +60,6 @@ def suggest_hypam(trial: optuna.Trial, name: str, v: Param):
 
 	if isinstance(v, dict):
 		v = Param(**v)
-
-	debug_dict(d=v.d, msg='suggest_hypam:Param')
 
 	if not v.domain:
 		return trial.suggest_categorical(name, v.values)
@@ -103,38 +104,45 @@ def get_hypam_from_study(trial: optuna.Trial, sweep_p: dict[str, Param]) -> dict
 
 import time
 
-def opt_hypam(objective: Callable, c: PyfigBase):
+
+def opt_hypam(c: PyfigBase, run_trial: Callable):
 	print('opt_hypam:create_study rank,head,is_logging_process', c.dist.rank, c.dist.head, c.is_logging_process)
 
-	if not c.dist.head:
+	if c.dist.rank:
 		print('opt_hypam:waiting_for_storage rank,head,is_logging_process', c.dist.rank, c.dist.head, c.is_logging_process)
 		while not len(list(c.exp_dir.glob('*.db'))):
 			sleep(5.)
 		sleep(5.)
 		study = optuna.load_study(study_name= c.sweep.sweep_name, storage=c.sweep.storage)
 
-
 	else:
 		print('opt_hypam:creating_study rank,head', c.dist.rank, c.dist.head)
 		study = optuna.create_study(
 			direction 		= "minimize",
 			study_name		= c.sweep.sweep_name,
-			load_if_exists 	= True, 
 			storage			= c.sweep.storage,
 			sampler 		= lo_ve(path=c.exp_dir/'sampler.pk') or optuna.samplers.TPESampler(seed=c.seed),
 			pruner			= optuna.pruners.MedianPruner(n_warmup_steps=10),
+			load_if_exists 	= True, 
 		)
 
+	from optuna.study import MaxTrialsCallback
+	from optuna.trial import TrialState
+	from functools import partial
+	import json
+
+	_objective = partial(objective, c=c, run_trial=run_trial)
 	study.optimize(
-		objective, 
+		_objective, 
 		n_trials=c.sweep.n_trials, 
 		timeout=None, 
-		callbacks=None,
+		callbacks=[MaxTrialsCallback(c.sweep.n_trials, states=(TrialState.COMPLETE,))],
 		gc_after_trial=True
 	)
 
-	best_param = dict(c_update=study.best_params)
-	print(Path('.'), '\nstudy:best_param = \n', best_param)
-	debug_dict(d=study, msg='study')
-	debug_dict(d=study.trials, msg='trials')
-	return best_param
+	v_run = dict(c_update= study.best_params)
+	path = c.exp_dir/'best_params.json'
+	path.write_text(json.dumps(study.best_params, indent=4))
+	print('\nstudy:best_params')
+	pprint.pprint(v_run)
+	return v_run

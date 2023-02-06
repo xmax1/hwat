@@ -38,6 +38,8 @@ import wandb
 	- include docs in base classes
 	- distribute / resource
 		- tasks -> threads -> processes -> nodes -> gpus -> cpus -> rank... 
+- fix the memory error catching in optuna, now it hangs
+- hostname IS NOT THE NODENAME S007 NEQ S008
 
 - DISTRIBUTION OF HF_ACCEL 
 - 1. write a hostfile (plugin)
@@ -137,9 +139,12 @@ python run.py --submit --time 01:00:00 --system O2_neutral_triplet --dist_name h
 - base model 
 - max mem only head
 
-python run.py --submit --time 01:00:00 --system O2_neutral_triplet --dist_name hf_accel --zweep-n_gpu-1-2-4-8-10 --exp_name O2_scaling --multimode max_mem:opt_hypam
-python run.py --submit --time 01:00:00 --system O2_neutral_triplet --dist_name hf_accel --zweep-n_gpu-1-2-4-8-10 --exp_name O2_scaling --multimode max_mem:opt_hypam
 
+
+python run.py --submit --time 03:00:00 --system O2_neutral_triplet --exp_name ~O2_scaling1 --zweep n_gpu-1-2-4-8-10-int --multimode pre:opt_hypam:pre:train:eval
+python run.py --submit --time 06:00:00 --system O2_neutral_triplet --exp_name ~O2_scaling1 --multimode pre:opt_hypam:pre:train:eval --n_gpu 20
+
+python run.py --submit --time 06:00:00 --system O2_neutral_triplet --exp_name ~O2_scaling1 --zweep n_gpu-1-2-4-8-10-int --multimode pre:opt_hypam:pre:train:eval --dist_name hf_accel
 
 
 
@@ -188,15 +193,15 @@ class Pyfig(PyfigBase):
 	n_log_state:		int  	= 4
 	is_logging_process: bool 	= property(lambda _: _.mode==_.tag.opt_hypam or _.dist.head)
 
-	log_exp_stats_keys: str		= None  # ['e', 't_per_it', 'max_mem_alloc']
-	log_data_dump_keys: str		= None
+	log_state_keys:     list 	= [] # ['opt_obj', 'r', 'grads', 'params', ...] 'all' is all
+	log_metric_keys: 	str		= [] # ['opt_obj', 't_per_it', 'max_mem_alloc']
  
 	opt_obj_key:			str		= 'e'
 	opt_obj_op: Callable = property(lambda _: lambda x: x.std())
 	
-
 	class data(PlugIn):
 		n_b: int = 1024
+		loader_n_b: int = 1
 	
 	class app(PlugIn):
 		system_name: str		= ''
@@ -223,6 +228,10 @@ class Pyfig(PyfigBase):
 		n_d:        int         = property(lambda _: _.n_e - _.n_u)
 		
 		n_equil_step:int        = property(lambda _: 1000//_.n_corr)
+
+		# modes of operation
+		loss: str        = ''  # orb_mse, vmc
+		compute_energy: bool = True  # true by default
 
 		def init_app(ii):
 			""" 
@@ -313,23 +322,55 @@ class Pyfig(PyfigBase):
 	class sweep(PyfigBase.sweep):
 		sweep_method: 	str		= 'grid'
 		sweep_name: 	str		= 'study'	
-
+		n_trials: 		int		= 20
 		parameters: 	dict 	= dict(
 			# dtype			=	Param(values=[torch.float32, torch.float64], dtype=str), # !! will not work
 			opt_name		=	Param(values=['AdaHessian',  'RAdam'], dtype=str),
-			weight_decay	= 	Param(domain=[0.0, 1.], dtype=float, condition=['AdaHessian',]),
-			lr				=	Param(domain=(0.0001, 1.), log=True),
+			weight_decay	= 	Param(domain=[0.01, 1.], dtype=float, condition=['AdaHessian',]),
+			hessian_power	= 	Param(values=[0.5, 0.75, 1.], dtype=float, condition=['AdaHessian',]),
+			lr				=	Param(domain=(0.0001, 1.), log=True, dtype=float),
 			sch_max_lr		=	Param(values=[0.1, 0.01, 0.001], dtype=float),
-			hessian_power	= 	Param(values=[0.5, 1.], dtype=float, condition=['AdaHessian',]),
+			n_sv			= 	Param(values=[16, 32, 64], dtype=int),
+			n_pv			= 	Param(values=[16, 32], dtype=int),
+			n_det			= 	Param(values=[1, 4, 8, 16], dtype=int),
+			n_fb			= 	Param(values=[2, 3, 4], dtype=int),
+
+			n_b				= 	Param(values=[512], dtype=int),  # 64000
+			n_opt_hypam_step= 	Param(values=[500,], dtype=int),
 		)
-		
-		_model_sweep_parameters: dict = dict(
-			n_sv	= 	Param(values=[16, 32, 64], dtype=int),
-			n_pv	= 	Param(values=[16, 32, 64], dtype=int),
-			n_det	= 	Param(values=[1, 2, 4, 8], dtype=int),
-			n_fb	= 	Param(values=[1, 2, 3, 4], dtype=int),
-			n_b		= 	Param(values=[512, 1024, 2048, 4096], dtype=int)
-		)
+
+	class mode_c(PlugIn):
+
+		class pre(PlugIn):
+			n_b: 			int 	= 512
+			n_pre_step: 	int 	= 500
+			loss: 			bool 	= 'orb_mse'
+			log_state_keys: list	= ['all']
+			n_log_state:	int		= 1 # special case log last
+
+		class train(PlugIn):
+			n_b: 			int 	= 512
+			n_train_step: 	int 	= 1000
+			log_metric_keys:list	= property(lambda _: ['all'] if _._p._p.debug else ['opt_obj'])  
+			log_state_keys: list	= ['all']
+			n_log_state:	int		= 5
+			loss: 			bool 	= 'vmc' # energy computed by default
+
+		class eval(PlugIn):
+			n_b: 			int 	= 512
+			n_eval_step: 	int 	= 50
+			n_log_metric: 	int 	= 2**30 # special case log all 
+			log_metric_keys:list	= ['opt_obj']
+			compute_energy: bool 	= True
+
+		class opt_hypam(PlugIn):
+			n_b: 			int 	= 512
+			n_opt_hypam_step:int 	= 200
+			dist_name: 		str 	= 'naive'
+			sync_step: 		int 	= 2**30 # special case never log
+			n_log_metric: 	int 	= -1 # special case never log
+			loss: 			bool 	= 'vmc' # energy computed by default
+
 
 	class dist(naive):
 		dist_name = 'naive'  # options: 'naive', 'hf_accel'

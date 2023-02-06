@@ -1,4 +1,5 @@
-
+import atexit
+import sys
 import traceback
 import inspect
 import json
@@ -19,6 +20,31 @@ import numpy as np
 import optree
 import paramiko
 import torch
+
+
+# def exit_foo():
+# 	fail_flag = os.environ.get('FAIL_FLAG')
+# 	if fail_flag is None:
+# 		fail_flag = 'fail_flag'
+
+# 	def write_exit(code=None):
+# 		if code is None:
+# 			code = str(sys.exc_info()[1])
+# 		if code is not None:
+# 			with open(fail_flag + '.fail', 'w') as f:
+# 				f.write(str(code))
+# 			run_cmds(f'scancel {os.environ["SLURM_JOBID"]}')
+
+# 	def my_excepthook(exc_type, value, tb):
+# 		sys.__excepthook__(exc_type, value, tb)
+# 		write_exit(code=value)
+
+# 	sys.excepthook = my_excepthook
+
+# atexit.register(exit_foo)
+
+
+from time import sleep, time
 
 
 class TryImportThis:
@@ -426,26 +452,7 @@ if torch:
 		return optree.tree_unflatten(treespec=tree_spec, leaves=leaves)
 
 
-### exit handling 
-# NB: !Important! Distribution if 1 gpu fails the others continue without this
-import atexit
-import sys
-def exit_foo():
-	fail_flag = os.environ.get('FAIL_FLAG')
-	def write_exit(code=''):
-		if fail_flag is None:
-			print(f'Exit code {code}')
-		else:
-			print(traceback.format_exc())
-			run_cmds(f'scancel {os.environ["SLURM_JOBID"]}')
-			with open(fail_flag, 'w') as f:
-				f.write(code)
-	def my_excepthook(exc_type, value, tb):
-		sys.__excepthook__(exc_type, value, tb)
-		write_exit(code=exc_type)
 
-	sys.excepthook = my_excepthook
-atexit.register(exit_foo)
 
 
 def find_free_port():

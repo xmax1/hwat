@@ -96,19 +96,22 @@ def get_max_mem_c(fn: Callable, c: PyfigBase, min_power=8, max_power=20, **kw) -
 			v_cpu_d = flat_any(v_run[c.tag.v_cpu_d])
 			keys = [k for k in v_cpu_d.keys() if c.tag.max_mem_alloc in k]
 			max_mem_alloc = v_cpu_d[keys[0]]
-
 			print(f'n_b {n_b} used {max_mem_alloc} out of {t}')
 			
 			if max_mem_alloc > t/2:
-				print('get_max_mem n_b: ', n_b)
-				v_run[c.tag.c_update].update(dict(n_b= n_b))
-				return v_run or {}
+				break
 
 		except Exception as e:
 			print(traceback.format_exc())
 			print('error: e', v_run)
 			return v_run or {}
-
+	import pprint
+	print('n_b_max: ', n_b)
+	v_run[c.tag.c_update].update(dict(n_b= n_b))
+	print('v_run')
+	v_run = v_run or {}
+	c.debugger(v_run)
+	return v_run
 
 def detach_tree(v_d: dict):
 	items = []
