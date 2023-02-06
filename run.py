@@ -83,7 +83,7 @@ def init_exp(c: Pyfig, state: dict= None):
 	model, dataloader, opt, scheduler = c.dist.prepare(model, dataloader, opt, scheduler)
 
 	model.train()
-	if c.tag.eval in c.mode:
+	if ceval_tag in c.mode:
 		model.eval()
 
 	compute_loss = partial(loss_fn, mode=c.mode, model_fn=model_fn_vmap, model=model)
@@ -176,15 +176,26 @@ def smrz(**kw):
 	return summary
 
 
-def should_log(step, n_step, n_log_metric):
+def this_is_noop(step, n_step, n= None, every= None):
 	if step==1:
-		print('should_log: step, n_step, n_log_metric: ', step, n_step, n_log_metric, sep='\t')
-	if n_step < n_log_metric:
-		return True
-	elif n_log_metric < 0:
-		return False
+		print('should_log: step, n_step, n_log, every: ', step, n_step, n, every, sep='\t')
+	if every:
+		if every < 0:
+			return False
+		elif every > n_step:
+			if step == n_step:
+				return True
+		else:
+			return (step % every)==0
+	elif n:
+		if n_step < n:
+			return True
+		elif n < 0:
+			return False
+		else:
+			return (step % (c.n_step//n))==0
 	else:
-		return (step % (c.n_step//c.n_log_metric))==0
+		raise ValueError('should_log: n or every must be set')
 
 
 def run(c: Pyfig=None, c_update: dict= None, **kw):
@@ -215,7 +226,7 @@ def run(c: Pyfig=None, c_update: dict= None, **kw):
 
 			loss, v_d = compute_loss(**loader_d, model=model, debug=c.debug)
 
-			v_d = c.dist.sync(v_d, sync_method= c.tag.mean, this_is_noop= step % c.dist.sync_step)
+			v_d = c.dist.sync(v_d, sync_method= c.mean_tag, this_is_noop= this_is_noop(step, c.n_step, every= c.dist.sync_step))
 
 			update(model, opt, scheduler, **v_d, this_is_noop= not ('grads' in v_d))
 
@@ -226,12 +237,12 @@ def run(c: Pyfig=None, c_update: dict= None, **kw):
 
 				v_cpu_d: dict = npify_tree(v_d)
 
-				if should_log(step, c.n_step, c.n_log_state):
+				if this_is_noop(step, c.n_step, n= c.n_log_state):
 					if not 'all' in c.log_state_keys:
 						state = dict(filter(lambda kv: kv[0] in c.log_state_keys, v_cpu_d.items()))
 					lo_ve(path= lo_ve_path_fn(c.mode, c.group_i, step), data= v_cpu_d)
 				
-				if should_log(step, c.n_step, c.n_log_metric):
+				if this_is_noop(step, c.n_step, n= c.n_log_metric):
 					v_metrix = metrix.tick(step, v_cpu_d= v_cpu_d)
 					v_metrix = compute_metrix(v_metrix, sep= '/', debug= c.debug)
 					if not 'all' in c.log_metric_keys:
@@ -263,7 +274,6 @@ if __name__ == "__main__":
 	allowed_mode_all = 'train:eval:max_mem:opt_hypam:profile:train-eval'
 
 	c = Pyfig(notebook=False, sweep=None, c_update=None)
-	c_d0 = c.d_flat
 
 	class RunMode:
 
@@ -278,24 +288,20 @@ if __name__ == "__main__":
 
 		def opt_hypam(ii, c: Pyfig, c_update: dict= None):
 
-			from things.opt_hypam_utils import opt_hypam
-
-			assert c.dist.dist_name=='naive'
+			assert c.dist.name=='naive'
 			assert c.is_logging_process is True
 
-			from copy import deepcopy
-			
 			c.update(c_update or {}, silent=True)
 			c_mem = deepcopy(c._memory())
 
 			def run_trial(c: Pyfig= None, c_update_trial: dict= None):
 				c_mem = c._memory()
 				v_run = run(c= c, c_update= c_update_trial)
-				c.update(c_mem, silent=True)
+				c.update(c_mem)
 				return v_run 
 
-			v_run = opt_hypam(c, run_trial)
-			v_run.get('c_update', {}).pop(c.tag.lo_ve_path, None)  # make sure no load passed on
+			v_run = c.sweep.opt_hypam(c, run_trial)
+			v_run.get('c_update', {}).pop(c.lo_ve_path_tag, None)  # make sure no load passed on
 
 			print('passing on c_update:')
 			pprint.pprint(v_run.get('c_update', {}))
@@ -353,14 +359,14 @@ if __name__ == "__main__":
 	# v_run: mode, c_update
 	v_run = dict(mode= None, c_update=dict())
 
-	mode_all = (c.mode or c.multimode or c.tag.train).split(':') 
+	mode_all = (c.mode or c.multimode or c.train_tag).split(':') 
 	
 	print('run.py:run_loop:mode: = \n ***', mode_all, '***')
 	for mode_i, mode in enumerate(mode_all):
 		print('run.py:run_loop:mode: = \n ***', mode, '***')
 
 		c.mode = mode
-		c.update(c.mode_c.d[c.mode])
+		c.update(c.app.mode_c.d[c.mode])
 
 		v_run = run_mode(c, v_run_prev= v_run)
 

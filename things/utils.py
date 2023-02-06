@@ -1,19 +1,14 @@
-import atexit
-import sys
 import traceback
-import inspect
-import json
 import os
 import pickle as pk
 import random
 import re
 import subprocess
 from ast import literal_eval
-from copy import copy, deepcopy
-from functools import partial
-from itertools import islice, product
+from copy import deepcopy
+from itertools import product
 from pathlib import Path
-from time import sleep, time
+from time import time
 from typing import Any, Iterable, Union, Callable
 import pprint
 import numpy as np
@@ -21,31 +16,15 @@ import optree
 import paramiko
 import torch
 
-
-# def exit_foo():
-# 	fail_flag = os.environ.get('FAIL_FLAG')
-# 	if fail_flag is None:
-# 		fail_flag = 'fail_flag'
-
-# 	def write_exit(code=None):
-# 		if code is None:
-# 			code = str(sys.exc_info()[1])
-# 		if code is not None:
-# 			with open(fail_flag + '.fail', 'w') as f:
-# 				f.write(str(code))
-# 			run_cmds(f'scancel {os.environ["SLURM_JOBID"]}')
-
-# 	def my_excepthook(exc_type, value, tb):
-# 		sys.__excepthook__(exc_type, value, tb)
-# 		write_exit(code=value)
-
-# 	sys.excepthook = my_excepthook
-
-# atexit.register(exit_foo)
-
-
 from time import sleep, time
 
+def try_this(f: Callable, *args, **kwargs):
+	try:
+		return f(*args, **kwargs)
+	except Exception as e:
+		print(f'Could not run {f.__name__}.')
+		print(e)
+		return None
 
 class TryImportThis:
 	def __init__(ii, package: str=None):
@@ -350,27 +329,12 @@ def flat_dict(d:dict, items:list[tuple]=None):
 	return dict(items)
 
 
-def flat_any(v: list|dict):
+def flat_any(v: list|dict) -> list | dict:
 	if isinstance(v, list):
 		return flat_list(v)
 	if isinstance(v, dict):
 		return flat_dict(v)
 
-
-### wandb things
-
-def dict_to_wandb(d:dict, parent='', sep='.', items:list=None)->dict:
-	items = items or []
-	for k, v in d.items():
-		if callable(v):
-			continue
-		if isinstance(v, Path):
-			parent = 'path'
-		name = parent + sep + k if parent else k
-		if isinstance(v, dict):
-			items.extend(dict_to_wandb(v, name, items=items).items())
-		items.append((name, v))
-	return dict(items)
 
 ### np things
 
@@ -450,9 +414,6 @@ if torch:
 				if isinstance(ref, torch.Tensor) else v 
 				for v, ref in zip(leaves, leaves_ref)]
 		return optree.tree_unflatten(treespec=tree_spec, leaves=leaves)
-
-
-
 
 
 def find_free_port():

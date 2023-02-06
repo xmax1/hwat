@@ -2,22 +2,27 @@
 import sys
 from pathlib import Path
 import numpy as np
-from datetime import datetime
 
 from typing import Callable, Any
 
-from things.pyfig_utils import PyfigBase, Param, PlugIn
-from things.resource_utils import niflheim
-from things.distribute_utils import naive
+from things.pyfig_utils import PyfigBase, PlugIn
 
 from dump.systems import systems
 from dump.user_secret import user
 
-import wandb
+"""
+base classes contain the following:
+- globals (variables that are used across the entire project)"""
+
 
 """ 
 # issues
 * ** *** **** ***** importance
+- create single gpu base class 
+- create hidden plugin
+- convert wb to general 
+
+
 - type_me argument parsing fails for empty lists. Error is caught but unsure if other effects so far. 
 - paths and dirs need to be strings, not Nones
 - exp_name something/something~something is not parsed correctly
@@ -107,7 +112,7 @@ You can think of world as a group containing all the processes for your distribu
 - python run.py
 
 # other test
-python run.py --submit --n_gpu 2 --n_b 2 --mode train --_debug --dist_name naive --exp_name test
+python run.py --submit --n_gpu 2 --n_b 2 --mode train --_debug --plugin_name naive --exp_name test
 
 
 # advanced test
@@ -115,25 +120,25 @@ config in __init__
 
 # debug 1
 
-python run.py --submit --a_z [4] --exp_name ~be --n_gpu 2 --dist_name naive --n_b 2048
-python run.py --submit --a_z [4] --exp_name ~be --n_gpu 2 --dist_name hf_accel --n_b 2048
+python run.py --submit --a_z [4] --exp_name ~be --n_gpu 2 --plugin_name naive --n_b 2048
+python run.py --submit --a_z [4] --exp_name ~be --n_gpu 2 --plugin_name hf_accel --n_b 2048
 
 
 python run.py --submit --_debug --exp_name debug/debug
-python run.py --submit --_debug --zweep n_gpu-1-4-int --dist_name hf_accel --exp_name debug/debug
-python run.py --submit --_debug --mode opt_hypam --n_b 2 --n_gpu 2 --exp_name demo~opt --dist_name naive --exp_name debug/debug
+python run.py --submit --_debug --zweep n_gpu-1-4-int --plugin_name hf_accel --exp_name debug/debug
+python run.py --submit --_debug --mode opt_hypam --n_b 2 --n_gpu 2 --exp_name demo~opt --plugin_name naive --exp_name debug/debug
 python run.py --submit --_debug --multimode max_mem:opt_hypam:train:eval --n_step 20 --n_b 2 --exp_name ~debug_mode --time 00:30:00 
 
 
 # debug 2
 python run.py --submit --time 01:00:00 --system O2_neutral_triplet --exp_name sys-O2 --multimode train:eval
 python run.py --submit --time 01:00:00 --system O2_neutral_triplet --exp_name sys-O2 --multimode pre:train:eval
-python run.py --submit --time 01:00:00 --system O2_neutral_triplet --dist_name hf_accel --exp_name O2-demo --multimode pre:train:eval
-python run.py --submit --time 04:00:00 --system O2_neutral_triplet --dist_name naive --zweep n_gpu-1-2-4-8-10-20-int --exp_name ~scale --multimode max_mem:opt_hypam:pre:train:eval --n_step 1000
-python run.py --submit --time 04:00:00 --system O2_neutral_triplet --dist_name naive --n_gpu 20 --n_node 2 --exp_name sweep-2node --multimode max_mem:opt_hypam:pre:train:eval --n_step 1000
-python run.py --submit --time 01:00:00 --system O2_neutral_triplet --dist_name hf_accel --n_gpu 20 --n_node 2 --exp_name demo/2node_sweep
+python run.py --submit --time 01:00:00 --system O2_neutral_triplet --plugin_name hf_accel --exp_name O2-demo --multimode pre:train:eval
+python run.py --submit --time 04:00:00 --system O2_neutral_triplet --plugin_name naive --zweep n_gpu-1-2-4-8-10-20-int --exp_name ~scale --multimode max_mem:opt_hypam:pre:train:eval --n_step 1000
+python run.py --submit --time 04:00:00 --system O2_neutral_triplet --plugin_name naive --n_gpu 20 --n_node 2 --exp_name sweep-2node --multimode max_mem:opt_hypam:pre:train:eval --n_step 1000
+python run.py --submit --time 01:00:00 --system O2_neutral_triplet --plugin_name hf_accel --n_gpu 20 --n_node 2 --exp_name demo/2node_sweep
 python run.py --submit --time 01:00:00 --mode opt_hypam --n_gpu 2 --n_step 1000 --n_step_eval 200 --n_step_pre 200 --exp_name demo/opt_hypam
-python run.py --submit --time 01:00:00 --system O2_neutral_triplet --dist_name hf_accel --n_gpu 2 --exp_name demo/all --multimode max_mem:opt_hypam:pre:train:eval
+python run.py --submit --time 01:00:00 --system O2_neutral_triplet --plugin_name hf_accel --n_gpu 2 --exp_name demo/all --multimode max_mem:opt_hypam:pre:train:eval
 
 # run 1
 - base model 
@@ -141,20 +146,27 @@ python run.py --submit --time 01:00:00 --system O2_neutral_triplet --dist_name h
 
 
 
-python run.py --submit --time 03:00:00 --system O2_neutral_triplet --exp_name ~O2_scaling1 --zweep n_gpu-1-2-4-8-10-int --multimode pre:opt_hypam:pre:train:eval
+python run.py --submit --time 03:00:00 --system O2_neutral_triplet --exp_name ~O2_scaling2 --zweep n_gpu-1-2-4-8-10-int --multimode pre:opt_hypam:pre:train:eval
 python run.py --submit --time 06:00:00 --system O2_neutral_triplet --exp_name ~O2_scaling1 --multimode pre:opt_hypam:pre:train:eval --n_gpu 20
 
-python run.py --submit --time 06:00:00 --system O2_neutral_triplet --exp_name ~O2_scaling1 --zweep n_gpu-1-2-4-8-10-int --multimode pre:opt_hypam:pre:train:eval --dist_name hf_accel
+python run.py --submit --time 06:00:00 --system O2_neutral_triplet --exp_name ~O2_scaling1 --zweep n_gpu-1-2-4-8-10-int --multimode pre:opt_hypam:pre:train:eval --plugin_name hf_accel
 
 
 
 """
 
+from things.dist_repo import DistBase, Naive, HFAccelerate, SingleProcess
+from things.logger_repo import LoggerBase, Wandb
+from things.resource_repo import ResourceBase, Niflheim
+from things.sweep_repo import SweepBase, Optuna, Param
+from things.gen_repo import OptBase, DataBase, SchedulerBase, PathsBase, ModelBase
+
 class Pyfig(PyfigBase):
 
 	user: 				str 	= user
- 
 	project:            str     = 'hwat'
+	env: 				str     = 'zen'
+ 
 	run_name:       	Path	= 'run.py'
 
 	exp_name:       	str		= '' # default is demo
@@ -166,32 +178,17 @@ class Pyfig(PyfigBase):
 	multimode: 			str		= 'pre:train:eval'
 
 	debug: 				bool    = False
-	run_sweep:      	bool    = False
 	
 	seed:           	int   	= 808017424 # grr
 	dtype:          	str   	= None # torch.float32  # keep torch out ofthe namespace for now
 	cudnn_benchmark: 	bool 	= True
 
-	n_default_step: 	int 	= 1000
-	n_train_step:   	int   	= 0
-	n_pre_step:    		int   	= 0
-	n_eval_step:        int   	= 0
-	n_opt_hypam_step:   int   	= 0
-	n_max_mem_step:     int   	= 0
-	n_step:         	dict   	= property(lambda _: dict(
-		n_train_step		=_.n_train_step, 
-		n_pre_step			=_.n_pre_step, 
-		n_eval_step			=_.n_eval_step, 
-		n_opt_hypam_step	=_.n_opt_hypam_step, 
-		n_max_mem_step		=_.n_max_mem_step
-		).get(f'n_{_.mode}_step') or _.n_default_step
-	)
-
-	step: 				int 	= None  # needed for state load
-
 	n_log_metric:		int  	= 100
 	n_log_state:		int  	= 4
-	is_logging_process: bool 	= property(lambda _: _.mode==_.tag.opt_hypam or _.dist.head)
+	@property
+	def is_logging_process(ii: PyfigBase):
+		return ii.mode==ii.opt_hypam_tag or ii.dist.head
+	# is_logging_process: bool 	= property(def(ii: PyfigBase): ; return ii.mode==ii.opt_hypam_tag or ii.dist.head)
 
 	log_state_keys:     list 	= [] # ['opt_obj', 'r', 'grads', 'params', ...] 'all' is all
 	log_metric_keys: 	str		= [] # ['opt_obj', 't_per_it', 'max_mem_alloc']
@@ -199,14 +196,14 @@ class Pyfig(PyfigBase):
 	opt_obj_key:			str		= 'e'
 	opt_obj_op: Callable = property(lambda _: lambda x: x.std())
 	
-	class data(PlugIn):
+	class data(DataBase):
 		n_b: int = 1024
 		loader_n_b: int = 1
 	
 	class app(PlugIn):
 		system_name: str		= ''
 		system_id = property(lambda _: [[int(a_z_i), a_i.tolist()] for a_z_i, a_i in zip(_.a_z, _.a)])
-		system_id_path: str = property(lambda _: _._p.dump_dir / f'{_.system_id}.txt')
+		system_id_path: str = property(lambda _: _.p.dump_dir / f'{_.system_id}.txt')
 
 		charge:     int         = 0
 		spin:       int         = 0
@@ -254,8 +251,9 @@ class Pyfig(PyfigBase):
 			ii._mol = mol
 
 		def record_summary(ii, summary: dict=None, opt_obj_all: list=None) -> None:
+			import wandb
 
-			columns = ["charge_spin_az0-az1-..._pmu", "Energy", "Error (+/- std)"]
+			columns = ["charge_spin_az0-az1-...pmu", "Energy", "Error (+/- std)"]
 			atomic_id = "-".join([str(int(float(i))) for i in ii.a_z.flatten()])
 			spin_and_charge = f'{ii.charge}_{ii.spin}'
 			geometric_hash = f'{ii.a.mean():.0f}'
@@ -277,10 +275,82 @@ class Pyfig(PyfigBase):
 		def post_init_update(ii):
 			return systems.get(ii.system_name, {})
 
-	class debug_c(PlugIn):
-		max_power: int = 8
+		class mode_c(PlugIn):
+			class pre(PlugIn):
+				mode: 			str 	= 'pre'
+				n_b: 			int 	= 512
+				n_pre_step: 	int 	= 500
+				loss: 			bool 	= 'orb_mse'
+				log_state_keys: list	= ['all']
+				n_log_state:	int		= 1 # special case log last
+				n_log_metric:	int		= -1 # special case log last
+				sync_step:		bool	= 5
+			class train(PlugIn):
+				mode: 			str 	= 'train'
+				n_b: 			int 	= 512
+				n_train_step: 	int 	= 1000
+				log_metric_keys:list	= property(lambda _: ['all'] if _.p.p.debug else ['opt_obj'])  
+				log_state_keys: list	= ['all']
+				n_log_state:	int		= 5
+				n_log_metric:	int		= 50
+				loss: 			bool 	= 'vmc' # energy computed by default
+				sync_step:		bool	= 5
+			class eval(PlugIn):
+				mode: 			str 	= 'eval'
+				n_b: 			int 	= 512
+				n_eval_step: 	int 	= 50
+				n_log_metric: 	int 	= -1 # special case never log
+				log_metric_keys:list	= ['opt_obj']
+				compute_energy: bool 	= True
+				sync_step:		bool	= -1 # special case never log
+			class opt_hypam(PlugIn):
+				mode: 			str 	= 'opt_hypam'
+				n_b: 			int 	= 512
+				n_opt_hypam_step:int 	= 200
+				plugin_name: 		str 	= 'naive'
+				loss: 			bool 	= 'vmc' # energy computed by default
+				sync_step: 		int 	= -1 # special case never log
+				n_log_metric: 	int 	= 2**30 # special case log every 1
+				n_log_state: 	int 	= -1 # special case never log
+				n_trials: 		int		= 10
 
-	class model(PyfigBase.model):
+		class debug_c(PlugIn):
+			n_sv     		= 16
+			n_pv     		= 8
+			n_fb     		= 2
+			n_det    		= 2
+			n_b 	 		= 4
+			n_default_step  = 30
+			n_trial   		= 6
+			a_z 			= [4,] # in
+			debug			= True
+			submit 			= True
+			n_log_metric	= 10
+			n_log_state		= 1
+			exp_name 		= '~debug'
+			time 			= '00:10:00'
+
+			def run_debug():
+				print('Running debug')
+				cmds = [ \
+				'python run.py --_debug --mode train',
+				'python run.py --_debug --multimode max_mem:opt_hypam:pre:train:eval --time 01:00:00',
+				'python run.py --_debug --multimode pre:train:eval --time 01:00:00 --n_gpu 2 --plugin_name hf_accel',
+				'python run.py --_debug --multimode max_mem:opt_hypam:pre:train:eval --time 01:00:00 --n_gpu 2 --plugin_name naive',
+				'python run.py --_debug --multimode max_mem:opt_hypam:pre:train:eval --time 01:00:00 --n_gpu 20 --plugin_name naive',
+				'python run.py --_debug --multimode pre:train:eval --time 01:00:00 --n_gpu 20 --plugin_name naive',
+				# 'python run.py --_debug --multimode max_mem:opt_hypam:pre:train:eval --time 01:00:00 --n_gpu 20 --plugin_name hf_accel',
+				# does not work yet: deepspeed, hostfile, needed
+				]
+
+				from things.utils import run_cmds
+
+				for cmd in cmds:
+					run_cmds(cmd, silent=False)
+				sys.exit()
+
+
+	class model(ModelBase):
 		compile_ts: 	bool	= False
 		compile_func:	bool	= False
 		optimise_ts:	bool	= False
@@ -301,26 +371,22 @@ class Pyfig(PyfigBase):
 
 
 	class opt(PyfigBase.opt):
-		_available_opt: list 	= ['AdaHessian', 'RAdam']
+		available_opt:  list 	= ['AdaHessian', 'RAdam']
 		opt_name: 		str		= 'RAdam'
 		lr:  			float 	= 0.01
 		betas:			list	= [0.9, 0.999]
 		eps: 			float 	= 1e-4
 		weight_decay: 	float 	= 0.0
 		hessian_power: 	float 	= 1.0
+		
+	class scheduler(PyfigBase.scheduler):
+		sch_default:str 	= 'OneCycleLR'
 
-		class scheduler(PlugIn):
-			_prefix: 	str 	= 'sch_'
+		sch_name: 	str		= 'OneCycleLR'
+		sch_max_lr:	float 	= 0.01
+		sch_epochs: int 	= 1
 
-			sch_default:str 	='OneCycleLR'
-
-			sch_name: 	str		= 'OneCycleLR'
-			sch_max_lr:	float 	= 0.01
-			sch_epochs: int 	= 1
-
-
-	class sweep(PyfigBase.sweep):
-		sweep_method: 	str		= 'grid'
+	class sweep(Optuna):
 		sweep_name: 	str		= 'study'	
 		n_trials: 		int		= 20
 		parameters: 	dict 	= dict(
@@ -334,120 +400,31 @@ class Pyfig(PyfigBase):
 			n_pv			= 	Param(values=[16, 32], dtype=int),
 			n_det			= 	Param(values=[1, 4, 8, 16], dtype=int),
 			n_fb			= 	Param(values=[2, 3, 4], dtype=int),
-
 			n_b				= 	Param(values=[512], dtype=int),  # 64000
 			n_opt_hypam_step= 	Param(values=[500,], dtype=int),
 		)
 
-	class mode_c(PlugIn):
+	class dist(Naive):
+		pass
 
-		class pre(PlugIn):
-			n_b: 			int 	= 512
-			n_pre_step: 	int 	= 500
-			loss: 			bool 	= 'orb_mse'
-			log_state_keys: list	= ['all']
-			n_log_state:	int		= 1 # special case log last
+	class resource(Niflheim):
+		pass
 
-		class train(PlugIn):
-			n_b: 			int 	= 512
-			n_train_step: 	int 	= 1000
-			log_metric_keys:list	= property(lambda _: ['all'] if _._p._p.debug else ['opt_obj'])  
-			log_state_keys: list	= ['all']
-			n_log_state:	int		= 5
-			loss: 			bool 	= 'vmc' # energy computed by default
-
-		class eval(PlugIn):
-			n_b: 			int 	= 512
-			n_eval_step: 	int 	= 50
-			n_log_metric: 	int 	= 2**30 # special case log all 
-			log_metric_keys:list	= ['opt_obj']
-			compute_energy: bool 	= True
-
-		class opt_hypam(PlugIn):
-			n_b: 			int 	= 512
-			n_opt_hypam_step:int 	= 200
-			dist_name: 		str 	= 'naive'
-			sync_step: 		int 	= 2**30 # special case never log
-			n_log_metric: 	int 	= -1 # special case never log
-			loss: 			bool 	= 'vmc' # energy computed by default
-
-
-	class dist(naive):
-		dist_name = 'naive'  # options: 'naive', 'hf_accel'
-
-	class resource(niflheim):
-		env: 			str     = 'zen'
-		n_gpu: 			int 	= 1
-
-	class wb(PyfigBase.wb):
-		wb_mode = 'online'
-
-	zweep: str = ''
-	_submit_debug: bool = False
+	class logger(Wandb):
+		log_mode = 'online'
 
 	def __init__(ii, notebook: bool=False, sweep: dict={}, c_init: dict={}, **other_arg) -> None:
-
-		if '--_debug' in sys.argv:
-			print('--_debug' in sys.argv, sys.argv, sep='\n')
-			c_init = dict(
-				n_sv     		= 16,
-				n_pv     		= 8,
-				n_fb     		= 2,
-				n_det    		= 2,
-				n_b 	 		= 4,
-				n_default_step  = 30,
-				n_trial   		= 6,
-				a_z 			= [4,], # int
-				debug			= True,
-				submit 			= True,
-				n_log_metric	= 10,
-				n_log_state		= 0,
-				exp_name 		= '~4',	
-				time 			= '00:10:00',
-			)
-
-		def run_debug():
-			print('Running debug')
-			cmds = [ \
-			'python run.py --_debug --mode train',
-			'python run.py --_debug --multimode max_mem:opt_hypam:pre:train:eval --time 01:00:00',
-			'python run.py --_debug --multimode pre:train:eval --time 01:00:00 --n_gpu 2 --dist_name hf_accel',
-			'python run.py --_debug --multimode max_mem:opt_hypam:pre:train:eval --time 01:00:00 --n_gpu 2 --dist_name naive',
-			'python run.py --_debug --multimode max_mem:opt_hypam:pre:train:eval --time 01:00:00 --n_gpu 20 --dist_name naive',
-			'python run.py --_debug --multimode pre:train:eval --time 01:00:00 --n_gpu 20 --dist_name naive',
-			# 'python run.py --_debug --multimode max_mem:opt_hypam:pre:train:eval --time 01:00:00 --n_gpu 20 --dist_name hf_accel',
-			# does not work yet: deepspeed, hostfile, needed
-			]
-			from things.utils import run_cmds
-			for cmd in cmds:
-				run_cmds(cmd, silent=False)
-			sys.exit()
-
-
-		if '--_submit_debug' in sys.argv:
-			print('submit_debug' in sys.argv, sys.argv, sep='\n')
-			run_debug()
 
 		print('\npyfig:init')
 		super().__init__(notebook=notebook, c_init=c_init, sweep=sweep, **other_arg)
 
 		ii.update(ii.app.post_init_update())
 
-		ii.run_local_or_submit()
+		if ii.submit:
+			ii.run_submit()
 
-		"""
-		1- Fix the batch size for O2_neutral by mem_maxing 5-25 on base model
 
-		2- Base model
-		base = dict(
-			n_sv=32,
-			n_pv=32,
-			n_fb=3,
-			n_det=4,
-		)
 
-		3- 
-		"""
 
 		""" New PlugIns 
 		- aim https://github.com/aimhubio/aim
@@ -545,18 +522,18 @@ class Pyfig(PyfigBase):
 
 		parameters = dict(
 			n_gpu			=	Param(values=[1,  2], dtype=int),
-			dist_name		= 	Param(values=['naive', 'hf_accel'], dtype=str), 
+			plugin_name		= 	Param(values=['naive', 'hf_accel'], dtype=str), 
 			
 			
 		)
 
-		python run.py --submit --time 00:05:00 --n_b 32 --n_gpu 1 --mode train --dist_name hf_accel
+		python run.py --submit --time 00:05:00 --n_b 32 --n_gpu 1 --mode train --plugin_name hf_accel
 
 
 
 		python run.py --submit --mode opt_hypam
 
-		python run.py --time 01:00:00 --submit --dist_name hf_accel \
+		python run.py --time 01:00:00 --submit --plugin_name hf_accel \
 		--mode max_mem --system O2_neutral_triplet --exp_name show~max_mem_sweep \
 		--n_pre_step 50 --n_step 200 --n_gpu 2
 		
@@ -568,17 +545,17 @@ class Pyfig(PyfigBase):
 		--exp_name ~debug --n_step 40 --n_pre_step 20 --dist naive --n_gpu 2 --n_b 128 --a_z [4]
 
 		### dummy accelerate
-		python run.py --time 00:10:00 --submit --dist_name hf_accel \
+		python run.py --time 00:10:00 --submit --plugin_name hf_accel \
 		--mode train --system O2_neutral_triplet --exp_name ~debug \
 		--n_pre_step 10 --n_step 100 --n_gpu 2
 
 		### dummy dist
-		python run.py --time 00:10:00 --submit --dist_name naive \
+		python run.py --time 00:10:00 --submit --plugin_name naive \
 		--mode train --exp_name ~debug \
 		--n_pre_step 100 --n_step 1000 --n_gpu 2 --a_z [4]
 
 		### real accelerate 
-		python run.py --time 01:00:00 --submit --dist_name hf_accel \
+		python run.py --time 01:00:00 --submit --plugin_name hf_accel \
 		--mode train --system O2_neutral_triplet --exp_name show~n_gpu_sweep \
 		--n_pre_step 1000 --n_step 2000 --zweep n_gpu-1-2-4-8-int
 
@@ -587,18 +564,18 @@ class Pyfig(PyfigBase):
 		--n_pre_step 1000 --n_step 10000 --zweep n_gpu-1-2-4-8-int
 				
 		### dummy opt
-		python run.py --time 00:05:00 --submit --dist_name naive \
+		python run.py --time 00:05:00 --submit --plugin_name naive \
 		--mode opt_hypam --a_z [4] --exp_name ~debug \
 		--n_pre_step 50 --n_step 100 --n_gpu 1 --n_trials 10
 
 		### real opt
-		python run.py --time 04:00:00 --submit --system O2_neutral_triplet --dist_name naive \
+		python run.py --time 04:00:00 --submit --system O2_neutral_triplet --plugin_name naive \
 		--mode opt_hypam --exp_name show~opt \
 		--n_pre_step 100 --n_step 500 --n_gpu 1 --n_trials 1000
 
 		
 		### big
-		python run.py --time 02:00:00 --submit --dist_name hf_accel \
+		python run.py --time 02:00:00 --submit --plugin_name hf_accel \
 		--mode train --exp_name show~50e \
 		--n_pre_step 1000 --n_step 10000 --n_gpu 8 --a_z [50]
 
@@ -838,7 +815,7 @@ DeepSpeed Arguments:
 The following arguments are only useful when use_deepspeed is passed or deepspeed is configured through accelerate config:
 
 --deepspeed_config_file (str) — DeepSpeed config file.
---zero_stage (int) — DeepSpeed’s ZeRO optimization stage.
+--zero_stage (int) — DeepSpeed ZeRO optimization stage.
 --offload_optimizer_device (str) — Decides where (none|cpu|nvme) to offload optimizer states.
 --offload_param_device (str) — Decides where (none|cpu|nvme) to offload parameters.
 --gradient_accumulation_steps (int) — No of gradient_accumulation_steps used in your training script.
@@ -854,12 +831,12 @@ Fully Sharded Data Parallelism Arguments:
 The following arguments are only useful when use_fdsp is passed or Fully Sharded Data Parallelism is configured through accelerate config:
 
 --fsdp_offload_params (str) — Decides Whether (true|false) to offload parameters and gradients to CPU.
---fsdp_min_num_params (int) — FSDP’s minimum number of parameters for Default Auto Wrapping.
---fsdp_sharding_strategy (int) — FSDP’s Sharding Strategy.
---fsdp_auto_wrap_policy (str) — FSDP’s auto wrap policy.
+--fsdp_min_num_params (int) — FSDP minimum number of parameters for Default Auto Wrapping.
+--fsdp_sharding_strategy (int) — FSDP Sharding Strategy.
+--fsdp_auto_wrap_policy (str) — FSDP auto wrap policy.
 --fsdp_transformer_layer_cls_to_wrap (str) — Transformer layer class name (case-sensitive) to wrap, e.g, BertLayer, GPTJBlock, T5Block …
---fsdp_backward_prefetch_policy (str) — FSDP’s backward prefetch policy.
---fsdp_state_dict_type (str) — FSDP’s state dict type.
+--fsdp_backward_prefetch_policy (str) — FSDP backward prefetch policy.
+--fsdp_state_dict_type (str) — FSDP state dict type.
 
 """
 
