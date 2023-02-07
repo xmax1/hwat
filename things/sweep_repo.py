@@ -200,10 +200,13 @@ with TryImportThis('optuna') as _optuna:
 				gc_after_trial=True
 			)
 
+
+			from .core_utils import try_this  
 			v_run = dict(c_update= study.best_params)
 			path = ii.p.paths.exp_dir/'best_params.json'
 			path.write_text(json.dumps(study.best_params, indent=4))
 			print('\nstudy:best_params')
+			_ = try_this(ii.p.dist.sync, dict(test= study.best_params))
 			pprint.pprint(v_run)
 			return v_run
 

@@ -125,19 +125,25 @@ python run.py --submit --time 01:00:00 --n_gpu 2 --multimode pre:opt_hypam:pre:t
 
 # run 
 python run.py --submit --time 01:00:00 --n_gpu 2 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
---system O2_neutral_triplet --exp_name ~O2
+--system_name O2_neutral_triplet --exp_name ~ScaleO2_v3
+
 python run.py --submit --time 01:00:00 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
---system O2_neutral_triplet --exp_name ~O2_scale_nb128 --zweep n_gpu-1-2-4-8-10-int --n_b 128
+--system_name O2_neutral_triplet --exp_name ~ScaleO2_v2 --zweep n_gpu-1-2-4-8-10-int --n_b 128
+
 python run.py --submit --time 01:00:00 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
---system O2_neutral_triplet --exp_name ~O2_scale_nb128 --n_gpu 20 --n_b 128
+--system_name O2_neutral_triplet --exp_name ~ScaleO2_v2 --n_gpu 20 --n_b 128
 
 scancel 5942494 \
-5942493 \
-5942492 \
-5942487 \
-5942488 \
-5942485 \
-5942486
+5943347 \
+5943348 \
+5943349 \
+5943350 \
+5943345 \
+5943346 \
+ \
+ \
+ \
+
 
 """
 
@@ -169,8 +175,8 @@ class Pyfig(PyfigBase):
 	dtype:          	str   	= None # torch.float32  # keep torch out ofthe namespace for now
 	cudnn_benchmark: 	bool 	= True
 
-	n_log_metric:		int  	= 100
-	n_log_state:		int  	= 4
+	n_log_metric:		int  	= 50
+	n_log_state:		int  	= 1
 
 	@property
 	def is_logging_process(ii: PyfigBase):
@@ -277,7 +283,7 @@ class Pyfig(PyfigBase):
 				loss 			= 'orb_mse',
 				log_state_keys = ['params'],
 				n_log_state	= 1, 
-				n_log_metric	= 10, 
+				n_log_metric	= 5, 
 				sync_step		= 5,
 			),
 			train= dict(
@@ -285,8 +291,8 @@ class Pyfig(PyfigBase):
 				n_train_step 		= 1000,
 				log_metric_keys		=  ['all'] ,
 				log_state_keys 		= ['all'],
-				n_log_state			= 5,
-				n_log_metric		= 50,
+				n_log_state			= 1,
+				n_log_metric		= 20,
 				loss 			 	= 'vmc', # energy computed by default,
 				sync_step			= 5,
 			),
@@ -304,9 +310,9 @@ class Pyfig(PyfigBase):
 				plugin_name 		= 'naive',
 				loss 			 	= 'vmc', # energy computed by default,
 				sync_step 			= -1, # special case never log,
-				n_log_metric 		= 2**30, # special case log every 1,
+				n_log_metric 		= 50, # special case log every 1,
 				n_log_state 		= -1, # special case never log,
-				n_trials 			= 10,
+				n_trials 			= 20,
 			)
 		)
 		debug_c: dict = dict(

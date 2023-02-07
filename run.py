@@ -1,5 +1,3 @@
-
-import traceback
 import numpy as np
 import wandb
 import os
@@ -277,7 +275,7 @@ def run(c: Pyfig=None, c_update: dict= None, **kw):
 		return v_cpu_d
 
 	v_cpu_d = run_loop()
-	v_cpu_d = c.dist.sync(v_cpu_d, sync_method= c.gather_tag, this_is_noop= False)
+	v_cpu_d = c.dist.sync(v_cpu_d, sync_method= c.gather_tag, this_is_noop= c.opt_hypam_tag in c.mode)
 	
 	c.to(framework='numpy')
 
@@ -294,6 +292,7 @@ def run(c: Pyfig=None, c_update: dict= None, **kw):
 
 
 if __name__ == "__main__":
+	import traceback 
 
 	# run output must contain c_update 
 	# c_update must contain lo_ve_path

@@ -190,19 +190,34 @@ class PyfigBase:
 		import atexit
 		from time import sleep 
 		
+
 		def exit_handler():
-			job_id = os.environ.get('SLURM_JOB_ID', False)		
+			""" function to catch the traceback at exit """	
+			job_id = os.environ.get('SLURM_JOB_ID', False)
 			print('exit: job_id', job_id)
 			exc_type, exc_value, exc_traceback = sys.exc_info()
 			traceback_string = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
 			print(exc_type, exc_value, exc_traceback)
-			if traceback_string:
-				err_path.write_text(str(traceback_string))
-				if job_id:
-					sleep(100)
-					run_cmds(f'scancel {job_id}')
-
+			print(traceback_string)
+			err_path.write_text(str(exc_value))
+			err_path.write_text(str(traceback_string))
+			if job_id:
+				sleep(100)
+				run_cmds(f'scancel {job_id}')
 		atexit.register(exit_handler)
+
+		# def exit_handler():
+			# job_id = os.environ.get('SLURM_JOB_ID', False)		
+			# print('exit: job_id', job_id)
+			# exc_type, exc_value, exc_traceback = sys.exc_info()
+			# traceback_string = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+			# print(exc_type, exc_value, exc_traceback)
+			# if traceback_string:
+				# err_path.write_text(str(traceback_string))
+				# if job_id:
+					# sleep(100)
+					# run_cmds(f'scancel {job_id}')
+		# atexit.register(exit_handler)
 		
 		ii.if_debug_log([sys_arg, dict(os.environ.items()), ii.d], 
 		[f'log_sys_arg_{ii.dist.pid}.log', f'log_env_run_{ii.dist.pid}.log', f'log_d_{ii.dist.pid}.log'])

@@ -52,7 +52,6 @@ class DistBase(PlugIn):
 		return v_d
 
 	def backward(ii, loss: torch.Tensor, create_graph: bool= False):
-		ii.p.if_debug_print_d({'loss': loss.item(), 'create_graph': create_graph})
 		loss.backward(create_graph=create_graph)
 		
 	def prepare(ii, *arg, **kw):
