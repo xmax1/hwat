@@ -5,8 +5,6 @@ import torch.nn as nn
 from torch.jit import Final
 from functorch import grad
 import functorch
-import pprint
-from things.utils import debug_dict
 from copy import deepcopy
 import numpy as np
 from typing import Callable, Any
@@ -51,7 +49,7 @@ class Ansatz_fb(nn.Module):
 		n_final_out,
 		a, 
 		mol,
-		hf,
+		mo_coef,
 		*, 
 		with_sign=False):
 		super(Ansatz_fb, ii).__init__()
@@ -88,16 +86,15 @@ class Ansatz_fb(nn.Module):
 
 		ii.w_final = nn.Linear(ii.n_det, ii.n_final_out, bias=False)
 
+		a: torch.Tensor
 		device, dtype = a.device, a.dtype
 		ii.register_buffer('a', a.detach().clone().requires_grad_(False), persistent=False)    # tensor
 		ii.register_buffer('eye', torch.eye(ii.n_e)[None, :, :, None].requires_grad_(False).to(device, dtype), persistent=False) # ! persistent moves with model to device etc
 		ii.register_buffer('ones', torch.ones((1, ii.n_det)).requires_grad_(False).to(device, dtype), persistent=False)
 		ii.register_buffer('zeros', torch.zeros((1, ii.n_det)).requires_grad_(False).to(device, dtype), persistent=False)
-		ii.register_buffer('mo_coef', torch.tensor(hf.mo_coeff).requires_grad_(False).to(device, dtype), persistent=False) # (n_b, n_e, n_mo)
+		ii.register_buffer('mo_coef', torch.tensor(mo_coef).requires_grad_(False).to(device, dtype), persistent=False) # (n_b, n_e, n_mo)
 
 		ii.mol = mol
-
-		debug_dict(msg='model buffers', buffers=list(ii.buffers()))
 
 	def forward(ii, r: Tensor) -> Tensor:
 		
@@ -115,7 +112,7 @@ class Ansatz_fb(nn.Module):
 		s_u, s_d = torch.split(s_v, [ii.n_u, ii.n_d], dim=1) # (n_b, n_u, 3n_sv+2n_pv), (n_b, n_d, 3n_sv+2n_pv)
 
 		### case with 1 electron will fail ### # e1mask = torch.sign(orb_u.shape[-1])
-		orb_u = ii.compute_orb_from_stream(s_u, ra_u, spin=0) # (n_b, n_det, n_u, n_u)
+		orb_u = ii.compute_orb_from_stream(s_u, ra_u, spin=0) # (n_b, n_det, n_u(r), n_u(w))
 		orb_d = ii.compute_orb_from_stream(s_d, ra_d, spin=1) # (n_b, n_det, n_d, n_d)
 
 		sign_u, logdet_u = torch.linalg.slogdet(orb_u)
@@ -198,6 +195,7 @@ class Ansatz_fb(nn.Module):
 	def compute_hf_orb(ii, r: Tensor):
 		n_b, n_e, _ = r.shape
 		r_hf = r.reshape(-1, 3) # (n_b*n_e, 3)
+
 		r_hf = r_hf.detach().cpu().numpy()
 
 		# gto_op = 'GTOval_sph_deriv1' if deriv else 'GTOval_sph'
@@ -206,12 +204,15 @@ class Ansatz_fb(nn.Module):
 		# if self.restricted:
 		# 	mo_values *= 2
 		# return mo_values
-
 		ao = ii.mol.eval_gto('GTOval', r_hf) # (n_b*n_e, n_ao)
+
 		ao = ao.reshape(n_b, n_e, -1) # (n_b, n_e, n_ao)
-		ao = torch.tensor(ao).to(device=r.device, dtype=r.dtype).detach() # (n_b, n_e, n_mo)
-		mo = torch.einsum("bea,sao->sbeo", ao, ii.mo_coef)
-		mo = mo.unsqueeze(2).tile((1, 1, ii.n_det, 1, 1))  # n_spin, n_b, n_det, n_mo, n_mo
+		ao = torch.tensor(ao).to(device=r.device, dtype=r.dtype) # (n_b, n_e, n_mo)
+		mo = [ao @ c for c in ii.mo_coef]
+
+		mo = [m[:, None, :, :].tile((1, ii.n_det, 1, 1)).detach().requires_grad_(False) for m in mo] # n_spin, n_b, n_det, n_mo, n_mo
+		# mo = torch.einsum("bea,sao->sbeo", ao, ii.mo_coef)
+		# mo = mo.unsqueeze(2).tile((1, 1, ii.n_det, 1, 1))  # n_spin, n_b, n_det, n_mo, n_mo
 		return mo[0][..., :ii.n_u, :ii.n_u], mo[1][..., :ii.n_d, :ii.n_d]
 
 
@@ -403,7 +404,8 @@ def sample_b(
 	unwrap: Callable= None,
 	**kw
 ):
-	""" metropolis hastings sampling with automated step size adjustment """
+	""" metropolis hastings sampling with automated step size adjustment 
+	!!upgrade .round() to .floor() for safe masking """
 	device, dtype = data.device, data.dtype
 
 	p_0 = torch.exp(model(data))**2
@@ -449,10 +451,8 @@ def sample_b(
 
 
 from torch.utils.data import Dataset
-from pyfig import Pyfig
 from functools import partial
-from things.pyfig_utils import PyfigBase
-
+from pyfig import Pyfig
 
 class PyfigDataset(Dataset):
 
@@ -479,25 +479,33 @@ class PyfigDataset(Dataset):
 		ii.deltar = state.get('deltar', torch.tensor([0.02,]).requires_grad_(False).to(device, dtype))
 		
 		tmp = {'data': ii.data, 'deltar': ii.deltar, 'center_points': center_points, 'a': c.app.a}
+
 		print('dataset:init_dataset', [[k, v.shape, v.device, v.dtype] for k, v in tmp.items()])
+		print('dataset:len ', c.n_step)
 
 		ii.wait = c.dist.wait_for_everyone
 
-	def init_dataset(ii, c: PyfigBase, device, dtype, model= None, **kw) -> torch.Tensor:
+	def init_dataset(ii, c: Pyfig, device, dtype, model= None, **kw) -> torch.Tensor:
 		ii.data = ii.data.to(device, dtype)
 		ii.deltar = ii.deltar.to(device, dtype)
 		ii.v_d = {'data': ii.data, 'deltar': ii.deltar}
 		
-		print('dataset:init_dataset sampler is pretraining ', ii.mode==c.tag.pre) 
-		ii.sample = partial(sample_b, model=model, n_corr=ii.n_corr, pre=ii.mode==c.tag.pre, unwrap=c.dist.unwrap)
+		print('dataset:init_dataset sampler is pretraining ', ii.mode==c.pre_tag) 
+		ii.sample = partial(sample_b, model=model, n_corr=ii.n_corr, pre=ii.mode==c.pre_tag, unwrap=c.dist.unwrap)
 
-		for _ in range(100):
+		for equil_i in range(100):
 			ii.v_d = ii.sample(**ii.v_d)
+			if equil_i % 10 == 0:
+				print('equil ', equil_i, ' acc ', torch.mean(ii.v_d['acc'], dim=0, keepdim=True).detach().cpu().numpy())
 
-		print('dataset:init_dataset', [[k, v.shape, v.device, v.dtype] for k, v in ii.v_d.items()])
+		print('dataset:init_dataset', [[k, v.shape, v.device, v.dtype] for k, v in ii.v_d.items()], sep='\n')
+
+
 
 	def __len__(ii):
 		return ii.n_step
+
+
 
 	def __getitem__(ii, i):
 		ii.wait()

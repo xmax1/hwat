@@ -1,8 +1,8 @@
 
 
 from pathlib import Path
-from .utils import TryImportThis
-from .pyfig_utils import PlugIn
+from .utils import PlugIn
+from .core_utils import TryImportThis
 
 class LoggerBase(PlugIn):
 	
@@ -32,7 +32,7 @@ def d_to_wb(d:dict, parent='', sep='.', items:list=None)->dict:
 		elif isinstance(v, Path):
 			parent = 'path' + sep
 		elif isinstance(v, dict):
-			items.extend(d_to_wb(v, name, parent='', items=items).items())
+			items.extend(d_to_wb(v, parent=k, items=items).items())
 		name = parent + k
 		items.append((name, v))
 	return dict(items)
@@ -46,7 +46,7 @@ with TryImportThis('wandb') as _wb:
 		
 		run = None
 		entity:			str		= property(lambda _: _.p.project)
-		program: 		Path	= property(lambda _: Path( _.p.project_dir, _.p.run_name))
+		program: 		Path	= property(lambda _: Path( _.p.paths.project_dir, _.p.run_name))
 		
 		job_type:		str		= ''		
 		log_mode: 		str		= ''
@@ -65,7 +65,7 @@ with TryImportThis('wandb') as _wb:
 			ii.run = wandb.init(
 				project     = ii.p.project, 
 				group		= ii.p.exp_name,
-				dir         = ii.p.exp_data_dir,
+				dir         = ii.p.paths.exp_data_dir,
 				entity      = ii.entity,	
 				mode        = ii.log_mode,
 				config      = ii.get_c(d, parent='', sep='.'),

@@ -9,27 +9,24 @@ import pprint
 import inspect
 import numpy as np
 from copy import deepcopy
-from functools import partial 
 import pickle as pk
-import yaml
-import json
-from functools import partial
 import numpy as np
 
-from .utils import dict_to_cmd, cmd_to_dict
-from .utils import mkdir, iterate_n_dir, gen_time_id
-from .utils import type_me, run_cmds, flat_any 
+from .core_utils import iterate_n_dir, gen_time_id, flat_any, run_cmds, cmd_to_dict, ins_to_dict, walk_ins_tree
+from .core_utils import mkdir, dict_to_cmd
 
 this_file_path = Path(__file__) 
 
-from things.dist_repo import DistBase, Naive, HFAccelerate, SingleProcess
-from things.logger_repo import LoggerBase, Wandb
-from things.resource_repo import ResourceBase, Niflheim
-from things.sweep_repo import SweepBase, Optuna
-from things.gen_repo import OptBase, DataBase, SchedulerBase, PathsBase, ModelBase
+from .dist_repo import DistBase, Naive, HFAccelerate, SingleProcess
+from .logger_repo import LoggerBase, Wandb
+from .resource_repo import ResourceBase, Niflheim
+from .sweep_repo import SweepBase, Optuna
+from .gen_repo import OptBase, DataBase, SchedulerBase, PathsBase, ModelBase
+
 
 class PyfigBase:
 
+	env: 				str 	= ''
 	user: 				str 	= None
  
 	project:            str     = ''
@@ -82,6 +79,9 @@ class PyfigBase:
 			max_mem		= ii.n_max_mem_step
 		).get(ii.mode) or ii.n_default_step
   
+	class model(ModelBase):
+		pass
+
 	class sweep(SweepBase):
 		pass
 
@@ -107,6 +107,7 @@ class PyfigBase:
 	
 	max_mem_alloc_tag: str = 'max_mem_alloc'
 	opt_obj_all_tag: str = 'opt_obj_all'
+	opt_obj_tag: str = 'opt_obj'
 		
 	pre_tag: str = 'pre'
 	train_tag: str = 'train'
@@ -126,7 +127,11 @@ class PyfigBase:
 	ignore_f = ['commit', 'pull', 'backward']
 	ignore_p = ['parameters', 'scf', 'tag', 'mode_c']
 	ignore: list = ['ignore', 'ignore_f', 'ignore_c'] + ignore_f + ignore_p
-	ignore += ['d', 'cmd', 'sub_ins', 'd_flat', 'repo', 'name']
+	ignore += ['d', 'cmd', 'sub_ins', 'd_flat', 'repo', 'name', 'base_d', 'c_init', 'p']
+	base_d: dict = None
+	c_init: dict = None
+	run_debug_c: bool = False
+	run_sweep: bool = False
 
 	repo = dict(
 		dist = dict(
@@ -151,19 +156,30 @@ class PyfigBase:
 		post_init_arg: dict={},
 		**other_arg
 	):
+		# base_c (hardcoded in base Pyfig) <  mode_c (in app.mode_c)  < debug_c (in app.debug_c) <  c_init (cmd line + hard coded inputs)
 
-		ii.init_sub_cls()
+		"""
+		todo 
+		# now
+		
 
-		for k,v in (sweep or {}).items():
-			setattr(ii.sweep, k, v)
+		# soon
+		- mode + multimode rehaul (property interplay idea)
+		- optimal threading setup 
+		
+		# later
+		
+		# """
+
+		ii.init_sub_cls(sweep=sweep)
 
 		if not notebook:
 			ref_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore)
 			sys_arg = cmd_to_dict(sys.argv[1:], ref_d)
 
-		c_update = flat_any((c_init or {})) | flat_any((other_arg or {})) | (sys_arg or {})
-
-		ii.update(c_update)
+		ii.c_init = deepcopy((c_init or {}) | (other_arg or {}) | (sys_arg or {}))
+		
+		ii.update(ii.c_init)
 		
 		if ii.debug:
 			os.environ['debug'] = 'True'
@@ -172,16 +188,19 @@ class PyfigBase:
 		os.environ['PYFERR_PATH'] = str(err_path)
 
 		import atexit
-
+		from time import sleep 
+		
 		def exit_handler():
-			job_id = os.environ.get('SLURM_JOB_ID', False)
-			if job_id:
-				run_cmds(f'scancel {job_id}')
+			job_id = os.environ.get('SLURM_JOB_ID', False)		
+			print('exit: job_id', job_id)
 			exc_type, exc_value, exc_traceback = sys.exc_info()
 			traceback_string = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
 			print(exc_type, exc_value, exc_traceback)
 			if traceback_string:
-				err_path.write_text(traceback_string)
+				err_path.write_text(str(traceback_string))
+				if job_id:
+					sleep(100)
+					run_cmds(f'scancel {job_id}')
 
 		atexit.register(exit_handler)
 		
@@ -217,11 +236,11 @@ class PyfigBase:
 
 	def end(ii, plugin: str= None):
 		if plugin is None:
+			ii.dist.wait_for_everyone()
 			ii.logger.end()
 			ii.dist.end()
 		else:
 			plugin = getattr(ii, plugin).end()
-
 
 	def run_submit(ii):
 		try: 
@@ -232,18 +251,19 @@ class PyfigBase:
 			ii.submit = False # docs:submit
 			ii.run_sweep = False # docs:submit
 			ii.zweep = False
-
+			
 			for i, run_d in enumerate(run_or_sweep_d):
-
-				ii.setup_exp_dir(group_exp= False, force_new_id= True)
+				exp_name, exp_id = ii.setup_exp_dir(group_exp= False, force_new_id= True)
 				ii.save_code_state()
 
-				ii.update(run_d)
-				c_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, 
-					ignore=ii.ignore+['dist_c','slurm_c','parameters'])
+				compulsory = dict(exp_id= exp_id, exp_name= exp_name, submit= False, run_sweep= False, zweep= '')
 
-				ii.resource.cluster_submit(c_d)
-				
+				ii.resource.cluster_submit(ii.c_init | run_d | compulsory)
+
+				# ii.update(run_d)
+				# c_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, 
+				# 	ignore=ii.ignore+['dist_c','slurm_c','parameters'])
+
 				ii.if_debug_log([dict(os.environ.items()), run_d], ['log-submit_env.log', 'log-submit_d.log'])
 
 				print('log_group_url: \t\t\t',  ii.logger.log_run_url)
@@ -282,16 +302,21 @@ class PyfigBase:
 	def d_flat(ii):
 		return flat_any(ii.d)
 
-	def init_sub_cls(ii, sub_cls: type=None, name: str=None) -> dict:
+	def init_sub_cls(ii, sub_cls: type=None, name: str=None, sweep: dict= None) -> dict:
+
 		if name and not (sub_cls is None):
-			print('adding sub_cls: ', name, sub_cls)
+			print('adding plugin: ', name, sub_cls)
 			sub_ins = sub_cls(parent=ii)
 			setattr(ii, name, sub_ins)
 		else:
 			sub_cls = ins_to_dict(ii, sub_cls=True)
 			for sub_k, sub_cls_i in sub_cls.items():
+				print('init plugin: ', sub_k, sub_cls_i)
 				sub_ins = sub_cls_i(parent=ii)
 				setattr(ii, sub_k, sub_ins)
+
+		for k,v in (sweep or {}).items():
+			setattr(ii.sweep, k, v)
 
 	def setup_exp_dir(ii, group_exp=False, force_new_id=False):
 
@@ -300,12 +325,14 @@ class PyfigBase:
 
 			exp_name = ii.exp_name or 'junk'
 			group_exp = group_exp or ('~' in exp_name)
+			print('here')
 			exp_group_dir = Path(ii.paths.dump_exp_dir, exp_name)
 			exp_group_dir = iterate_n_dir(exp_group_dir, group_exp= group_exp) # pyfig:setup_exp_dir does not append -{i} if group allowed
 			ii.exp_name = exp_group_dir.name
 
 		print('exp_dir: ', ii.paths.exp_dir) 
 		[mkdir(p) for _, p in ii.paths.d.items()]
+		return ii.exp_name, ii.exp_id
 	
 	def get_run_or_sweep_d(ii,):
 		if ii.zweep: 
@@ -350,7 +377,6 @@ class PyfigBase:
 		c_keys = list(ii.d_flat.keys())
 		arg = dict(filter(lambda kv: kv[0] in c_keys, c_update.items()))
 
-
 		for k_update, v_update in deepcopy(arg).items():
 
 			if k_update=='dtype': # !!! pyfig:fix: Special case, generalify
@@ -358,6 +384,7 @@ class PyfigBase:
 				if not silent:
 					print('dtype: --- ', v_update)
 			elif k_update in ii.repo.keys():
+				print('adding plugin:')
 				plugin = ii.repo[k_update][v_update]
 				plugin_name = k_update.split('_')[0]
 				if not silent:
@@ -369,12 +396,14 @@ class PyfigBase:
 					print(f'not updated: k={k_update} v={v_update} type={type(v_update)}')
 
 		not_arg = dict(filter(lambda kv: kv[0] not in c_keys, arg.items()))
-		ii.if_debug_print_d(not_arg, msg='\npyfig:update: arg not in pyfig')		
-		
+
+		ii.if_debug_print_d(not_arg, msg='\npyfig:update: arg not in pyfig')	
+
 	def if_debug_print_d(ii, d: dict, msg: str=''):
 		if ii.debug:
-			print(msg)
-			pprint.pprint(d)
+			if d:
+				print(msg)
+				pprint.pprint(d)
 		
 	@staticmethod
 	def log(info: dict|str, path: Path, group_exp: bool=True):
@@ -387,7 +416,16 @@ class PyfigBase:
 	def to(ii, framework='torch'):
 		import torch
 		base_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore+['parameters'])
-		d = {k:v for k,v in base_d.items() if isinstance(v, (np.ndarray, np.generic))}
+
+		# write a function to filter lists out of a dictionary
+		def get_numerical_arrays():
+			d = {k:np.array(v) for k,v in base_d.items() if isinstance(v, list) and len(v)>0}
+			d = {k:v for k,v in d.items() if not isinstance(v.tolist()[0], str)}
+			d_arr = {k:np.array(v) for k,v in base_d.items() if isinstance(v, (np.ndarray, np.generic))}
+			return d | d_arr
+
+		d = get_numerical_arrays()
+
 		if 'torch' in framework.lower():
 			d = {k:torch.tensor(v, requires_grad=False).to(device=ii.device, dtype=ii.dtype) for k,v in d.items()}
 		if 'numpy' in framework.lower():
@@ -397,35 +435,6 @@ class PyfigBase:
 	def _memory(ii, sub_ins=True, attr=True, _prop=False, _ignore=[]):
 		return ins_to_dict(ii, attr=attr, sub_ins=sub_ins, prop=_prop, ignore=ii.ignore+_ignore+['logger'])
 
-class PlugIn:
-	p: PyfigBase = PyfigBase
-	
-	ignore = ['ignore', 'd', 'd_flat'] # applies to every plugin
-
-	def __init__(ii, parent=None):
-		ii.p: PyfigBase = parent
-
-		ii.init_sub_cls()
-		
-		for k, v in ins_to_dict(ii, attr=True, ignore=ii.ignore).items():
-			setattr(ii, k, v)
-  
-	def init_sub_cls(ii,) -> dict:
-		sub_cls = ins_to_dict(ii, sub_cls=True)
-		for sub_k, sub_v in sub_cls.items():
-			sub_ins = sub_v(parent=ii)
-			setattr(ii, sub_k, sub_ins)
-
-	@property
-	def d(ii):
-		d = ins_to_dict(ii, sub_ins=True, prop=True, attr=True, ignore=ii.ignore+ii.plugin_ignore)
-		if getattr(ii, '_prefix', None):
-			_ = {k.lstrip(ii.prefix):v for k,v in d.items()}
-		return d
-
-	@property
-	def d_flat(ii):
-		return flat_any(ii.d)
 
 # class Repo(PlugIn):
 # 	class dist(PlugIn):
@@ -457,150 +466,7 @@ class PlugIn:
 # 	class model(PlugIn):
 # 		ModelBase = ModelBase
 
-def walk_ins_tree(
-	ins: type, 
-	k_update: str, 
-	v_update: Any,
-	v_ref = None,
-):
-	
-	try:
-		if hasattr(ins, k_update):
-			v_ref = getattr(ins, k_update)
-			v_update = type_me(v_update, v_ref)
-			setattr(ins, k_update, v_update)
-			print(f'updated {k_update}: \t {v_ref} ----> {v_update}')
-			return True
-		else:
-			sub_ins = ins_to_dict(ins, sub_ins_ins=True)
-			for v_ins in sub_ins.values():
-				is_updated = walk_ins_tree(v_ins, k_update, v_update)
-				if is_updated:
-					return True
-	except Exception as e:
-		print(f'pyfig:walk_ins_tree k={k_update} v={v_update} v_ref={v_ref} ins={ins}')
-	return False
 
 
-def lo_ve(path:Path=None, data: dict=None):
-
-	import torch
-	""" loads anything you want (add other interfaces as needed) 
-
-	1- str -> pathlib.Path
-	2- get suffix (filetype)
-	3- from filetype, decide encoding eg 'w' or 'wb'
-	4- if data is present, decide to save
-	5- from filetype, encoding, save or load, get or dump the data 
-	"""
-
-	file_interface_all = dict(
-		pk = dict(
-			rb = pk.load,
-			wb = partial(pk.dump, protocol=pk.HIGHEST_PROTOCOL),
-		),
-		yaml = dict(
-			r = yaml.load,
-			w = yaml.dump,
-		),
-		json = dict(
-			r = json.load,
-			w = json.dump,
-		),
-		state = dict(
-			r = torch.load,
-			w = torch.save
-		),
-		cmd = dict(
-			r = lambda f: ' '.join(f.readlines()),
-			w = lambda x, f: f.writelines(x),
-		),
-		npy = dict(
-			r = np.load,
-			w = np.save,
-		),
-		npz = dict(
-			r = np.load,
-			w = np.savez_compressed,
-		)
-	)
-
-	if isinstance(data, dict) and len(data)==0:
-		print('lo_ve: data is empty dict- not dumping anything. Setting None and trying to load path.')
-		data = None
-
-	path = Path(path)
-	if not path.suffix:
-		path = path.with_suffix('.pk')
-	file_type = path.suffix[1:]
-
-	mode = 'r' if data is None else 'w'
-	mode += 'b' if file_type in ['pk',] else ''
-	interface = file_interface_all[file_type][mode]
-
-	if 'r' in mode and not path.exists():
-		return print('path: ', str(path), 'n\'existe pas- returning None')
-
-	if 'state' in file_type:
-		data = interface(data, path) if not data is None else interface(path)
-	elif 'npz' in file_type:
-		data = interface(path, **data) if not data is None else interface(path)
-	else:
-		with open(path, mode) as f:
-			data = interface(data, f) if not data is None else interface(f)
-	return data
-
-def get_cls_d(ins: type, cls_k: list):
-	return {k:getattr(ins.__class__, k) for k in cls_k}
-
-
-def ins_to_dict( # docs:pyfig:ins_to_dict can only be used when sub_ins have been init 
-	ins: type, 
-	attr=False,
-	sub_ins=False,  # always recursive
-	sub_ins_ins=False,  # just the ins
-	sub_cls=False,
-	call=False,
-	prop=False,
-	ignore:list=None,
-	flat:bool=False,
-	debug: bool=False,
-) -> dict:
-
-	ignore = ignore or []
-
-	cls_k = [k for k in dir(ins) if not k.startswith('_') and not k in ignore]
-	cls_d = {k:getattr(ins.__class__, k) for k in cls_k}
-	cls_prop_k = [k for k,v in cls_d.items() if isinstance(v, property)]
-	cls_sub_cls_k = [k for k,v in cls_d.items() if isinstance(v, type)]
-	cls_call_k = [k for k,v in cls_d.items() if (callable(v) and not (k in cls_sub_cls_k))]
-	cls_attr_k = [k for k in cls_k if not k in (cls_prop_k + cls_sub_cls_k + cls_call_k)]
-
-	ins_kv = []
-
-	ins_sub_cls_or_ins = [(k, getattr(ins, k)) for k in cls_sub_cls_k]
-
-	ins_kv += [(k,v) for (k,v) in ins_sub_cls_or_ins if isinstance(v, type) and sub_cls]
-
-	for (k_ins, v_ins) in ins_sub_cls_or_ins:
-		if not isinstance(v_ins, type):
-			if sub_ins_ins: # just the ins
-				ins_kv += [(k_ins, v_ins),]
-			elif sub_ins: # recursive dict
-				sub_ins_d: dict = ins_to_dict(v_ins, 
-					attr=attr, sub_ins=sub_ins, prop=prop, 
-					ignore=ignore, flat=flat)
-				ins_kv += [(k_ins, sub_ins_d),]
-	
-	if prop: 
-		ins_kv += [(k, getattr(ins, k)) for k in cls_prop_k]
-
-	if call:
-		ins_kv += [(k, getattr(ins, k)) for k in cls_call_k]
-
-	if attr:
-		ins_kv += [(k, getattr(ins, k)) for k in cls_attr_k]
-
-	return flat_any(dict(ins_kv)) if flat else dict(ins_kv) 
 
 

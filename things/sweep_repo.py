@@ -6,8 +6,8 @@ from time import sleep
 import pprint
 import numpy as np
 
-from .pyfig_utils import PyfigBase, PlugIn, lo_ve
-from .utils import get_cartesian_product
+from .utils import PlugIn
+from .core_utils import lo_ve, get_cartesian_product
 
 from functools import partial
 import json
@@ -73,7 +73,7 @@ class Param(PlugIn):
 def str_lower_eq(a: str, b:str):
 	return a.lower()==b.lower()
 
-class SweepBase(Plugin):
+class SweepBase(PlugIn):
 	sweep_name: 	str		= 'sweep'	
 	parameters: 	dict 	= dict(
 		# dtype			=	Param(values=[torch.float32, torch.float64], dtype=str), # !! will not work
@@ -82,7 +82,7 @@ class SweepBase(Plugin):
 	)
 
 	def get_sweep(ii,):
-		params: dict = ii.parameters
+		params: dict[str,Param] = ii.parameters
 		sweep_keys = list(params.keys())
 		sweep_vals = [v.get('values', []) for v in params.values()]
 		if any([v.domain is not None for v in params.values()]):
@@ -92,7 +92,7 @@ class SweepBase(Plugin):
 		return [{k:v for k,v in zip(sweep_keys, v_set)} for v_set in sweep_vals]
 
 
-from .utils import TryImportThis
+from .core_utils import TryImportThis
 
 with TryImportThis('optuna') as _optuna:
 	from optuna import Trial
@@ -102,7 +102,7 @@ with TryImportThis('optuna') as _optuna:
 	from functools import partial
 	import json
 
-	def objective(trial: Trial, run_trial: Callable, c: PyfigBase):
+	def objective(trial: Trial, run_trial: Callable, c):
 		
 		print('trial: ', trial.number)
 		c_update = get_hypam_from_study(trial, c.sweep.parameters)
@@ -115,7 +115,7 @@ with TryImportThis('optuna') as _optuna:
 			return float("inf")
 
 		dummy = [np.array([0.0]), np.array([0.0])]
-		opt_obj_all = v_run.get(c.v_cpu_tag, {}).get(c.opt, dummy)
+		opt_obj_all = v_run.get(c.v_cpu_d_tag, {}).get(c.opt_obj_all_tag, dummy)
 		return np.asarray(opt_obj_all).mean()
 
 
@@ -168,42 +168,40 @@ with TryImportThis('optuna') as _optuna:
 
 		# plugin_vars 
 		n_trials: 		int		= 20
-		storage: 		Path = property(lambda _: 'sqlite:///'+str(_.p.exp_dir / 'hypam_opt.db'))
+		storage: 		Path = property(lambda _: 'sqlite:///'+str(_.p.paths.exp_dir / 'hypam_opt.db'))
 
 		def opt_hypam(ii, run_trial: Callable):
-			print('opt_hypam:create_study rank,head,is_logging_process', c.dist.rank, c.dist.head, c.is_logging_process)
+			print('opt_hypam:create_study rank,head,is_logging_process', ii.p.dist.rank, ii.p.dist.head, ii.p.is_logging_process)
 
-			c = ii.c.deepcopy()
-
-			if c.dist.rank:
-				print('opt_hypam:waiting_for_storage rank,head,is_logging_process', c.dist.rank, c.dist.head, c.is_logging_process)
-				while not len(list(c.exp_dir.glob('*.db'))):
+			if ii.p.dist.rank:
+				print('opt_hypam:waiting_for_storage rank,head,is_logging_process', ii.p.dist.rank, ii.p.dist.head, ii.p.is_logging_process)
+				while not len(list(ii.p.paths.exp_dir.glob('*.db'))):
 					sleep(5.)
 				sleep(5.)
-				study = optuna.load_study(study_name= c.sweep.sweep_name, storage=c.sweep.storage)
+				study = optuna.load_study(study_name= ii.sweep_name, storage= ii.storage)
 
 			else:
-				print('opt_hypam:creating_study rank,head', c.dist.rank, c.dist.head)
+				print('opt_hypam:creating_study rank,head', ii.p.dist.rank, ii.p.dist.head)
 				study = optuna.create_study(
 					direction 		= "minimize",
 					study_name		= ii.sweep_name,
 					storage			= ii.storage,
-					sampler 		= lo_ve(path=ii.p.exp_dir/'sampler.pk') or optuna.samplers.TPESampler(seed=c.seed),
+					sampler 		= lo_ve(path=ii.p.paths.exp_dir/'sampler.pk') or optuna.samplers.TPESampler(seed= ii.p.seed + ii.p.dist.rank),
 					pruner			= optuna.pruners.MedianPruner(n_warmup_steps=10),
 					load_if_exists 	= True, 
 				)
 
-			_objective = partial(objective, c=c, run_trial=run_trial)
+			_objective = partial(objective, run_trial=run_trial, c= ii.p)
 			study.optimize(
 				_objective, 
-				n_trials=c.sweep.n_trials, 
+				n_trials= ii.n_trials, 
 				timeout=None, 
-				callbacks=[MaxTrialsCallback(c.sweep.n_trials, states=(TrialState.COMPLETE,))],
+				callbacks=[MaxTrialsCallback(ii.n_trials, states=(TrialState.COMPLETE,))],
 				gc_after_trial=True
 			)
 
 			v_run = dict(c_update= study.best_params)
-			path = c.exp_dir/'best_params.json'
+			path = ii.p.paths.exp_dir/'best_params.json'
 			path.write_text(json.dumps(study.best_params, indent=4))
 			print('\nstudy:best_params')
 			pprint.pprint(v_run)

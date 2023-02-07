@@ -1,6 +1,6 @@
 
 from pathlib import Path
-from .pyfig_utils import PlugIn
+from .utils import PlugIn
 
 class PathsBase(PlugIn):
 	home = Path()
@@ -31,6 +31,9 @@ class PathsBase(PlugIn):
 	@property
 	def code_dir(ii) -> Path:
 		return Path(ii.exp_dir, 'code')
+	@property
+	def exp_data_dir(ii) -> Path:
+		return Path(ii.exp_dir, 'exp_data')
 		
 class DataBase(PlugIn):
 	n_b:        int         = 1

@@ -10,9 +10,8 @@ import numpy as np
 import torch 
 import numpy as np
 
-from .utils import add_to_Path, dump, load, dict_to_cmd
-from .utils import run_cmds, find_free_port
-from .pyfig_utils import PlugIn
+from .core_utils import dump, load, run_cmds, find_free_port, add_to_Path, dict_to_cmd
+from .utils import PlugIn	
 
 from torch import nn
 
@@ -21,20 +20,26 @@ hostname = os.environ.get('HOSTNAME', None) # if n node > 1 this is
 
 class DistBase(PlugIn):
 	
+	dist_name: str = 'Base'
 	n_launch: int = 1
+	n_worker:       int = property(lambda _: _.p.resource.n_gpu)
+	ready: bool = True
+	sync_step: int = 1
 
-	name: str = None
-	sync_step: int = None
-	launch_cmd: Callable = None
 	rank_env_name: 	str		= 'RANK'
 	rank: 			int 	= property(lambda _: int(os.environ.get(_.rank_env_name, '-1')))
 	head: 			bool 	= property(lambda _: _.rank==0)
-	n_process: 		int 	= property(lambda _: _.p.resource.n_gpu)
 	gpu_id: 		str		= property(lambda _: ''.join(run_cmds(_._gpu_id_cmd, silent=True)).split('.')[0])
 	dist_id: 		str 	= property(lambda _: _.gpu_id + '-' + hostname.split('.')[0])
-	pid: int = property(lambda _: _.dist.rank)
+	pid: int = property(lambda _: _.rank)
 
 	_gpu_id_cmd:	str		= 'nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'
+
+	def init(ii):
+		return 
+
+	def launch_cmd(ii, node_i, submit_i, cmd):
+		return cmd
 
 	def end(ii):
 		pass
@@ -46,7 +51,8 @@ class DistBase(PlugIn):
 	def sync(ii, v_d: dict) -> list[Any]:
 		return v_d
 
-	def backward(ii, loss, create_graph=False):
+	def backward(ii, loss: torch.Tensor, create_graph: bool= False):
+		ii.p.if_debug_print_d({'loss': loss.item(), 'create_graph': create_graph})
 		loss.backward(create_graph=create_graph)
 		
 	def prepare(ii, *arg, **kw):
@@ -89,7 +95,7 @@ class DistBase(PlugIn):
 
 class SingleProcess(DistBase):
 	
-	plugin_name: str = 'single_process'
+	dist_name: str = 'SingleProcess'
 	sync_step: int = property(lambda _: -1) # no sync
 	head: int = property(lambda _: True)
 	launch_cmd: Callable 	= property(lambda _: 
@@ -101,11 +107,19 @@ class SingleProcess(DistBase):
 
 class Naive(DistBase):
 	
-	n_launch: int = property(lambda _: _.p.resource.n_gpu)
-	plugin_name: 	str		= 'naive'
+	n_launch:       int = property(lambda _: _.p.resource.n_gpu)
+	n_worker:       int = property(lambda _: _.p.resource.n_gpu)
+	dist_name: 	str		= 'Naive'
 	sync_step:  int 	= 5
 	head: 		bool 	= property(lambda _: _.rank==0 or (_.p.opt_hypam_tag in _.p.mode))
-	nsync: int = 0
+	nsync:          int = 0
+
+	launch_cmd: Callable 	= property(lambda _: 
+		lambda node_i, submit_i, cmd: 
+		f'\nexport RANK={submit_i} \
+		\necho $SLURM_JOB_NODELIST \
+		\nsrun --ntasks=1 --gres=gpu:1 --cpus-per-task=8 --ntasks=1 --exclusive --label python -u {_.p.run_name} {cmd} '
+	)
 
 	# bash line to access slurm job nodelist array
 	# node1=$SLURM_JOB_NODELIST[0]
@@ -119,10 +133,15 @@ class Naive(DistBase):
 	
 	@torch.no_grad()
 	def sync(ii, v_d: dict, sync_method: str, this_is_noop: bool= False) -> list[torch.Tensor]:
-		if this_is_noop:
+		
+		if this_is_noop or ii.n_worker==1:
 			return v_d
+		
+		if ii.nsync < 2:
+			ii.p.if_debug_print_d({'nsync': ii.nsync, 'this_is_noop': this_is_noop, 'ii.n_worker': ii.n_worker}, msg= 'sync Naive')
+		
 
-		v_path = (ii.p.exchange_dir / f'step{ii._nsync}_rank{ii.rank}_{ii.dist_id}').with_suffix('.pk')
+		v_path = (ii.p.paths.exchange_dir / f'step{ii.nsync}_rank{ii.rank}_{ii.dist_id}').with_suffix('.pk')
 		v_sync_path = add_to_Path(v_path, '-sync')
 		
 		try:
@@ -141,7 +160,7 @@ class Naive(DistBase):
 
 			n_ready = 0
 			while n_ready < ii.p.resource.n_gpu:
-				k_path_all = list(ii.p.exchange_dir.glob(f'step{ii.nsync}_*'))
+				k_path_all = list(ii.p.paths.exchange_dir.glob(f'step{ii.nsync}_*'))
 				n_ready = len(k_path_all)
 				sleep(2)
 
@@ -185,17 +204,18 @@ class Naive(DistBase):
 			v_sync_path.unlink()
 			gc.enable()
 
-		ii._nsync += 1
+		ii.nsync += 1
 		return v_sync
 
 
-from .utils import TryImportThis
+from .core_utils import TryImportThis
 with TryImportThis('accelerate') as _hf_accel:
 
 	import accelerate
 
 	class HFAccelerate(DistBase):
 		sync_step:  int 	= 5
+		dist_name: str = 'HFAccelerate'
 
 		class dist_c(PlugIn):
 			multi_gpu = True
@@ -204,7 +224,7 @@ with TryImportThis('accelerate') as _hf_accel:
 			main_process_port = property(lambda _: find_free_port()) # 
 			num_processes =  property(lambda _: str(_.p.p.resource.n_gpu))
 			num_machines =  property(lambda _: str(_.p.p.resource.n_node))
-			num_cpu_threads_per_process = property(lambda _: str(_.p.p.resource.slurm_c.cpus_per_gpu))
+			num_cpu_threads_per_process = property(lambda _: str(_.p.p.resource.n_thread_per_process))
 
 		launch_cmd:	Callable  	= property(lambda _: 
 			lambda node_i, submit_i, cmd: 
@@ -249,7 +269,7 @@ with TryImportThis('accelerate') as _hf_accel:
 
 		@torch.no_grad()
 		def sync(ii, v_d: dict[str:torch.Tensor], sync_method: str, this_is_noop: bool= False) -> list[torch.Tensor]:
-			if this_is_noop:
+			if this_is_noop or ii.n_worker==1:
 				return v_d
 
 			if sync_method == ii.p.mean_tag:

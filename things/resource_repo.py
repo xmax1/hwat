@@ -4,17 +4,19 @@
 from pathlib import Path
 import os
 from simple_slurm import Slurm
-import numpy as np
 import math 
 
-from .utils import dict_to_cmd, run_cmds
-from .pyfig_utils import PlugIn
+from .core_utils import run_cmds, dict_to_cmd
+from .utils import PlugIn
 
 
 this_dir = Path(__file__).parent
 hostname = os.environ.get('HOSTNAME', None)
 
 class ResourceBase(PlugIn):
+	n_gpu: int = 0
+	n_node: int = 1
+	n_thread_per_process: int = 1
 
 	def cluster_submit(ii, job: dict):
 		return job
@@ -29,6 +31,7 @@ class Niflheim(ResourceBase):
 
 	n_gpu: int 		= 1
 	n_node: int 	= property(lambda _: int(math.ceil(_.n_gpu/10))) 
+	n_thread_per_process: int = property(lambda _: _.slurm_c.cpus_per_gpu)
 
 	architecture:   	str 	= 'cuda'
 	nifl_gpu_per_node: 	int  = property(lambda _: 10)
@@ -52,8 +55,8 @@ class Niflheim(ResourceBase):
 		gres            = property(lambda _: 'gpu:RTX3090:' + str(min(10, _.p.n_gpu)))
 		ntasks          = property(lambda _: _.p.n_gpu if int(_.nodes)==1 else int(_.nodes)*80)
 		job_name        = property(lambda _: _.p.p.exp_name)
-		output          = property(lambda _: _.p.p.cluster_dir/'o-%j.out')
-		error           = property(lambda _: _.p.p.cluster_dir/'e-%j.err')
+		output          = property(lambda _: _.p.p.paths.cluster_dir/'o-%j.out')
+		error           = property(lambda _: _.p.p.paths.cluster_dir/'e-%j.err')
 
 	# mem_per_cpu     = 1024
 	# mem				= 'MaxMemPerNode'
@@ -99,7 +102,7 @@ class Niflheim(ResourceBase):
 		echo ${{SLURM_EXPORT_ENV}}
 		scontrol show config
 		srun --mpi=list
-		export WANDB_DIR="{ii.p.exp_dir}"
+		export WANDB_DIR="{ii.p.paths.exp_dir}"
 		printenv']
 		curl -s --head --request GET https://wandb.ai/site
 		ping api.wandb.ai
@@ -107,7 +110,8 @@ class Niflheim(ResourceBase):
 		# CUDA_LAUNCH_BLOCKING=1 
 
 		# body += debug_body
-
+		# import pprint
+		# pprint.pprint(flat_any(job))
 
 		body += extra
 

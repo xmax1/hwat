@@ -1,15 +1,11 @@
-import traceback
-import os
-import pickle as pk
-import random
-import re
+
 import subprocess
 from ast import literal_eval
 from copy import deepcopy
 from itertools import product
 from pathlib import Path
 from time import time
-from typing import Any, Iterable, Union, Callable
+from typing import Any, Union, Callable
 import pprint
 import numpy as np
 import optree
@@ -17,46 +13,47 @@ import paramiko
 import torch
 
 from time import sleep, time
+from .core_utils import flat_any, ins_to_dict
 
-def try_this(f: Callable, *args, **kwargs):
-	try:
-		return f(*args, **kwargs)
-	except Exception as e:
-		print(f'Could not run {f.__name__}.')
-		print(e)
-		return None
 
-class TryImportThis:
-	def __init__(ii, package: str=None):
-		ii.package = package
+class PlugIn:
+	p = None
+	
+	ignore_base = ['ignore', 'p', 'd', 'd_flat', 'ignore_base'] # applies to every plugin
+	ignore: list = [] # applies to this plugin
 
-	def __enter__(ii):
-		return ii
+	def __init__(ii, parent=None):
+		ii.p = parent
 
-	def __exit__(ii, type, value, traceback):
-		if type and type is ImportError:
-			print(f'Could not import {ii.package}.')
-		return True
+		ii.init_sub_cls()
+		
+		for k, v in ins_to_dict(ii, attr=True, ignore=ii.ignore+ii.ignore_base).items():
+			setattr(ii, k, v)
+  
+	def init_sub_cls(ii,) -> dict:
+		sub_cls = ins_to_dict(ii, sub_cls=True)
+		for sub_k, sub_v in sub_cls.items():
+			print('sub_ins:init:', sub_k, sub_v)
+			sub_ins = sub_v(parent=ii)
+			setattr(ii, sub_k, sub_ins)
+
+	@property
+	def d(ii):
+		d = ins_to_dict(ii, sub_ins=True, prop=True, attr=True, ignore=ii.ignore_base + ii.ignore)
+		if getattr(ii, '_prefix', None):
+			_ = {k.lstrip(ii.prefix):v for k,v in d.items()}
+		return d
+
+	@property
+	def d_flat(ii):
+		return flat_any(ii.d)
+
+
+
+
 
 ### load (lo) and save (ve) lo_ve things 
 
-def load(path):
-	with open(path, 'rb') as f:
-		data = pk.load(f)
-	return data
-
-def dump(path, data):
-	with open(path, 'wb') as f:
-		pk.dump(data, f, protocol=pk.HIGHEST_PROTOCOL)
-	return
-
-def get_max_n_from_filename(path: Path):
-	n_step_max = 0
-	for p in path.iterdir():
-		filename = p.name
-		n_step = re.match(pattern='i[0-9]*', string=filename)
-		n_step = max(n_step, n_step_max)
-	return n_step
 
 ### metrics
 
@@ -73,267 +70,6 @@ def collect_stats(k, v, new_d, p='tr', suf='', sep='/', sep_long='-'):
 	else:
 		new_d[p+sep+k+suf] = v
 	return new_d
-
-### count things
-
-def check(d: dict):
-	pprint.pprint({k:type(v) for k,v in d.items()})
-	pprint.pprint({k:getattr(v, 'shape') for k,v in d.items() if hasattr(v, 'shape')})
-
-def get_cartesian_product(*args):
-	""" Cartesian product is the ordered set of all combinations of n sets """
-	return list(product(*args))
-
-def zip_in_n_chunks(arg: Iterable[Any], n: int) -> zip:   
-	return zip(*([iter(arg)]*n))
-
-def gen_alphanum(n: int = 7, test=False):
-	from string import ascii_lowercase, ascii_uppercase
-	random.seed(test if test else None)
-	numbers = ''.join([str(i) for i in range(10)])
-	characters = ascii_uppercase + ascii_lowercase + numbers
-	name = ''.join([random.choice(characters) for _ in range(n)])
-	return name
-
-def gen_time_id(n=7):
-	return str(round(time() * 1000))[-n:]
-
-def iterate_n_dir(folder: Path, group_exp: bool=False, n_max=1000) -> Path:
-	if not group_exp:
-		if Path(folder).exists():
-			if not re.match(folder.name, '-[0-9]*'):
-				folder = add_to_Path(folder, '-0')
-			for i in range(n_max+1):
-				folder = folder.parent / folder.name.split('-')[0]
-				folder = add_to_Path(folder, f'-{i}')
-				if not folder.exists():
-					break   
-	return folder
-
-### do things
-
-def mkdir(path: Path) -> Path:
-	path = Path(path)
-	if path.suffix != '':
-		path = path.parent
-	try:
-		if not path.exists() or not path.is_dir():
-			path.mkdir(parents=True)
-	except Exception as e:
-		print(e)
-	return path
-
-def add_to_Path(path: Path, string: str | Path):
-	suffix = path.suffix
-	path = path.with_suffix('')
-	return Path(str(path) + str(string)).with_suffix(suffix)
-
-### convert things
-
-def type_check_v(name:str, v: Any, v_ref_type: type, default: Any):
-	if isinstance(v, v_ref_type):
-		return v
-	else:
-		print(f'did not pass type check \nSetting default: {name} v={v} type_v={type(v)} v_new={default})')
-		return default
-
-def debug_dict(*, msg: str='no msg', debug_step: int=1, **kw):
-
-	try:
-		if debug_step==1 and ('t' in os.environ.get('debug', '').lower()):
-			print(msg if isinstance(msg, str) else 'error: passing non-string to debug:msg')
-			for k, v in kw.items():
-
-				if isinstance(v, list):
-					v = {k+str(i):v_i for i,v_i in enumerate(v)}
-
-				if isinstance(v, dict):
-					debug_dict(msg=f'debug_dict-unpacking {k}', **v)
-	
-				elif isinstance(v, torch.Tensor):
-					if v.ndim==0:
-						v = v[None]
-					print(k, v.shape, 'req_grad=', v.requires_grad, 'dev=', v.device, v.mean(), v.std())
-
-				else:
-					print('debug print: ', k, v)
-
-	except Exception as e:
-		tb = traceback.format_exc()
-		print(f'debug {msg} error {e}')
-		pprint.pprint(kw)
-		print('traceback: ', tb)
-
-
-def dict_to_cmd(d: dict, sep=' ', exclude_false=False, exclude_none=True):
-
-	items = d.items()
-	items = [(k, (v.tolist() if isinstance(v, np.ndarray) else v)) for (k,v) in items]
-	items = [(str(k).replace(" ", ""), str(v).replace(" ", "")) for (k,v) in items]
-
-	if exclude_false:
-		items = [(k, v) for (k,v) in items if not (d[k] is False)]
-	if exclude_none:
-		items = [(k, v) for (k,v) in items if not (d[k] is None)]
-  
-	items = [(k, v) for (k,v) in items if v]
-
-	return ' '.join([(f'--{k}' if ((v=='True') or (v is True)) else f'--{k + sep + v}') for k,v in items])
-
-base_ref_dict = dict(
-	dtype = dict(
-		to_d = {'torch.float64':torch.float64, 'torch.float32':torch.float32},
-		to_cmd=None,
-	),
-)
-
-def cmd_to_dict(cmd:Union[str, list], ref:dict, delim:str=' --', d=None):
-	"""
-	fmt: [--flag, arg, --true_flag, --flag, arg1]
-	# all flags double dash because of negative numbers duh """
-	
-	cmd = ' ' + (' '.join(cmd) if isinstance(cmd, list) else cmd)  # add initial space in case single flag
-	cmd = [x.strip() for x in cmd.split(delim)][1:]
-	cmd = [[sub.strip() for sub in x.split('=', maxsplit=1)] 
-		   if '=' in x else 
-		   [sub.strip() for sub in x.split(' ', maxsplit=1)] 
-		   for x in cmd]
-	[x.append('True') for x in cmd if len(x)==1]
-	
-	d = dict()
-	for k, v in cmd:
-		v = format_cmd_item(v)
-		k = k.replace(' ', '')
-
-		if k in base_ref_dict:
-			d[k] = base_ref_dict[k]['to_d'][v]  # torch.float64 
-			continue
-
-		v_ref = ref.get(k, None)
-		if v_ref is None:
-			print(f'{k} not in ref')
-		
-		d[k] = type_me(v, v_ref, is_cmd_item=True)
-	return d
-
-
-def format_cmd_item(v):
-	v = v.replace('(', '[').replace(')', ']')
-	return v.replace(' ', '')
-
-
-def type_me(v, v_ref=None, is_cmd_item=False):
-	""" cmd_items: Accepted: bool, list of list (str, float, int), dictionary, str, explicit str (' "this" '), """
-	
-	if is_cmd_item:
-		try:
-			v_og = deepcopy(v)
-			v = format_cmd_item(v)
-			
-			if v.startswith('[['):
-				v = v.strip('[]')
-				nest_lst = v.split('],[')
-				return [type_me('['+lst+']', v_ref[0], is_cmd_item=True) for lst in nest_lst]
-			
-			if v.startswith('['):
-				v = v.strip('[]')
-				v = v.split(',')
-				return [type_me(x, v_ref[0]) for x in v]
-			
-			booleans = ['True', 'true', 't', 'False', 'false', 'f']
-			if v in booleans: 
-				return booleans.index(v) < 3  # 0-2 True 3-5 False
-		
-		except Exception as e:
-			print('utils:type_me:exception \nog|v|v_ref|is_cmd_item|exception\n', v_og, v, v_ref, is_cmd_item, e)
-	
-	if v_ref is not None:
-		
-		type_ref = type(v_ref)
-
-		if isinstance(v, str):
-			v = v.strip('\'\"')
-
-		if isinstance(v, (np.ndarray, np.generic)):
-			if isinstance(v.flatten()[0], str):
-				return v.tolist()
-			return v
-		
-		if isinstance(v, list):
-			if isinstance(flat_any(v)[0], str):
-				return v
-			return np.asarray(v)
-		
-		if isinstance(v, torch.Tensor):
-			return v
-
-		return type_ref(v)
-		
-	try:
-		return literal_eval(v)
-	except:
-		return str(v).strip('\'\"')
-
-### run things
-
-def run_cmds(cmd: str|list, cwd:str | Path='.', silent=True, _res=[]):
-	for cmd_1 in (cmd if isinstance(cmd, list) else [cmd,]): 
-		try:
-			cmd_1 = [c.strip() for c in cmd_1.split(' ')]
-			_res = subprocess.run(cmd_1, cwd=str(cwd), capture_output=True, text=True)
-			if not silent:
-				print(f'Run: {cmd_1} at {cwd}')
-				print('stdout:', _res.stdout, 'stderr:', _res.stderr, sep='\n')
-		except Exception as e:
-			if not silent:
-				print(cmd_1, e)
-			return ('Fail', '')
-	return _res.stdout.rstrip('\n')
-
-def run_cmds_server(server:str, user:str, cmd:Union[str, list], cwd=str | Path, _res=[]):
-	client = paramiko.SSHClient()    
-	client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # if not known host
-	client.connect(server, username=user)
-	for cmd_1 in (cmd if isinstance(cmd, list) else [cmd]):
-		print(f'Remote run: {cmd_1} at {user}@{server}:{cwd}')
-		stdin, stdout, stderr = client.exec_command(f'cd {str(cwd)}; {cmd_1}')
-		stderr = '\n'.join(stderr.readlines())
-		stdout = '\n'.join(stdout.readlines())
-		print('stdout:', stdout, 'stderr:', stderr)
-	client.close()
-	return stdout.replace("\n", " ")
-
-
-### flatten things
-
-def flat_arr(v):
-	return v.reshape(v.shape[0], -1)
-
-def flat_list(lst):
-	items = []
-	for v in lst:
-		if isinstance(v, list):
-			items.extend(flat_list(v))
-		else:
-			items += [v]
-	return items
-
-
-def flat_dict(d:dict, items:list[tuple]=None):
-	items = items or []
-	for k,v in d.items():
-		if isinstance(v, dict):
-			items.extend(flat_dict(v, items=items).items())
-		else:
-			items.append((k, v))
-	return dict(items)
-
-
-def flat_any(v: list|dict) -> list | dict:
-	if isinstance(v, list):
-		return flat_list(v)
-	if isinstance(v, dict):
-		return flat_dict(v)
 
 
 ### np things
@@ -416,12 +152,6 @@ if torch:
 		return optree.tree_unflatten(treespec=tree_spec, leaves=leaves)
 
 
-def find_free_port():
-	port = np.random.randint(49152, 65535)
-	is_in_use = len(run_cmds([f'ss -l -n | grep ":{port}"'], silent=True))
-	if is_in_use:
-		return find_free_port()
-	return port
 
 import numpy as np
 from typing import Callable
@@ -505,7 +235,7 @@ class Metrix:
 		if step==ii.step:
 			ii.step -= 1
 		_ = ii.tick(step, v_cpu_d, this_is_noop=False)
-		print('', 'overview:', sep='\n')
+		print('', 'overview (t_per_it possibly wrong print, dist issue):', sep='\n')
 		pprint.pprint({k:np.asarray(v).mean() for k,v in ii.overview.items()})
 		return ii.overview
 
