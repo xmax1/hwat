@@ -115,6 +115,10 @@ class Niflheim(ResourceBase):
 
 		body += extra
 
+		job_gpu = job.get('n_gpu')  # because zweep happens and is not assigned to pyfig, for reasons. 
+		if job_gpu:
+			ii.n_gpu = job_gpu
+	
 		nodes = iter(range(ii.n_node))
 		for submit_i in range(ii.p.dist.n_launch):
 			if submit_i % 10 == 0:

@@ -121,8 +121,23 @@ python run.py --submit --time 01:00:00 --n_gpu 2 --debug --multimode pre:opt_hyp
 
 # debug 2
 python run.py --submit --time 01:00:00 --n_gpu 2 --multimode pre:opt_hypam:pre:train:eval \
---log_metric_keys ['all'] --system O2_neutral_triplet
+--log_metric_keys ['all'] 
 
+# run 
+python run.py --submit --time 01:00:00 --n_gpu 2 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
+--system O2_neutral_triplet --exp_name ~O2
+python run.py --submit --time 01:00:00 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
+--system O2_neutral_triplet --exp_name ~O2_scale_nb128 --zweep n_gpu-1-2-4-8-10-int --n_b 128
+python run.py --submit --time 01:00:00 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
+--system O2_neutral_triplet --exp_name ~O2_scale_nb128 --n_gpu 20 --n_b 128
+
+scancel 5942494 \
+5942493 \
+5942492 \
+5942487 \
+5942488 \
+5942485 \
+5942486
 
 """
 
