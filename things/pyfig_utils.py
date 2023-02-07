@@ -177,9 +177,16 @@ class PyfigBase:
 			ref_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore)
 			sys_arg = cmd_to_dict(sys.argv[1:], ref_d)
 
+
+		print('\npyfig:post_init')
+
 		ii.c_init = deepcopy((c_init or {}) | (other_arg or {}) | (sys_arg or {}))
-		
 		ii.update(ii.c_init)
+		
+		# because you suck
+		app_post_init = ii.app.post_init_update()
+		ii.update(app_post_init)
+		ii.c_init |= app_post_init
 		
 		if ii.debug:
 			os.environ['debug'] = 'True'
@@ -431,6 +438,7 @@ class PyfigBase:
 
 	def to(ii, framework='torch'):
 		import torch
+
 		base_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore+['parameters'])
 
 		# write a function to filter lists out of a dictionary

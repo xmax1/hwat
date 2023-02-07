@@ -125,13 +125,13 @@ python run.py --submit --time 01:00:00 --n_gpu 2 --multimode pre:opt_hypam:pre:t
 
 # run 
 python run.py --submit --time 01:00:00 --n_gpu 2 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
---system_name O2_neutral_triplet --exp_name ~ScaleO2_v3
+--system_name O2_neutral_triplet --exp_name ~ScaleO2_v4_test --n_b 4 --n_fb 2 --n_sv 16 --n_pv 8 --n_trials 4 --n_train_step 10 --n_eval_step 10 --n_opt_hypam_step 10
 
 python run.py --submit --time 01:00:00 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
---system_name O2_neutral_triplet --exp_name ~ScaleO2_v2 --zweep n_gpu-1-2-4-8-10-int --n_b 128
+--system_name O2_neutral_triplet --exp_name ~ScaleO2_v4 --zweep n_gpu-1-2-4-8-10-int --n_b 128
 
 python run.py --submit --time 01:00:00 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
---system_name O2_neutral_triplet --exp_name ~ScaleO2_v2 --n_gpu 20 --n_b 128
+--system_name O2_neutral_triplet --exp_name ~ScaleO2_v4 --n_gpu 20 --n_b 128
 
 scancel 5942494 \
 5943347 \
@@ -410,11 +410,8 @@ class Pyfig(PyfigBase):
 		print('\npyfig:init')
 		super().__init__(notebook=notebook, c_init=c_init, sweep=sweep, **other_arg)
 
-		ii.update(ii.app.post_init_update())
-
 		if ii.submit:
 			ii.run_submit()
-
 
 		""" New PlugIns 
 		- aim https://github.com/aimhubio/aim
