@@ -187,6 +187,8 @@ class PyfigBase:
 		app_post_init = ii.app.post_init_update()
 		ii.update(app_post_init)
 		ii.c_init |= app_post_init
+
+		pprint.pprint(ii.d)
 		
 		if ii.debug:
 			os.environ['debug'] = 'True'
@@ -405,7 +407,7 @@ class PyfigBase:
 			if k_update=='dtype': # !!! pyfig:fix: Special case, generalify
 				ii.dtype = v_update
 				if not silent:
-					print('dtype: --- ', v_update)
+					print('dtype: ---> ', v_update)
 			elif k_update in ii.repo.keys():
 				print('adding plugin:')
 				plugin = ii.repo[k_update][v_update]

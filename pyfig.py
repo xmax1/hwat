@@ -125,13 +125,13 @@ python run.py --submit --time 01:00:00 --n_gpu 2 --multimode pre:opt_hypam:pre:t
 
 # run 
 python run.py --submit --time 01:00:00 --n_gpu 2 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
---system_name O2_neutral_triplet --exp_name ~ScaleO2_v4_test --n_b 4 --n_fb 2 --n_sv 16 --n_pv 8 --n_trials 4 --n_train_step 10 --n_eval_step 10 --n_opt_hypam_step 10
+--system_name O2_neutral_triplet --exp_name ~ScaleO2_v8_test --n_b 4 --n_fb 2 --n_sv 16 --n_pv 8 --n_trials 4 --n_train_step 10 --n_eval_step 10 --n_opt_hypam_step 10 --debug
+
+python run.py --submit --time 02:00:00 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
+--system_name O2_neutral_triplet --exp_name ~ScaleO2_v6 --zweep n_gpu-1-2-4-8-10-int --n_b 128 --n_trials 10
 
 python run.py --submit --time 01:00:00 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
---system_name O2_neutral_triplet --exp_name ~ScaleO2_v4 --zweep n_gpu-1-2-4-8-10-int --n_b 128
-
-python run.py --submit --time 01:00:00 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
---system_name O2_neutral_triplet --exp_name ~ScaleO2_v4 --n_gpu 20 --n_b 128
+--system_name O2_neutral_triplet --exp_name ~ScaleO2_v6 --n_gpu 20 --n_b 128 --n_trials 10
 
 scancel 5942494 \
 5943347 \
@@ -315,32 +315,31 @@ class Pyfig(PyfigBase):
 				n_trials 			= 20,
 			)
 		)
-		debug_c: dict = dict(
-			n_default_step=  	30,
-			n_pre_step= 	 	0,
-			n_train_step= 	 	0,
-			n_eval_step= 	 	0,
-			n_opt_hypam_step=   0,
-			n_trials=   		6,
+		# debug_c: dict = dict(
+		# 	n_default_step=  	30,
+		# 	n_pre_step= 	 	0,
+		# 	n_train_step= 	 	0,
+		# 	n_eval_step= 	 	0,
+		# 	n_opt_hypam_step=   0,
+		# 	n_trials=   		6,
 
-			exp_name= 		 '~debug',
-			time= 			 '00:10:00',
-			multimode= 		 'pre:opt_hypam:pre:train:eval',
+		# 	exp_name= 		 '~debug',
+		# 	time= 			 '00:10:00',
+		# 	multimode= 		 'pre:opt_hypam:pre:train:eval',
 
-			n_b= 	 		 4,
+		# 	n_b= 	 		 4,
 			
-			max_power=	     8,
+		# 	max_power=	     8,
 			
-			a_z= 			 [4,], # in,
-			n_sv=     		 16,
-			n_pv=     		 8,
-			n_fb=     		 2,
-			n_det=    		 2,
+		# 	n_sv=     		 16,
+		# 	n_pv=     		 8,
+		# 	n_fb=     		 2,
+		# 	n_det=    		 2,
 			
-			debug=			 True,
-			# n_log_metric=	 10,  # can't set things important to specific runs
-			# n_log_state=     1,
-		)
+		# 	debug=			 True,
+		# 	# n_log_metric=	 10,  # can't set things important to specific runs
+		# 	# n_log_state=     1,
+		# )
 
 
 	class model(ModelBase):

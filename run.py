@@ -395,13 +395,13 @@ if __name__ == "__main__":
 		c.c_init['mode'] = c.mode 		# !!! this is important and buggy, need mode control flow
 
 		base_c = flat_any(c.app.mode_c[mode])
-		debug_c = flat_any(c.app.debug_c) if c.run_debug_c else dict()
+		# debug_c = flat_any(c.app.debug_c) if c.run_debug_c else dict()
 
 		c.if_debug_print_d(base_c, msg='base_c')
-		c.if_debug_print_d(debug_c, msg='debug_c')
+		# c.if_debug_print_d(debug_c, msg='debug_c')
 		c.if_debug_print_d(c.c_init, msg='c_init')
 
-		v_run['c_update'] |= (base_c | debug_c | flat_any(c.c_init))
+		v_run['c_update'] |= (base_c | flat_any(c.c_init))
 
 		c.if_debug_print_d(v_run)
 

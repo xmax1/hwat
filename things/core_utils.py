@@ -1,3 +1,4 @@
+from ast import literal_eval
 
 import subprocess
 
@@ -235,13 +236,17 @@ def cmd_to_dict(cmd: str| list, ref:dict, delim:str=' --', d=None):
 		if v_ref is None:
 			print(f'{k} not in ref')
 		
-		d[k] = type_me(v, v_ref, is_cmd_item=True)
+		d[k] = type_me(v, k= k, v_ref=v_ref, is_cmd_item=True)
 	return d
 
+booleans = ['True', 'true', 'False', 'false']
 
 def format_cmd_item(v):
 	v = v.replace('(', '[').replace(')', ']')
-	return v.replace(' ', '')
+	v = v.replace(' ', '')
+	v = v.replace('\"', '')
+	v = v.replace('\'', '')
+	return v
 
 def dict_to_cmd(d: dict, sep=' ', exclude_false=False, exclude_none=True):
 
@@ -258,6 +263,7 @@ def dict_to_cmd(d: dict, sep=' ', exclude_false=False, exclude_none=True):
 
 	return ' '.join([(f'--{k}' if ((v=='True') or (v is True)) else f'--{k + sep + v}') for k,v in items])
 
+
 base_ref_dict = dict(
 	dtype = dict(
 		to_d = {'torch.float64':torch.float64, 'torch.float32':torch.float32},
@@ -265,58 +271,165 @@ base_ref_dict = dict(
 	),
 )
 
+# def _test():
+# 	import re
+# 	v = '"max"'
+# 	# allowed = r'\~\-\.a-zA-Z_0-9'
+# 	v = v.replace('\"', '')
+# 	v = v.replace('\'', '')
+# 	v = re.sub(r'([\~\-\.a-zA-Z_0-9]+[^\~\-\.a-zA-Z_0-9])', r'\"\1\"', v)
+# 	print(v)
+# _test()
 
-def type_me(v, v_ref=None, is_cmd_item=False):
+
+def lit_eval_safe(v: str):
+	if not isinstance(v, str):
+		return v
+	
+	try:
+		print(v, type(v))
+		return literal_eval(v)
+	except:
+		allowed = r'\~\-\.a-zA-Z_0-9'
+		v = v.replace(r'"', '')
+		v = v.replace(r'\'', '')
+		v = re.sub(r'([\~\-\.\\\:a-zA-Z_0-9]+)', r'\1', v)
+		print(v, type(v))
+		return v
+
+
+
+def guess_type(v: Any, out_type: type=None, key_type: type= None, in_type: type=None):
+	""" Guess the inner and outer type of a variable """
+
+	if out_type is None:
+		list_pattern = [r'^\[.*\]$']
+		dict_patten = [r'^\{.*\}$']
+
+		has_a_list = any([re.match(p, v) for p in list_pattern]) 
+		has_a_dict = any([re.match(p, v) for p in dict_patten])
+
+		if has_a_list or has_a_dict:
+			if has_a_list:
+				out_type = list
+			else: 
+				out_type = dict
+			out_type, key_type, in_type = guess_type(v.strip('[]').strip('\{\}'), out_type)
+		else:
+			out_type = out_type or None
+
+	if key_type is None:
+		if out_type is dict:
+			key_type = guess_type(v.split(':')[0], out_type=dict)[0]
+	
+
+	int_pattern = [r'^[-+]?[0-9]+$']
+	float_pattern = [r'^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$']
+	str_pattern = [r'[\"\']?[a-zA-Z_]*[\"\']?']
+	booleans = ['True', 'true', 'False', 'false']
+
+	# What does regex ? does it match the whole string or just a part of it ?
+	has_a_float = any([re.match(p, v) for p in float_pattern])
+	has_a_int = any([re.match(p, v) for p in int_pattern])
+	has_a_str = any([re.match(p, v) for p in str_pattern])
+	has_a_bool = v in booleans
+
+	if has_a_bool:
+		in_type = bool
+	if has_a_float:
+		in_type = float
+	elif has_a_str:
+		in_type = str
+	elif has_a_int:
+		in_type = int
+	else:
+		in_type = None
+	
+	return out_type or in_type, key_type or in_type, in_type
+
+
+def cmd_to_typed_cmd(v, v_ref= None):
+	str_v = str(v)
+	format_str_v = format_cmd_item(str_v)
+	ast_v = lit_eval_safe(format_str_v)
+	out_type, key_type, in_type = guess_type(v)
+			
+	if type(ast_v) is not (type(v_ref) or type(ast_v)) is not out_type:
+		print(
+			'v_ref', v_ref, type(v_ref), 
+			'ast_v', ast_v, type(ast_v),
+			'out_type', out_type, type(out_type),
+		)
+	return ast_v
+
+
+import optree
+
+def try_ref_dict(v, k, is_cmd_item=False):
+	try:
+		if k in base_ref_dict:
+			if is_cmd_item:
+				return base_ref_dict[k]['to_d'][v]
+			else:
+				return base_ref_dict[k]['to_cmd'][v]
+		else:
+			return v
+	except:
+		return v
+
+
+def type_me(v, *, k: str= None, v_ref= None, is_cmd_item= False):
 	""" cmd_items: Accepted: bool, list of list (str, float, int), dictionary, str, explicit str (' "this" '), """
-	
+
+	v = try_ref_dict(v, k, is_cmd_item= is_cmd_item)
+
+	type_ref = type(v_ref)
+
 	if is_cmd_item:
-		try:
-			v_og = deepcopy(v)
-			v = format_cmd_item(v)
-			
-			if v.startswith('[['):
-				v = v.strip('[]')
-				nest_lst = v.split('],[')
-				return [type_me('['+lst+']', v_ref[0], is_cmd_item=True) for lst in nest_lst]
-			
-			if v.startswith('['):
-				v = v.strip('[]')
-				v = v.split(',')
-				return [type_me(x, v_ref[0]) for x in v]
-			
-			booleans = ['True', 'true', 't', 'False', 'false', 'f']
-			if v in booleans: 
-				return booleans.index(v) < 3  # 0-2 True 3-5 False
-		
-		except Exception as e:
-			print('utils:type_me:exception \nog|v|v_ref|is_cmd_item|exception\n', v_og, v, v_ref, is_cmd_item, e)
-	
-	if v_ref is not None:
-		
-		type_ref = type(v_ref)
+		v = cmd_to_typed_cmd(v, v_ref)  # do not return, some evaluated types are not correct ie exp_id= 01234 is a str not an int
 
-		if isinstance(v, str):
-			v = v.strip('\'\"')
-
-		if isinstance(v, (np.ndarray, np.generic)):
-			if isinstance(v.flatten()[0], str):
-				return v.tolist()
+	if isinstance(v, list | dict):
+		v_flat, treespec = optree.tree_flatten(v)
+		if v_ref:
+			v_ref_flat, treespec = optree.tree_flatten(v)
+		else:
+			v_ref_flat = v_flat
+		v_typed = [type_me(vi, k= k, v_ref= vi_ref) for vi, vi_ref in zip(v_flat, v_ref_flat)]
+		v = optree.tree_unflatten(treespec, v_typed)
+		
+		if any([isinstance(vi, str) for vi in v_flat]):
 			return v
 		
 		if isinstance(v, list):
-			if isinstance(flat_any(v)[0], str):
-				return v
-			return np.asarray(v)
-		
-		if isinstance(v, torch.Tensor):
-			return v
+			return type_me(np.asarray(v), k= k, v_ref= v_ref)
 
-		return type_ref(v)
-		
-	try:
-		return literal_eval(v)
-	except:
-		return str(v).strip('\'\"')
+		if isinstance(v, dict):
+			return v
+	
+	if isinstance(v, str):
+		v = v.strip('\'\"')
+	
+	if isinstance(v, (np.ndarray, np.generic)):
+		if isinstance(v_ref, torch.Tensor):
+			return torch.from_numpy(v).type(type_ref)
+		elif isinstance(v_ref, (np.ndarray, np.generic)):
+			return v.astype(type_ref)
+		else:
+			return v.astype(float)
+	
+	if isinstance(v_ref, torch.Tensor):
+		return v
+
+	if isinstance(v_ref, int):
+		return int(v)
+	
+	if isinstance(v_ref, float):
+		return float(v)
+	
+	if isinstance(v_ref, str):
+		return str(v)
+
+	return lit_eval_safe(v)
 
 
 def run_cmds(cmd: str|list, cwd:str | Path='.', silent=True, _res=[]):
@@ -412,9 +525,9 @@ def walk_ins_tree(
 	try:
 		if hasattr(ins, k_update):
 			v_ref = getattr(ins, k_update)
-			v_update = type_me(v_update, v_ref)
+			v_update = type_me(v_update, k= k_update, v_ref= v_ref)
 			setattr(ins, k_update, v_update)
-			print(f'updated {k_update}: \t {v_ref} ----> {v_update}')
+			print(f'updated {k_update}: \t {v_ref} ----> {v_update} (ref new type= {type(v_ref)}, {type(v_update)})')
 			return True
 		else:
 			sub_ins = ins_to_dict(ins, sub_ins_ins=True)

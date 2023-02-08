@@ -146,8 +146,8 @@ class Ansatz_fb(nn.Module):
 		orb_d = ii.compute_orb_from_stream(s_d, ra_d, spin=1) # (n_b, n_d, n_d, n_det)
 		### under construction ###
 		# makes sure the final weight is in the preing loop for distribution
-		zero = (orb_u + orb_d)*0.0
-		zero = ii.w_final(zero.sum(dim=(-1,-2)))[..., None, None]
+		zero = ((orb_u*0.0).sum(dim=(-1,-2)) + (orb_d*0.0).sum(dim=(-1,-2)))
+		zero = ii.w_final(zero)[..., None, None]
 		### under construction ###
 		return orb_u+zero, orb_d+zero
 
@@ -385,11 +385,11 @@ def sample_pre(model: Ansatz_fb, data: Tensor, p_1: Tensor):
 	data: (n_b, n_e, 3)
 	p_1: (n_b, n_e)
 	"""
-	mu, md = model.compute_hf_orb(data) # (n_b, n_det, n_e, n_e)
-	m = torch.stack([mu, md], dim=0) # (2, n_b, n_det, n_e, n_e)
-	m = m.mean(dim=2) # (2, n_b, n_e, n_e)
-	p_pre = torch.diagonal(m, dim1=-2, dim2=-1).prod(dim=-1).prod(dim=0) # (2, n_b)
-	p_pre = p_pre / p_pre.sum()
+	m_orb = model.compute_hf_orb(data) # (n_b, n_det, n_e, n_e)
+	m_mean = [m.mean(dim=1) for m in m_orb] # (2, n_b, n_e, n_e)
+	p_pre = [torch.diagonal(m, dim1=-2, dim2=-1).prod(dim=-1) for m in m_mean] # (2, n_b)
+	p_prod = p_pre[0] * p_pre[1]
+	p_pre = p_prod / p_prod.sum() # (2, n_b)
 	p_1 = p_1 / p_1.sum()
 	return (p_1 + p_pre) / 2.
 
