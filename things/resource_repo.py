@@ -6,7 +6,7 @@ import os
 from simple_slurm import Slurm
 import math 
 
-from .core_utils import run_cmds, dict_to_cmd
+from .core import run_cmds, dict_to_cmd
 from .utils import PlugIn
 
 

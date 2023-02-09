@@ -142,13 +142,15 @@ class Ansatz_fb(nn.Module):
 		s_v, p_v = ii.compute_embedding(r, ra)
 		s_v = ii.compute_stream(s_v, p_v) # (n_b, n_u, n_det), (n_b, n_d, n_det)
 		s_u, s_d = torch.split(s_v, [ii.n_u, ii.n_d], dim=1) # (n_b, n_u, 3n_sv+2n_pv), (n_b, n_d, 3n_sv+2n_pv)
-		orb_u = ii.compute_orb_from_stream(s_u, ra_u, spin=0) # (n_b, n_u, n_u, n_det)
-		orb_d = ii.compute_orb_from_stream(s_d, ra_d, spin=1) # (n_b, n_d, n_d, n_det)
+
+		orb_u = ii.compute_orb_from_stream(s_u, ra_u, spin=0) # (n_b, det, n_u, n_u)
+		orb_d = ii.compute_orb_from_stream(s_d, ra_d, spin=1) # (n_b, det, n_d, n_d)
 		### under construction ###
 		# makes sure the final weight is in the preing loop for distribution
 		zero = ((orb_u*0.0).sum(dim=(-1,-2)) + (orb_d*0.0).sum(dim=(-1,-2)))
 		zero = ii.w_final(zero)[..., None, None]
 		### under construction ###
+
 		return orb_u+zero, orb_d+zero
 
 	def compute_embedding(ii, r: Tensor, ra: Tensor) -> tuple[Tensor, Tensor]:
@@ -184,7 +186,7 @@ class Ansatz_fb(nn.Module):
 	def compute_orb_from_stream(ii, s_v: Tensor, ra_v: Tensor, spin: int) -> Tensor:
 		n_b, n_spin, _ = s_v.shape
 
-		s_w = ii.w_spin[spin](s_v).reshape(n_b, n_spin, n_spin, ii.n_det) # (n_b, n_det, n_d, n_d)
+		s_w = ii.w_spin[spin](s_v).reshape(n_b, n_spin, n_spin, ii.n_det) # (n_b, n_d, n_d, n_det)
 
 		exp = torch.exp(-torch.linalg.vector_norm(ra_v, dim=-1)) # (n_b, n_spin(r), n_a)
 		sum_a_exp = exp.sum(dim=-1, keepdim=True)[..., None] # n_b, n_u(r)
@@ -207,11 +209,11 @@ class Ansatz_fb(nn.Module):
 		ao = ii.mol.eval_gto('GTOval', r_hf) # (n_b*n_e, n_ao)
 
 		ao = ao.reshape(n_b, n_e, -1) # (n_b, n_e, n_ao)
-		ao = torch.tensor(ao).to(device=r.device, dtype=r.dtype) # (n_b, n_e, n_mo)
-		mo = [ao @ c for c in ii.mo_coef]
-
+		ao = torch.tensor(ao).to(device= r.device, dtype= r.dtype) # (n_b, n_e, n_mo)
+		mo = [ao @ c[None] for c in ii.mo_coef]
 		mo = [m[:, None, :, :].tile((1, ii.n_det, 1, 1)).detach().requires_grad_(False) for m in mo] # n_spin, n_b, n_det, n_mo, n_mo
-		# mo = torch.einsum("bea,sao->sbeo", ao, ii.mo_coef)
+		
+		# mo = [torch.einsum("bea,ao->beo", ao, c) for c in ii.mo_coef]
 		# mo = mo.unsqueeze(2).tile((1, 1, ii.n_det, 1, 1))  # n_spin, n_b, n_det, n_mo, n_mo
 		return mo[0][..., :ii.n_u, :ii.n_u], mo[1][..., :ii.n_d, :ii.n_d]
 
@@ -398,7 +400,7 @@ def sample_pre(model: Ansatz_fb, data: Tensor, p_1: Tensor):
 def sample_b(
 	model: nn.Module=None, 
 	data: Tensor=None, 
-	deltar: Tensor=None, 
+	deltar: Tensor= 0.02, 
 	n_corr: int=10,
 	pre: bool=False,
 	unwrap: Callable= None,
@@ -476,7 +478,7 @@ class PyfigDataset(Dataset):
 		new_data = init_data(ii.n_b, center_points.shape)
 
 		ii.data = state.get('data', new_data.requires_grad_(False).to(device, dtype))
-		ii.deltar = state.get('deltar', torch.tensor([0.02,]).requires_grad_(False).to(device, dtype))
+		ii.deltar = state.get('deltar', torch.tensor([0.02, ]).requires_grad_(False).to(device, dtype))
 		
 		tmp = {'data': ii.data, 'deltar': ii.deltar, 'center_points': center_points, 'a': c.app.a}
 
@@ -485,9 +487,11 @@ class PyfigDataset(Dataset):
 
 		ii.wait = c.dist.wait_for_everyone
 
-	def init_dataset(ii, c: Pyfig, device, dtype, model= None, **kw) -> torch.Tensor:
+	def init_dataset(ii, c: Pyfig, device= None, dtype= None, model= None, **kw) -> torch.Tensor:
+
 		ii.data = ii.data.to(device, dtype)
 		ii.deltar = ii.deltar.to(device, dtype)
+
 		ii.v_d = {'data': ii.data, 'deltar': ii.deltar}
 		
 		print('dataset:init_dataset sampler is pretraining ', ii.mode==c.pre_tag) 

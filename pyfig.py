@@ -1,36 +1,51 @@
 
-import sys
+from typing import Callable, Any
 from pathlib import Path
 import numpy as np
 
-from typing import Callable, Any
-
-from things.pyfig_utils import PyfigBase 
+from things.base import PyfigBase 
 from things.utils import PlugIn
 
 from dump.systems import systems
 from dump.user_secret import user
 
+
 """
 base classes contain the following:
-- globals (variables that are used across the entire project)"""
+- globals (variables that are used across the entire project)
 
+# kinks
+- paths and dirs need to be strings, not Nones
+
+"""
+
+""" 
+# pyfig:philosophy
+
+- always do something the easy way first, then the hard way
+
+# best practises
+
+- all lists, arrays, numbers, tensors are considered tensors
+- 0 rank tensors are scalars
+- 1 rank tensors are vectors
+- 2 rank tensors are matrices
+- 3 rank tensors are usually batched matrices
+- 4 rank tensors are usually batched matrices with channels or time
+- etc 
+
+
+
+"""
 
 """ 
 # issues
 * ** *** **** ***** importance
-- create single gpu base class 
-- create hidden plugin
-- convert wb to general 
 
-
-- type_me argument parsing fails for empty lists. Error is caught but unsure if other effects so far. 
-- paths and dirs need to be strings, not Nones
-- exp_name something/something~something is not parsed correctly
-- on niflheim, use export TMPDIR=/tmp for the node local scratch space.
-- on niflheim, special scratch space /home/scratch2/$USER/ across nodes
-- / not allowed in exp_name
-- fail flag does not work
+- exp_name something/something~something is not parsed correctly * 
+- on niflheim, use export TMPDIR=/tmp for the node local scratch space. * 
+- on niflheim, special scratch space /home/scratch2/$USER/ across nodes *
+- fail flag does not work *
 - all dirs created when not needed
 - generalised to numpy and torch tensors conversions with None and other catches ****
 - informed syntax for flat calls ***
@@ -109,6 +124,9 @@ You can think of world as a group containing all the processes for your distribu
 ## distribution
 - each gpu must have a unique rank env variable
 
+
+
+
 # very basic test
 - python run.py
 
@@ -133,16 +151,8 @@ python run.py --submit --time 02:00:00 --multimode pre:opt_hypam:pre:train:eval 
 python run.py --submit --time 01:00:00 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
 --system_name O2_neutral_triplet --exp_name ~ScaleO2_v6 --n_gpu 20 --n_b 128 --n_trials 10
 
-scancel 5942494 \
-5943347 \
-5943348 \
-5943349 \
-5943350 \
-5943345 \
-5943346 \
- \
- \
- \
+scancel \
+
 
 
 """
@@ -172,10 +182,21 @@ class Pyfig(PyfigBase):
 	debug: 				bool    = False
 	
 	seed:           	int   	= 808017424 # grr
-	dtype:          	str   	= None # torch.float32  # keep torch out ofthe namespace for now
+
+
+	_dtype_str:   		str 	= 'float32'
+	@property
+	def dtype(ii): 
+		import torch
+		return dict(float64= torch.float64, float32= torch.float32, cpu= 'cpu')[ii._dtype_str]
+	@dtype.setter
+	def dtype(ii, val):
+		if val is not None:
+			ii._dtype_str = str(val).split('.')[-1]
+
 	cudnn_benchmark: 	bool 	= True
 
-	n_log_metric:		int  	= 50
+	n_log_metric:		int  	= 25
 	n_log_state:		int  	= 1
 
 	@property
@@ -188,7 +209,7 @@ class Pyfig(PyfigBase):
  
 	opt_obj_key:			str		= 'e'
 	opt_obj_op: Callable = property(lambda _: lambda x: x.std())
-	
+
 	class data(DataBase):
 		n_b: int = 1024
 		loader_n_b: int = 1

@@ -23,7 +23,7 @@ from copy import deepcopy
 import pprint
 
 from things.utils import Metrix
-from things.core_utils import lo_ve
+from things.core import lo_ve
 from pyfig import Pyfig
 
 # m_orb = model.full_det_from_spin_det(*m_orb_ud)
@@ -51,21 +51,23 @@ def init_exp(c: Pyfig, state: dict= None):
 
 	pprint.pprint(c.d_flat)
 	
+	print('IMPORTANT', c.device, c.dtype, c.seed, c.dist.rank, '\n')
 	c.seed = c.dist.set_seed()
 	c.dtype = c.dist.set_dtype()
 	c.device = c.dist.set_device()
-	c.to(framework='torch')
 	c.app.init_app()
+	c.to(framework='torch')
+	print('IMPORTANT', c.device, c.dtype, c.seed, c.dist.rank, '\n')
 
-	model: torch.nn.Module = c.partial(Model).to(dtype=c.dtype)
+	model: torch.nn.Module = c.partial(Model)
 	if state.get('model'):
-		model.load_state_dict(state['model'])
+		model.load_state_dict(state['model']).to(dtype= c.dtype)
 		
-	model_to_fn: torch.nn.Module = c.partial(Model, mol=None).to(dtype=c.dtype)
+	model_to_fn: torch.nn.Module = c.partial(Model, mol=None).to(dtype= c.dtype)
 	model_fn, param, buffer = make_functional_with_buffers(model_to_fn)
 	model_fn_vmap = vmap(model_fn, in_dims=(None, None, 0))
 	
-	dataset = PyfigDataset(c, state=state)
+	dataset = PyfigDataset(c, state= state)
 	dataloader = DataLoader(dataset, batch_size= c.data.loader_n_b, collate_fn= custom_collate)  # c.data.n_b otherwise because of the internal sampler
 
 	opt: Optimizer = get_opt(**c.opt.d_flat)(model.parameters())
@@ -86,11 +88,10 @@ def init_exp(c: Pyfig, state: dict= None):
 	if c.eval_tag in c.mode:
 		model.eval()
 
-	compute_loss = partial(loss_fn, mode=c.mode, model_fn=model_fn_vmap, model=model)
+	compute_loss = partial(loss_fn, mode= c.mode, model_fn= model_fn_vmap, model= model)
 
-	device = next(model.parameters()).device
-	dtype = next(model.parameters()).dtype
-	dataloader.dataset.init_dataset(c, device, dtype, model=model)
+	print('IMPORTANT', c.device, c.dtype, c.seed, c.dist.rank, '\n')
+	dataloader.dataset.init_dataset(c, device= c.device, dtype= c.dtype, model= model)
 
 	return model, dataloader, compute_loss, opt, scheduler
 
@@ -123,7 +124,7 @@ def loss_fn(
 		m_orb_ud = model.compute_hf_orb(data.detach())
 		orb_ud = model.compute_orb(data.detach())
 
-		loss = sum([(torch.diagonal(o - mo, dim1=-1, dim2=-2))**2 for o, mo in zip(orb_ud, m_orb_ud)]).mean() # increasing dets can artificially boost the lr confusing understanding 
+		loss = sum([(torch.diagonal(o - mo, dim1=-1, dim2=-2)**2).mean() for o, mo in zip(orb_ud, m_orb_ud)]) # increasing dets can artificially boost the lr confusing understanding 
 
 	elif c.app.loss=='vmc':
 
@@ -254,6 +255,7 @@ def run(c: Pyfig=None, c_update: dict= None, **kw):
 
 				v_cpu_d: dict = npify_tree(v_d)
 
+
 				if not this_is_noop(step, c.n_step, n= c.n_log_state):
 					if not c.log_state_keys:
 						c.log_state_keys = []
@@ -381,7 +383,7 @@ if __name__ == "__main__":
 
 	res = dict()
 
-	from things.core_utils import flat_any
+	from things.core import flat_any
 	# v_run: mode, c_update
 	v_run = dict(mode= None, c_update=dict(lo_ve_path= None))
  

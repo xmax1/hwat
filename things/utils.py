@@ -10,10 +10,58 @@ import pprint
 import numpy as np
 import optree
 import paramiko
-import torch
 
 from time import sleep, time
-from .core_utils import flat_any, ins_to_dict
+from .core import flat_any, ins_to_dict, convert_to, get_cartesian_product
+
+import torch
+from torch import Tensor
+
+AnyTensor = np.ndarray | Tensor | list
+
+
+def get_slice(start, end, step= 1):
+	""" get slice from start to end """
+	# return slice(start, end)
+	return list(range(start, end, step))
+
+def print_tensor(tensor: AnyTensor, fmt='%.3f', sep=' ', end='\n', n_lead= 2, n_batch= 2, n_feat= 8):
+	""" 2nd last and last dim resolved as matrix, everything else new line, batch ----- separator """
+	tensor = convert_to(tensor, to='numpy')
+
+	if tensor_rank == 0:
+		tensor = tensor[None, None]
+	elif tensor_rank == 1:
+		tensor = tensor[None]
+	else:
+		pass
+
+	shape = tensor.shape
+	tensor_rank = tensor.ndim
+
+	n_batch = min(n_batch, tensor.shape[0])
+	n_feat = min(n_feat, tensor.shape[-1])
+	n_lead_rank = tensor_rank - 2
+	n_lead_all = [min(n_lead, s) for s in range(n_lead_rank)]
+	
+	lead_idxs = [get_slice(0, n) for n in n_lead_all]
+	print_dim = [get_slice(0, n_batch), *lead_idxs, get_slice(0, n_feat)]
+
+	def print_mat(mat):
+		for b in mat:
+			print(*[f'{x:.3f}' for x in b], sep='\t|\t', end='\n')
+			
+	last_mat_print = print_dim[-2:]
+	leading_rank = print_dim[:-2]
+	if len(leading_rank) == 0:
+		lead_idxs = []
+	else:
+		lead_idxs = get_cartesian_product(*leading_rank)
+	for i in range(n_batch):
+		idx = [i, *lead_idxs]
+		print_mat(tensor[idx])
+		print('-'*50)
+	return tensor
 
 
 class PlugIn:

@@ -10,7 +10,7 @@ import numpy as np
 import torch 
 import numpy as np
 
-from .core_utils import dump, load, run_cmds, find_free_port, add_to_Path, dict_to_cmd
+from .core import dump, load, run_cmds, find_free_port, add_to_Path, dict_to_cmd
 from .utils import PlugIn	
 
 from torch import nn
@@ -57,14 +57,8 @@ class DistBase(PlugIn):
 	def prepare(ii, *arg, **kw):
 		from .for_torch.torch_utils import try_convert
 		print('\ndist:prepare: ')
-		for k, v in kw.items():
-			kw[k] = try_convert(k, v, ii.p.device, ii.p.dtype)
-		
-		new_arg = []
-		for i, v in enumerate(arg):
-			# arg[i] = try_convert(i, v, ii.p.device, ii.p.dtype)
-			new_arg += [try_convert(v, v, ii.p.device, ii.p.dtype)]
-		return list(arg) + list(kw.values())
+		kw = {k:try_convert(k, v, ii.p.device, ii.p.dtype) for k,v in kw.items()}
+		return list([try_convert(v, v, ii.p.device, ii.p.dtype) for v in arg]) + list(kw.values())
 	
 	def set_seed(ii, seed= None) -> int:
 		seed = seed or int(ii.p.seed)
@@ -76,7 +70,7 @@ class DistBase(PlugIn):
 	def set_device(ii, device= None):
 		device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 		print('dist:set_device: ', device)
-		if not device=='cpu':
+		if not device == 'cpu':
 			device_int = torch.cuda.current_device()
 			torch_n_device = torch.cuda.device_count()
 			cuda_visible_devices = os.environ['CUDA_VISIBLE_DEVICES']
@@ -85,9 +79,10 @@ class DistBase(PlugIn):
 		return device
 		
 	def set_dtype(ii, dtype= None):
-		dtype = dtype or torch.float64
-		# torch.set_default_dtype(dtype)
-		return dtype
+		if not dtype or ii.p.dtype:
+			ii.p.dtype = 'float32'
+		torch.set_default_dtype(ii.p.dtype)
+		return ii.p._dtype_str
 
 	def unwrap(ii, model):
 		return model
@@ -207,7 +202,7 @@ class Naive(DistBase):
 		return v_sync
 
 
-from .core_utils import TryImportThis
+from .core import TryImportThis
 with TryImportThis('accelerate') as _hf_accel:
 
 	import accelerate
@@ -284,7 +279,7 @@ with TryImportThis('accelerate') as _hf_accel:
 		def backward(ii, loss: torch.Tensor, create_graph=False):
 			ii.accel.backward(loss, create_graph=create_graph)
 
-		def set_device(ii, device=None):
+		def set_device(ii, device= None):
 			print('dist:accel: getting devices with accelerate ', ii.accel._get_devices())
 			return ii.accel.device
 

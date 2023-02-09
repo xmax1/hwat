@@ -20,16 +20,23 @@ from time import time
 import re
 from itertools import product
 
-def try_this(f: Callable, *args, **kwargs):
-	try:
-		return f(*args, **kwargs)
-	except Exception as e:
-		print(f'Could not run {f.__name__}.')
-		print(e)
-		return None
+
+def try_this_wrap(msg= ':x:'):
+	def try_this(fn):
+		def new_fn(*args, **kw):
+			try:
+				out = fn(*args, **kw)
+			except Exception as e:
+				print(f'\nerror: in {fn.__name__}: {e}')
+				print(f'{msg}\n')
+				out = args[0] if len(args) > 0 else list(kw.values())[0]
+			return out
+		return new_fn
+	return try_this
+
 
 class TryImportThis:
-	def __init__(ii, package: str=None):
+	def __init__(ii, package: str= None):
 		ii.package = package
 
 	def __enter__(ii):
@@ -225,12 +232,7 @@ def cmd_to_dict(cmd: str| list, ref:dict, delim:str=' --', d=None):
 	
 	d = dict()
 	for k, v in cmd:
-		v = format_cmd_item(v)
 		k = k.replace(' ', '')
-
-		if k in base_ref_dict:
-			d[k] = base_ref_dict[k]['to_d'][v]  # torch.float64 
-			continue
 
 		v_ref = ref.get(k, None)
 		if v_ref is None:
@@ -239,14 +241,13 @@ def cmd_to_dict(cmd: str| list, ref:dict, delim:str=' --', d=None):
 		d[k] = type_me(v, k= k, v_ref=v_ref, is_cmd_item=True)
 	return d
 
-booleans = ['True', 'true', 'False', 'false']
 
-def format_cmd_item(v):
-	v = v.replace('(', '[').replace(')', ']')
-	v = v.replace(' ', '')
-	v = v.replace('\"', '')
-	v = v.replace('\'', '')
-	return v
+
+
+
+
+
+
 
 def dict_to_cmd(d: dict, sep=' ', exclude_false=False, exclude_none=True):
 
@@ -282,19 +283,14 @@ base_ref_dict = dict(
 # _test()
 
 
+
 def lit_eval_safe(v: str):
 	if not isinstance(v, str):
 		return v
-	
 	try:
-		print(v, type(v))
 		return literal_eval(v)
-	except:
-		allowed = r'\~\-\.a-zA-Z_0-9'
-		v = v.replace(r'"', '')
-		v = v.replace(r'\'', '')
-		v = re.sub(r'([\~\-\.\\\:a-zA-Z_0-9]+)', r'\1', v)
-		print(v, type(v))
+	except Exception as e:
+		print(v, type(v), e)
 		return v
 
 
@@ -326,7 +322,6 @@ def guess_type(v: Any, out_type: type=None, key_type: type= None, in_type: type=
 	int_pattern = [r'^[-+]?[0-9]+$']
 	float_pattern = [r'^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$']
 	str_pattern = [r'[\"\']?[a-zA-Z_]*[\"\']?']
-	booleans = ['True', 'true', 'False', 'false']
 
 	# What does regex ? does it match the whole string or just a part of it ?
 	has_a_float = any([re.match(p, v) for p in float_pattern])
@@ -348,11 +343,41 @@ def guess_type(v: Any, out_type: type=None, key_type: type= None, in_type: type=
 	return out_type or in_type, key_type or in_type, in_type
 
 
+
+# def np_from_lists(lists, types):
+#     """Convert a set of lists to typed numpy arrays.
+
+#     Args:
+#         lists (list): the lists to convert
+#         types (list): the list of types to use
+
+#     Returns:
+#         numpy array: the converted numpy array
+#     """
+
+#     return np.array([list(map(lambda x, t: t(x), l, types)) for l in lists])
+
+def format_cmd_item(v):
+	v = v.replace('(', '[').replace(')', ']')
+	v = v.replace(' ', '')
+	v = v.replace('\'', '')
+	v = v.replace(r'"', '')
+	v = re.sub(r'(?=.*[a-z|A-Z])([\~\-\.\\\\/:a-zA-Z0-9_\s-]+)', r'"\1"', v)
+	return v
+
+booleans = ['True', 'true', 'False', 'false']
+
 def cmd_to_typed_cmd(v, v_ref= None):
+
 	str_v = str(v)
+
 	format_str_v = format_cmd_item(str_v)
 	ast_v = lit_eval_safe(format_str_v)
-	out_type, key_type, in_type = guess_type(v)
+
+	if ast_v in booleans:
+		return booleans.index(ast_v) < 2
+
+	out_type, key_type, in_type = guess_type(format_str_v)
 			
 	if type(ast_v) is not (type(v_ref) or type(ast_v)) is not out_type:
 		print(
@@ -365,35 +390,26 @@ def cmd_to_typed_cmd(v, v_ref= None):
 
 import optree
 
-def try_ref_dict(v, k, is_cmd_item=False):
-	try:
-		if k in base_ref_dict:
-			if is_cmd_item:
-				return base_ref_dict[k]['to_d'][v]
-			else:
-				return base_ref_dict[k]['to_cmd'][v]
-		else:
-			return v
-	except:
-		return v
-
 
 def type_me(v, *, k: str= None, v_ref= None, is_cmd_item= False):
 	""" cmd_items: Accepted: bool, list of list (str, float, int), dictionary, str, explicit str (' "this" '), """
 
-	v = try_ref_dict(v, k, is_cmd_item= is_cmd_item)
-
 	type_ref = type(v_ref)
 
 	if is_cmd_item:
-		v = cmd_to_typed_cmd(v, v_ref)  # do not return, some evaluated types are not correct ie exp_id= 01234 is a str not an int
+		v = cmd_to_typed_cmd(v, v_ref= v_ref)  # do not return, some evaluated types are not correct ie exp_id= 01234 is a str not an int
+
+	if v is None:
+		return None
 
 	if isinstance(v, list | dict):
 		v_flat, treespec = optree.tree_flatten(v)
-		if v_ref:
+
+		if v_ref is not None:
 			v_ref_flat, treespec = optree.tree_flatten(v)
 		else:
 			v_ref_flat = v_flat
+
 		v_typed = [type_me(vi, k= k, v_ref= vi_ref) for vi, vi_ref in zip(v_flat, v_ref_flat)]
 		v = optree.tree_unflatten(treespec, v_typed)
 		
@@ -406,20 +422,24 @@ def type_me(v, *, k: str= None, v_ref= None, is_cmd_item= False):
 		if isinstance(v, dict):
 			return v
 	
-	if isinstance(v, str):
-		v = v.strip('\'\"')
-	
+	if isinstance(v, bool):
+		return v
+
 	if isinstance(v, (np.ndarray, np.generic)):
+		v = np.array(list(v))
 		if isinstance(v_ref, torch.Tensor):
-			return torch.from_numpy(v).type(type_ref)
+			return torch.from_numpy(v).to(device= v_ref.device, dtype= v_ref.dtype)
 		elif isinstance(v_ref, (np.ndarray, np.generic)):
 			return v.astype(type_ref)
 		else:
 			return v.astype(float)
 	
 	if isinstance(v_ref, torch.Tensor):
-		return v
+		return torch.tensor(v).to(device= v_ref.device, dtype= v_ref.dtype)
 
+	if isinstance(v, str):
+		v = v.strip('\'\"')
+	
 	if isinstance(v_ref, int):
 		return int(v)
 	

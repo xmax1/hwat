@@ -9,8 +9,8 @@ import numpy as np
 import torch
 import optree
 
-from ..core_utils import flat_any
-from ..pyfig_utils import PyfigBase 
+from ..core import flat_any
+from ..base import PyfigBase 
 
 from torch import nn
 
@@ -20,12 +20,14 @@ def try_convert(k, v, device, dtype):
 		v = v.to(dtype)
 		print(f'{k} to dtype', dtype)
 	except Exception as e:
-		print(f'\n*not* converting {k} to dtype', dtype)
+		# print(f'\n*not* converting {k} to dtype', dtype)
+		pass
 	try:
 		v = v.to(device)
 		print(f'\n{k} to device', device)
 	except Exception as e:
-		print(f'\n*not* {k} to device', device)
+		# print(f'\n*not* {k} to device', device)
+		pass
 	return v
 	
 

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from .utils import PlugIn
-from .core_utils import TryImportThis
+from .core import TryImportThis
 
 class LoggerBase(PlugIn):
 	

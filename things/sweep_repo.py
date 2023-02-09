@@ -7,7 +7,7 @@ import pprint
 import numpy as np
 
 from .utils import PlugIn
-from .core_utils import lo_ve, get_cartesian_product
+from .core import lo_ve, get_cartesian_product
 
 from functools import partial
 import json
@@ -92,7 +92,7 @@ class SweepBase(PlugIn):
 		return [{k:v for k,v in zip(sweep_keys, v_set)} for v_set in sweep_vals]
 
 
-from .core_utils import TryImportThis
+from .core import TryImportThis
 
 with TryImportThis('optuna') as _optuna:
 	from optuna import Trial
@@ -200,13 +200,12 @@ with TryImportThis('optuna') as _optuna:
 				gc_after_trial=True
 			)
 
-
-			from .core_utils import try_this  
+  
 			v_run = dict(c_update= study.best_params)
 			path = ii.p.paths.exp_dir/'best_params.json'
 			path.write_text(json.dumps(study.best_params, indent=4))
 			print('\nstudy:best_params')
-			_ = try_this(ii.p.dist.sync, dict(test= study.best_params))
+			_ = ii.p.dist.sync(dict(test= study.best_params)) # ugly. wait for processes. 
 			pprint.pprint(v_run)
 			return v_run
 

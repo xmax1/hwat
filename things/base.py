@@ -1,19 +1,18 @@
 
-import traceback
-from pathlib import Path
-import os
 import sys
-from typing import Callable, Any
-import wandb
+import traceback
+import os
+from typing import Callable
 import pprint
 import inspect
 import numpy as np
 from copy import deepcopy
 import pickle as pk
 import numpy as np
+from pathlib import Path
 
-from .core_utils import iterate_n_dir, gen_time_id, flat_any, run_cmds, cmd_to_dict, ins_to_dict, walk_ins_tree
-from .core_utils import mkdir, dict_to_cmd
+from .core import run_cmds, iterate_n_dir, gen_time_id, flat_any
+from .core import mkdir, dict_to_cmd, cmd_to_dict, ins_to_dict, walk_ins_tree
 
 this_file_path = Path(__file__) 
 
@@ -21,8 +20,7 @@ from .dist_repo import DistBase, Naive, HFAccelerate, SingleProcess
 from .logger_repo import LoggerBase, Wandb
 from .resource_repo import ResourceBase, Niflheim
 from .sweep_repo import SweepBase, Optuna
-from .gen_repo import OptBase, DataBase, SchedulerBase, PathsBase, ModelBase
-
+from .other_repo import OptBase, DataBase, SchedulerBase, PathsBase, ModelBase
 
 class PyfigBase:
 
@@ -438,28 +436,38 @@ class PyfigBase:
 		with open(path, 'w') as f:
 			f.writelines(info)
 
-	def to(ii, framework='torch'):
+	def to(ii, framework='torch', device= None, dtype= None):
 		import torch
 
 		base_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore+['parameters'])
+		ii.if_debug_print_d(base_d, msg='\npyfig:to: base_d')
+
+
+
 
 		# write a function to filter lists out of a dictionary
 		def get_numerical_arrays():
 			d = {k:np.array(v) for k,v in base_d.items() if isinstance(v, list) and len(v)>0}
-			d = {k:v for k,v in d.items() if not isinstance(v.tolist()[0], str)}
-			d_arr = {k:np.array(v) for k,v in base_d.items() if isinstance(v, (np.ndarray, np.generic))}
+			d = {k:v for k,v in d.items() if not isinstance(v.flatten().tolist()[0], str)}
+			d = {k:np.array(list(v)).astype(np.float64) for k,v in d.items() if not isinstance(v.flatten().tolist()[0], str)}
+			d_arr = {k:np.array(v).astype(np.float64) for k,v in base_d.items() if isinstance(v, (np.ndarray, np.generic))}
 			return d | d_arr
 
 		d = get_numerical_arrays()
+		ii.if_debug_print_d(d, msg='pyfig:to: d')
 
 		if 'torch' in framework.lower():
-			d = {k:torch.tensor(v, requires_grad=False).to(device=ii.device, dtype=ii.dtype) for k,v in d.items()}
+			d = {k:torch.tensor(v, requires_grad=False).to(device= ii.device, dtype= ii.dtype) for k,v in d.items()}
+			d |= {k:v.to(device= ii.device, dtype= ii.dtype).requires_grad_(False) for k,v in base_d.items() if isinstance(v, torch.Tensor)}
+
 		if 'numpy' in framework.lower():
 			d = {k:v.detach().cpu().numpy() for k,v in d.items() if isinstance(v, torch.Tensor)}
+
+		pprint.pprint(d)
 		ii.update(d)
 
 	def _memory(ii, sub_ins=True, attr=True, _prop=False, _ignore=[]):
-		return ins_to_dict(ii, attr=attr, sub_ins=sub_ins, prop=_prop, ignore=ii.ignore+_ignore+['logger'])
+		return deepcopy(ins_to_dict(ii, attr=attr, sub_ins=sub_ins, prop=_prop, ignore=ii.ignore+_ignore+['logger']))
 
 
 # class Repo(PlugIn):
