@@ -47,9 +47,9 @@ class Ansatz_fb(nn.Module):
 		n_pv, 
 		n_sv, 
 		n_final_out,
-		a, 
+		a: Tensor, 
 		mol,
-		mo_coef,
+		mo_coef: Tensor,
 		*, 
 		with_sign=False):
 		super(Ansatz_fb, ii).__init__()
@@ -86,13 +86,18 @@ class Ansatz_fb(nn.Module):
 
 		ii.w_final = nn.Linear(ii.n_det, ii.n_final_out, bias=False)
 
-		a: torch.Tensor
 		device, dtype = a.device, a.dtype
-		ii.register_buffer('a', a.detach().clone().requires_grad_(False), persistent=False)    # tensor
-		ii.register_buffer('eye', torch.eye(ii.n_e)[None, :, :, None].requires_grad_(False).to(device, dtype), persistent=False) # ! persistent moves with model to device etc
-		ii.register_buffer('ones', torch.ones((1, ii.n_det)).requires_grad_(False).to(device, dtype), persistent=False)
-		ii.register_buffer('zeros', torch.zeros((1, ii.n_det)).requires_grad_(False).to(device, dtype), persistent=False)
-		ii.register_buffer('mo_coef', torch.tensor(mo_coef).requires_grad_(False).to(device, dtype), persistent=False) # (n_b, n_e, n_mo)
+		a = a.detach()
+		eye = torch.eye(ii.n_e)[None, :, :, None].requires_grad_(False).to(device, dtype)
+		ones = torch.ones((1, ii.n_det)).requires_grad_(False).to(device, dtype)
+		zeros = torch.zeros((1, ii.n_det)).requires_grad_(False).to(device, dtype)
+		mo_coef = mo_coef.detach().to(device, dtype)
+		
+		ii.register_buffer('a', a, persistent=False)    # tensor
+		ii.register_buffer('eye', eye, persistent=False) # ! persistent moves with model to device etc
+		ii.register_buffer('ones', ones, persistent=False)
+		ii.register_buffer('zeros', zeros, persistent=False)
+		ii.register_buffer('mo_coef', mo_coef, persistent=False) # (n_b, n_e, n_mo)
 
 		ii.mol = mol
 
@@ -111,7 +116,6 @@ class Ansatz_fb(nn.Module):
 		
 		s_u, s_d = torch.split(s_v, [ii.n_u, ii.n_d], dim=1) # (n_b, n_u, 3n_sv+2n_pv), (n_b, n_d, 3n_sv+2n_pv)
 
-		### case with 1 electron will fail ### # e1mask = torch.sign(orb_u.shape[-1])
 		orb_u = ii.compute_orb_from_stream(s_u, ra_u, spin=0) # (n_b, n_det, n_u(r), n_u(w))
 		orb_d = ii.compute_orb_from_stream(s_d, ra_d, spin=1) # (n_b, n_det, n_d, n_d)
 
@@ -206,28 +210,20 @@ class Ansatz_fb(nn.Module):
 		# if self.restricted:
 		# 	mo_values *= 2
 		# return mo_values
-		ao = ii.mol.eval_gto('GTOval', r_hf) # (n_b*n_e, n_ao)
+
+		ao = ii.mol.eval_gto('GTOval_sph', r_hf) # (n_b*n_e, n_ao)
 
 		ao = ao.reshape(n_b, n_e, -1) # (n_b, n_e, n_ao)
 		ao = torch.tensor(ao).to(device= r.device, dtype= r.dtype) # (n_b, n_e, n_mo)
+		print('ao', ao, 'mo_coef', ii.mo_coef, sep='\n')
 		mo = [ao @ c[None] for c in ii.mo_coef]
-		mo = [m[:, None, :, :].tile((1, ii.n_det, 1, 1)).detach().requires_grad_(False) for m in mo] # n_spin, n_b, n_det, n_mo, n_mo
+		mo = [m[:, None, :, :].tile((1, ii.n_det, 1, 1)).detach() for m in mo] # n_spin, n_b, n_det, n_mo, n_mo
 		
 		# mo = [torch.einsum("bea,ao->beo", ao, c) for c in ii.mo_coef]
 		# mo = mo.unsqueeze(2).tile((1, 1, ii.n_det, 1, 1))  # n_spin, n_b, n_det, n_mo, n_mo
 		return mo[0][..., :ii.n_u, :ii.n_u], mo[1][..., :ii.n_d, :ii.n_d]
 
 
-	def full_det_from_spin_det(ii, orb_u: Tensor, orb_d: Tensor):
-		device, dtype = orb_u.device, orb_u.dtype
-		n_b, n_det, n_u, n_u = orb_u.shape
-		_, _, n_d, n_d = orb_d.shape
-		zero_top = torch.zeros((n_b, n_det, n_u, n_d), device=device, dtype=dtype)
-		zero_bot = torch.transpose(zero_top, -1, -2)
-		orb_u = torch.cat([orb_u, zero_top], dim=-1)
-		orb_d = torch.cat([zero_bot, orb_d], dim=-1)
-		return torch.cat([orb_u, orb_d], dim=-2)
-		
 
 compute_vv = lambda v_i, v_j: torch.unsqueeze(v_i, dim=-2)-torch.unsqueeze(v_j, dim=-3)
 
@@ -377,8 +373,8 @@ def init_r(center_points: Tensor, std=0.1):
 def is_a_larger(a: Tensor, b: Tensor) -> Tensor:
 	""" given a condition a > b returns 1 if true and 0 if not """
 	v = a - b # +ve when a bigger
-	a_is_larger = (torch.sign(v) + 1.) / 2. # 1 when a bigger
-	b_is_larger = (a_is_larger-1.)*-1. # 1 when b bigger
+	a_is_larger = (torch.sign(v) + 1.) / 2. # 1. when a bigger
+	b_is_larger = (a_is_larger - 1.) * -1. # 1. when b bigger
 	return a_is_larger, b_is_larger
 
 
@@ -388,24 +384,28 @@ def sample_pre(model: Ansatz_fb, data: Tensor, p_1: Tensor):
 	p_1: (n_b, n_e)
 	"""
 	m_orb = model.compute_hf_orb(data) # (n_b, n_det, n_e, n_e)
-	m_mean = [m.mean(dim=1) for m in m_orb] # (2, n_b, n_e, n_e)
-	p_pre = [torch.diagonal(m, dim1=-2, dim2=-1).prod(dim=-1) for m in m_mean] # (2, n_b)
-	p_prod = p_pre[0] * p_pre[1]
-	p_pre = p_prod / p_prod.sum() # (2, n_b)
+	print('m_orb', m_orb[0].shape, m_orb[1].shape)
+
+	p_pre = [torch.diagonal(m**2, dim1=-2, dim2=-1).prod(dim=-1).mean(1) for m in m_orb] # (2, n_b)
+	p_prod = p_pre[0]*p_pre[1]
+	print('p', p_prod)
+	p_pre = p_prod / p_prod.sum() # (n_b,)
 	p_1 = p_1 / p_1.sum()
 	return (p_1 + p_pre) / 2.
 
 
 @torch.no_grad()
 def sample_b(
-	model: nn.Module=None, 
-	data: Tensor=None, 
-	deltar: Tensor= 0.02, 
-	n_corr: int=10,
-	pre: bool=False,
-	unwrap: Callable= None,
+	model: nn.Module = None, 
+	data: Tensor = None, 
+	deltar: Tensor = 0.02, 
+	n_corr: int = 10,
+	pre: bool = False,
+	unwrap: Callable = None,
+	acc_target: float = 0.5,
 	**kw
 ):
+
 	""" metropolis hastings sampling with automated step size adjustment 
 	!!upgrade .round() to .floor() for safe masking """
 	device, dtype = data.device, data.dtype
@@ -415,10 +415,10 @@ def sample_b(
 		unwrap_model = unwrap(model)
 		p_0 = sample_pre(unwrap_model, data, p_0)
 
-	deltar_1 = torch.clip(deltar + 0.01*torch.randn_like(deltar), min=0.005, max=0.5)
+	deltar_1 = torch.clip(deltar + 0.01 * torch.randn_like(deltar), min=0.005, max=0.5)
 	
-	acc = torch.zeros_like(deltar)
-	acc_all = torch.zeros_like(deltar)
+	acc = torch.zeros_like(deltar_1)
+	acc_all = torch.zeros_like(deltar_1)
 
 	for dr_test in [deltar, deltar_1]:
 		for _ in torch.arange(1, n_corr+1):
@@ -427,15 +427,18 @@ def sample_b(
 			p_1 = torch.exp(model(data_1))**2
 			if pre:
 				p_1 = sample_pre(unwrap_model, data_1, p_1)
-				
+			
 			alpha = torch.rand_like(p_1, device=device, dtype=dtype, layout=torch.strided)
-			a_larger, b_larger = is_a_larger(p_1/p_0, alpha)
+
+			a_larger, b_larger = is_a_larger((p_1/p_0)+1e-12, alpha)
 
 			p_0 = a_larger*p_1 + b_larger*p_0
 			data = a_larger.unsqueeze(-1).unsqueeze(-1)*data_1 + b_larger.unsqueeze(-1).unsqueeze(-1)*data
 
-			acc_test = torch.mean(a_larger, dim=0, keepdim=True) # docs:torch:knowledge keepdim requires dim=int|tuple[int]
+			acc_test = torch.mean(p_0, dim=0, keepdim=True) # docs:torch:knowledge keepdim requires dim=int|tuple[int]
 
+			print(acc_test, p_0, p_1, data, data_1, sep='\n')
+			exit()
 		del data_1
 		del p_1
 		del a_larger
@@ -443,7 +446,7 @@ def sample_b(
 
 		acc_all += acc_test
 
-		a_larger, b_larger = is_a_larger(torch.absolute(0.5-acc), torch.absolute(0.5-acc_test))
+		a_larger, b_larger = is_a_larger(torch.absolute(acc_target-acc), torch.absolute(acc_target-acc_test))
 
 		acc = a_larger*acc_test + b_larger*acc
 
@@ -489,13 +492,13 @@ class PyfigDataset(Dataset):
 
 	def init_dataset(ii, c: Pyfig, device= None, dtype= None, model= None, **kw) -> torch.Tensor:
 
-		ii.data = ii.data.to(device, dtype)
-		ii.deltar = ii.deltar.to(device, dtype)
+		ii.data = ii.data.to(device= device, dtype= dtype)
+		ii.deltar = ii.deltar.to(device= device, dtype= dtype)
 
 		ii.v_d = {'data': ii.data, 'deltar': ii.deltar}
 		
 		print('dataset:init_dataset sampler is pretraining ', ii.mode==c.pre_tag) 
-		ii.sample = partial(sample_b, model=model, n_corr=ii.n_corr, pre=ii.mode==c.pre_tag, unwrap=c.dist.unwrap)
+		ii.sample = partial(sample_b, model= model, n_corr=ii.n_corr, pre= ii.mode==c.pre_tag, unwrap= c.dist.unwrap)
 
 		for equil_i in range(100):
 			ii.v_d = ii.sample(**ii.v_d)
@@ -504,12 +507,8 @@ class PyfigDataset(Dataset):
 
 		print('dataset:init_dataset', [[k, v.shape, v.device, v.dtype] for k, v in ii.v_d.items()], sep='\n')
 
-
-
 	def __len__(ii):
 		return ii.n_step
-
-
 
 	def __getitem__(ii, i):
 		ii.wait()

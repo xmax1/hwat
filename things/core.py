@@ -125,7 +125,7 @@ def mkdir(path: Path) -> Path:
 		if not path.exists() or not path.is_dir():
 			path.mkdir(parents=True)
 	except Exception as e:
-		print(e)
+		print(':mkdir:', e)
 	return path
 
 def add_to_Path(path: Path, string: str | Path):
@@ -290,7 +290,7 @@ def lit_eval_safe(v: str):
 	try:
 		return literal_eval(v)
 	except Exception as e:
-		print(v, type(v), e)
+		print(':lit_eval_safe:', v, type(v), e)
 		return v
 
 
@@ -462,7 +462,7 @@ def run_cmds(cmd: str|list, cwd:str | Path='.', silent=True, _res=[]):
 				print('stdout:', _res.stdout, 'stderr:', _res.stderr, sep='\n')
 		except Exception as e:
 			if not silent:
-				print(cmd_1, e)
+				print(':run_cmds:', cmd_1, e)
 			return ('Fail', '')
 	return _res.stdout.rstrip('\n')
 
@@ -556,7 +556,7 @@ def walk_ins_tree(
 				if is_updated:
 					return True
 	except Exception as e:
-		print(f'pyfig:walk_ins_tree k={k_update} v={v_update} v_ref={v_ref} ins={ins}')
+		print(f':core:walk_ins_tree: k={k_update} v={v_update} v_ref={v_ref} ins={ins}')
 	return False
 
 

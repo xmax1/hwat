@@ -7,6 +7,9 @@ import torch
 from torch import Tensor
 
 
+AnyTensor = np.ndarray | Tensor | list
+
+
 @try_this_wrap(msg= ':x:to_numpy_safe')
 def to_numpy_safe(tensor: Tensor | np.ndarray | list, dtype= np.float64, like: np.ndarray= None) -> np.ndarray:
 	
@@ -41,8 +44,14 @@ def to_torch_safe(
 	return torch.tensor(tensor, dtype= dtype, device= device).requires_grad_(requires_grad)
 
 
-def convert_to(*,
-	tensor: np.ndarray | Tensor= None,
+def get_el0(tensor: AnyTensor):
+	if not np.isscalar(tensor):
+		tensor = get_el0(tensor[0])
+	return tensor
+
+
+def convert_to(
+	tensor: np.ndarray | Tensor= None, *,
 	to= 'numpy', device= 'cpu', dtype: str|type= 'float64', requires_grad: bool= False,
 	like= None
 ):
@@ -65,6 +74,8 @@ def convert_to(*,
 		)
 	)
 
+
+
 	if like is not None:
 		if isinstance(like, Tensor):
 			to = 'torch'
@@ -82,6 +93,8 @@ def convert_to(*,
 	if to == 'numpy':
 		return to_numpy_safe(tensor, dtype= dtype, like= like)
 	elif to == 'torch':
+		if isinstance(get_el0(tensor), str):
+			return tensor
 		return to_torch_safe(tensor, dtype= dtype, device= device, requires_grad= requires_grad, like= like)
 	else:
 		raise ValueError(f'convert_to: invalid to: {to}')

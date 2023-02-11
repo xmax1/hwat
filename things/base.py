@@ -275,17 +275,14 @@ class PyfigBase:
 			ii.zweep = False
 			
 			for i, run_d in enumerate(run_or_sweep_d):
+				
 				exp_name, exp_id = ii.setup_exp_dir(group_exp= False, force_new_id= True)
+
 				ii.save_code_state()
 
 				compulsory = dict(exp_id= exp_id, exp_name= exp_name, submit= False, run_sweep= False, zweep= '')
 
-
 				ii.resource.cluster_submit(ii.c_init | run_d | compulsory)
-
-				# ii.update(run_d)
-				# c_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, 
-				# 	ignore=ii.ignore+['dist_c','slurm_c','parameters'])
 
 				ii.if_debug_log([dict(os.environ.items()), run_d], ['log-submit_env.log', 'log-submit_d.log'])
 
@@ -423,10 +420,18 @@ class PyfigBase:
 		ii.if_debug_print_d(not_arg, msg='\npyfig:update: arg not in pyfig')	
 
 	def if_debug_print_d(ii, d: dict, msg: str=''):
+		
+		from .typfig import AnyTensor
+		from .utils import print_tensor
+		from torch import Tensor
 		if ii.debug:
-			if d:
-				print(msg)
-				pprint.pprint(d)
+			if isinstance(d, dict):
+				print('-'*50, msg, sep='\n')
+				for k,v in d.items():
+					if isinstance(v, Tensor | np.ndarray):
+						print_tensor(v, k= k)
+					else:
+						print(k, v, sep='\t'*3)
 		
 	@staticmethod
 	def log(info: dict|str, path: Path, group_exp: bool=True):
@@ -441,9 +446,6 @@ class PyfigBase:
 
 		base_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore+['parameters'])
 		ii.if_debug_print_d(base_d, msg='\npyfig:to: base_d')
-
-
-
 
 		# write a function to filter lists out of a dictionary
 		def get_numerical_arrays():

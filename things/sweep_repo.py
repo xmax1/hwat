@@ -95,12 +95,14 @@ class SweepBase(PlugIn):
 from .core import TryImportThis
 
 with TryImportThis('optuna') as _optuna:
+	
 	from optuna import Trial
 	from optuna.study import MaxTrialsCallback
 	from optuna.trial import TrialState
 	import optuna
 	from functools import partial
 	import json
+
 
 	def objective(trial: Trial, run_trial: Callable, c):
 		
@@ -191,7 +193,7 @@ with TryImportThis('optuna') as _optuna:
 					load_if_exists 	= True, 
 				)
 
-			_objective = partial(objective, run_trial=run_trial, c= ii.p)
+			_objective = partial(objective, run_trial= run_trial, c= ii.p)
 			study.optimize(
 				_objective, 
 				n_trials= ii.n_trials, 
@@ -205,7 +207,7 @@ with TryImportThis('optuna') as _optuna:
 			path = ii.p.paths.exp_dir/'best_params.json'
 			path.write_text(json.dumps(study.best_params, indent=4))
 			print('\nstudy:best_params')
-			_ = ii.p.dist.sync(dict(test= study.best_params)) # ugly. wait for processes. 
+			_ = ii.p.dist.sync(dict(test= study.best_params), sweep_method= ii.p.gather_tag) # ugly. wait for processes. 
 			pprint.pprint(v_run)
 			return v_run
 

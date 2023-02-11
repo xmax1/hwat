@@ -161,7 +161,8 @@ from things.dist_repo import DistBase, Naive, HFAccelerate, SingleProcess
 from things.logger_repo import LoggerBase, Wandb
 from things.resource_repo import ResourceBase, Niflheim
 from things.sweep_repo import SweepBase, Optuna, Param
-from things.gen_repo import OptBase, DataBase, SchedulerBase, PathsBase, ModelBase
+from things.other_repo import OptBase, DataBase, SchedulerBase, PathsBase, ModelBase
+
 
 class Pyfig(PyfigBase):
 
@@ -297,7 +298,7 @@ class Pyfig(PyfigBase):
 		# n_log -1 special case never
 		# n_log 1 special case log last
 
-		mode_c: dict = dict(
+		_mode_c: dict = dict(
 			pre= dict(
 				n_b 			= 512,
 				n_pre_step 	= 500,
@@ -408,12 +409,14 @@ class Pyfig(PyfigBase):
 			hessian_power	= 	Param(values=[0.5, 0.75, 1.], dtype=float, condition=['AdaHessian',]),
 			lr				=	Param(domain=(0.0001, 1.), log=True, dtype=float),
 			sch_max_lr		=	Param(values=[0.1, 0.01, 0.001], dtype=float),
-			n_sv			= 	Param(values=[16, 32, 64], dtype=int),
-			n_pv			= 	Param(values=[16, 32], dtype=int),
-			n_det			= 	Param(values=[1, 4, 8, 16], dtype=int),
-			n_fb			= 	Param(values=[2, 3, 4], dtype=int),
-			n_b				= 	Param(values=[512], dtype=int),  # 64000
-			n_opt_hypam_step= 	Param(values=[500,], dtype=int),
+			n_det			=	Param(values=[4,], dtype=int),
+			
+			# n_sv			= 	Param(values=[16, 32, 64], dtype=int),
+			# n_pv			= 	Param(values=[16, 32], dtype=int),
+			# n_det			= 	Param(values=[1, 4, 8, 16], dtype=int),
+			# n_fb			= 	Param(values=[2, 3, 4], dtype=int),
+			# n_b				= 	Param(values=[512], dtype=int),  # 64000
+			# n_opt_hypam_step= 	Param(values=[500,], dtype=int),
 		)
 
 	class dist(Naive):

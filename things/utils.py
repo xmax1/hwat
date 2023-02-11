@@ -12,7 +12,8 @@ import optree
 import paramiko
 
 from time import sleep, time
-from .core import flat_any, ins_to_dict, convert_to, get_cartesian_product
+from .core import flat_any, ins_to_dict, get_cartesian_product, try_this_wrap
+from .typfig import convert_to
 
 import torch
 from torch import Tensor
@@ -25,19 +26,23 @@ def get_slice(start, end, step= 1):
 	# return slice(start, end)
 	return list(range(start, end, step))
 
-def print_tensor(tensor: AnyTensor, fmt='%.3f', sep=' ', end='\n', n_lead= 2, n_batch= 2, n_feat= 8):
+@try_this_wrap(msg='print_tensor')
+def print_tensor(tensor: AnyTensor, k: str= None, fmt='%.3f', sep=' ', end='\n', n_lead= 2, n_batch= 2, n_feat= 8):
 	""" 2nd last and last dim resolved as matrix, everything else new line, batch ----- separator """
-	tensor = convert_to(tensor, to='numpy')
-
-	if tensor_rank == 0:
-		tensor = tensor[None, None]
-	elif tensor_rank == 1:
-		tensor = tensor[None]
-	else:
-		pass
+	if k is not None:
+		print(k)
+	
+	tensor = convert_to(tensor= tensor, to= 'numpy')
 
 	shape = tensor.shape
 	tensor_rank = tensor.ndim
+
+	if tensor_rank == 0:
+		return print(tensor)
+	elif tensor_rank == 1:
+		print(tensor[:n_feat])
+	else:
+		pass
 
 	n_batch = min(n_batch, tensor.shape[0])
 	n_feat = min(n_feat, tensor.shape[-1])

@@ -396,11 +396,9 @@ if __name__ == "__main__":
 		c.mode = mode.split('-')[0]  	# todo: add support for mode-1:mode-cmd:mode-cfg-other:etc
 		c.c_init['mode'] = c.mode 		# !!! this is important and buggy, need mode control flow
 
-		base_c = flat_any(c.app.mode_c[mode])
-		# debug_c = flat_any(c.app.debug_c) if c.run_debug_c else dict()
+		base_c = flat_any(c.app._mode_c[mode])
 
 		c.if_debug_print_d(base_c, msg='base_c')
-		# c.if_debug_print_d(debug_c, msg='debug_c')
 		c.if_debug_print_d(c.c_init, msg='c_init')
 
 		v_run['c_update'] |= (base_c | flat_any(c.c_init))
