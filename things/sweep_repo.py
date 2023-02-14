@@ -175,7 +175,7 @@ with TryImportThis('optuna') as _optuna:
 		def opt_hypam(ii, run_trial: Callable):
 			print('opt_hypam:create_study rank,head,is_logging_process', ii.p.dist.rank, ii.p.dist.head, ii.p.is_logging_process)
 
-			if ii.p.dist.rank:
+			if ii.p.dist.rank and not ii.p.dist.rank==-1:
 				print('opt_hypam:waiting_for_storage rank,head,is_logging_process', ii.p.dist.rank, ii.p.dist.head, ii.p.is_logging_process)
 				while not len(list(ii.p.paths.exp_dir.glob('*.db'))):
 					sleep(5.)
@@ -201,14 +201,16 @@ with TryImportThis('optuna') as _optuna:
 				callbacks=[MaxTrialsCallback(ii.n_trials, states=(TrialState.COMPLETE,))],
 				gc_after_trial=True
 			)
-
   
 			v_run = dict(c_update= study.best_params)
 			path = ii.p.paths.exp_dir/'best_params.json'
-			path.write_text(json.dumps(study.best_params, indent=4))
+			path.write_text(json.dumps(study.best_params, indent= 4))
 			print('\nstudy:best_params')
-			_ = ii.p.dist.sync(dict(test= study.best_params), sweep_method= ii.p.gather_tag) # ugly. wait for processes. 
 			pprint.pprint(v_run)
+			try:
+				_ = ii.p.dist.sync(dict(test= study.best_params), sync_method= ii.p.gather_tag) # ugly. wait for processes. 
+			except Exception as e:
+				print('opt_hypam:sync:error (iz ok, but y no work)', e)
 			return v_run
 
 

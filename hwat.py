@@ -200,27 +200,18 @@ class Ansatz_fb(nn.Module):
 
 	def compute_hf_orb(ii, r: Tensor):
 		n_b, n_e, _ = r.shape
-		r_hf = r.reshape(-1, 3) # (n_b*n_e, 3)
 
-		r_hf = r_hf.detach().cpu().numpy()
+		r_hf = r.detach().cpu().numpy().reshape(-1, 3)
 
 		# gto_op = 'GTOval_sph_deriv1' if deriv else 'GTOval_sph'
-		# ao_values = self.mol.eval_gto(gto_op, electrons)
-		# mo_values = tuple(np.matmul(ao_values, coeff) for coeff in coeffs)
-		# if self.restricted:
-		# 	mo_values *= 2
-		# return mo_values
-
 		ao = ii.mol.eval_gto('GTOval_sph', r_hf) # (n_b*n_e, n_ao)
-
 		ao = ao.reshape(n_b, n_e, -1) # (n_b, n_e, n_ao)
 		ao = torch.tensor(ao).to(device= r.device, dtype= r.dtype) # (n_b, n_e, n_mo)
-		print('ao', ao, 'mo_coef', ii.mo_coef, sep='\n')
-		mo = [ao @ c[None] for c in ii.mo_coef]
-		mo = [m[:, None, :, :].tile((1, ii.n_det, 1, 1)).detach() for m in mo] # n_spin, n_b, n_det, n_mo, n_mo
 		
-		# mo = [torch.einsum("bea,ao->beo", ao, c) for c in ii.mo_coef]
-		# mo = mo.unsqueeze(2).tile((1, 1, ii.n_det, 1, 1))  # n_spin, n_b, n_det, n_mo, n_mo
+		# mo_coef: rows are atomic orbitals, columns are molecular orbitals
+		# ao: (n_b, n_e, n_ao) 
+		mo = [ao @ torch.transpose(c, 0, 1)[None] for c in ii.mo_coef] # (n_b, n_e, n_orb)
+		mo = [m[:, None, :, :].tile((1, ii.n_det, 1, 1)).detach() for m in mo] # n_spin, n_b, n_det, n_mo, n_mo
 		return mo[0][..., :ii.n_u, :ii.n_u], mo[1][..., :ii.n_d, :ii.n_d]
 
 
@@ -382,16 +373,23 @@ def sample_pre(model: Ansatz_fb, data: Tensor, p_1: Tensor):
 	"""
 	data: (n_b, n_e, 3)
 	p_1: (n_b, n_e)
-	"""
-	m_orb = model.compute_hf_orb(data) # (n_b, n_det, n_e, n_e)
-	print('m_orb', m_orb[0].shape, m_orb[1].shape)
 
-	p_pre = [torch.diagonal(m**2, dim1=-2, dim2=-1).prod(dim=-1).mean(1) for m in m_orb] # (2, n_b)
+	NB: Probability can be zero (eg initial walkers way out field)
+	NB: Set wf prob to zero and hf to 1 to encourage hf sampling
+	"""
+	# if the probability is zero... 
+	# increase the prob of accepting the move
+	# which makes sense
+	# so just catch the infs and replace with 0
+	m_orb = model.compute_hf_orb(data) # (2, n_b, n_det, n_e, n_e)
+	m_diag_prob = [torch.diagonal(m, dim1=-2, dim2=-1)**2 for m in m_orb]
+	p_pre = [p.prod(-1).mean(1) for p in m_diag_prob]
 	p_prod = p_pre[0]*p_pre[1]
-	print('p', p_prod)
-	p_pre = p_prod / p_prod.sum() # (n_b,)
-	p_1 = p_1 / p_1.sum()
-	return (p_1 + p_pre) / 2.
+	norm = p_prod.sum()
+	p_prod = torch.where(norm==0., torch.ones_like(norm), p_prod/norm)
+	p_1_norm = p_1.sum()
+	p_1 = torch.where(p_1_norm==0., torch.zeros_like(p_1_norm), p_1/p_1_norm)
+	return (p_1 + p_prod) / 2.
 
 
 @torch.no_grad()
@@ -430,15 +428,13 @@ def sample_b(
 			
 			alpha = torch.rand_like(p_1, device=device, dtype=dtype, layout=torch.strided)
 
-			a_larger, b_larger = is_a_larger((p_1/p_0)+1e-12, alpha)
+			a_larger, b_larger = is_a_larger(p_1/(p_0+1e-12), alpha)
 
 			p_0 = a_larger*p_1 + b_larger*p_0
 			data = a_larger.unsqueeze(-1).unsqueeze(-1)*data_1 + b_larger.unsqueeze(-1).unsqueeze(-1)*data
 
-			acc_test = torch.mean(p_0, dim=0, keepdim=True) # docs:torch:knowledge keepdim requires dim=int|tuple[int]
+			acc_test = torch.mean(a_larger.to(dtype), dim=0, keepdim=True) # docs:torch:knowledge keepdim requires dim=int|tuple[int]
 
-			print(acc_test, p_0, p_1, data, data_1, sep='\n')
-			exit()
 		del data_1
 		del p_1
 		del a_larger
@@ -478,11 +474,22 @@ class PyfigDataset(Dataset):
 			shift = c.app.init_data_scale * torch.randn(size=(n_b, *trailing_shape)).requires_grad_(False).to(device, dtype)
 			return center_points + shift 
 
-		new_data = init_data(ii.n_b, center_points.shape)
+		data_loaded = state.get('data', None)
+		if data_loaded is not None: 
+			print('dataset: loading data from state')
+			data = data_loaded
+		else:
+			data = init_data(ii.n_b, center_points.shape)
+		ii.data = data.requires_grad_(False).to(device, dtype)
 
-		ii.data = state.get('data', new_data.requires_grad_(False).to(device, dtype))
-		ii.deltar = state.get('deltar', torch.tensor([0.02, ]).requires_grad_(False).to(device, dtype))
-		
+		deltar_loaded = state.get('deltar', None)
+		if deltar_loaded is not None: 
+			print('dataset: loading deltar from state')
+			deltar = deltar_loaded
+		else:
+			deltar = torch.tensor([0.02, ])
+		ii.deltar = deltar.requires_grad_(False).to(device, dtype)
+
 		tmp = {'data': ii.data, 'deltar': ii.deltar, 'center_points': center_points, 'a': c.app.a}
 
 		print('dataset:init_dataset', [[k, v.shape, v.device, v.dtype] for k, v in tmp.items()])
@@ -497,11 +504,15 @@ class PyfigDataset(Dataset):
 
 		ii.v_d = {'data': ii.data, 'deltar': ii.deltar}
 		
-		print('dataset:init_dataset sampler is pretraining ', ii.mode==c.pre_tag) 
+		sample_equil = partial(sample_b, model= model, n_corr=ii.n_corr, pre= True, unwrap= c.dist.unwrap)
 		ii.sample = partial(sample_b, model= model, n_corr=ii.n_corr, pre= ii.mode==c.pre_tag, unwrap= c.dist.unwrap)
+		print('dataset:init_dataset sampler is pretraining ', ii.mode==c.pre_tag) 
 
 		for equil_i in range(100):
-			ii.v_d = ii.sample(**ii.v_d)
+			if not c.mode=='opt_hypam':
+				ii.v_d = ii.sample(**ii.v_d)
+			else:
+				ii.v_d = sample_equil(**ii.v_d)
 			if equil_i % 10 == 0:
 				print('equil ', equil_i, ' acc ', torch.mean(ii.v_d['acc'], dim=0, keepdim=True).detach().cpu().numpy())
 

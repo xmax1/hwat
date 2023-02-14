@@ -48,7 +48,7 @@ class DistBase(PlugIn):
 		pass
 
 	@torch.no_grad()
-	def sync(ii, v_d: dict) -> list[Any]:
+	def sync(ii, v_d: dict, sync_method: str= '', this_is_noop: bool= True) -> list[Any]:
 		return v_d
 
 	def backward(ii, loss: torch.Tensor, create_graph: bool= False):
@@ -70,7 +70,7 @@ class DistBase(PlugIn):
 	def set_device(ii, device= None):
 		device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 		print('dist:set_device: ', device)
-		if not device == 'cpu':
+		if not device == torch.device('cpu'):
 			device_int = torch.cuda.current_device()
 			torch_n_device = torch.cuda.device_count()
 			cuda_visible_devices = os.environ['CUDA_VISIBLE_DEVICES']

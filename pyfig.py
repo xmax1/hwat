@@ -202,7 +202,7 @@ class Pyfig(PyfigBase):
 
 	@property
 	def is_logging_process(ii: PyfigBase):
-		return ii.mode==ii.opt_hypam_tag or ii.dist.head
+		return ii.mode==ii.opt_hypam_tag or ii.dist.head or ii.dist.rank==-1
 	# is_logging_process: bool 	= property(def(ii: PyfigBase): ; return ii.mode==ii.opt_hypam_tag or ii.dist.head)
 
 	log_state_keys:     list 	= [] # ['opt_obj', 'r', 'grads', 'params', ...] 'all' is all
@@ -229,7 +229,7 @@ class Pyfig(PyfigBase):
 		n_corr:     int         = 10
 		n_equil_step:int		= 0
 		acc_target: int         = 0.5
-		init_data_scale: float  = 5.
+		init_data_scale: float  = 1.
 
 		mo_coef:   np.ndarray  = None
 		_hf 	= None
@@ -250,24 +250,30 @@ class Pyfig(PyfigBase):
 			""" 
 			- want this to happen after pyfig is updated
 			"""
-			from pyscf import gto
+			print('\npyfig:pyscf: ')
+			from pyscf import gto, scf
 
 			mol: gto.Mole = gto.Mole(
-				atom=ii.system_id, basis='sto3g', unit='bohr'
+				atom	= ii.system_id, 
+				basis	='sto3g', 
+				charge	= ii.charge, 
+				spin 	= ii.spin, 
+				unit	= 'Bohr'
 			)
-
-			print('\npyfig:pyscf: ', ii.system_id, [type(v) for v in ii.system_id], sep='\n')
-			mol.spin = ii.spin
-			mol.charge = ii.charge
 			mol.build()
-			hf = mol.UHF()
-			hf.kernel()
 
-			ii._hf = hf
+			mean_field_obj = scf.UHF(mol)
+			# mean_field_obj.run()
+			mean_field_obj.kernel()
+			mean_field_obj.analyze()
+
+			ii._hf = mean_field_obj
 			ii._mol = mol
-			ii.mo_coef = np.array(hf.mo_coeff)
-
-			ii.p.if_debug_print_d({'hf': hf, 'mol': mol, 'mo_coef': ii.mo_coef})
+			ii.mo_coef = np.array(mean_field_obj.mo_coeff)
+			# Molecular orbital (MO) coefficients (matrix where rows are atomic orbitals (AO) and columns are MOs)
+			
+			# print(ii.mo_coef, ii.mo_coef.shape, sep='\n')
+			ii.p.if_debug_print_d({'mean_field_obj': mean_field_obj, 'mol': mol, 'mo_coef': ii.mo_coef})
 
 		def record_summary(ii, summary: dict=None, opt_obj_all: list=None) -> None:
 			import wandb
@@ -301,10 +307,10 @@ class Pyfig(PyfigBase):
 		_mode_c: dict = dict(
 			pre= dict(
 				n_b 			= 512,
-				n_pre_step 	= 500,
+				n_pre_step 		= 500,
 				loss 			= 'orb_mse',
-				log_state_keys = ['params'],
-				n_log_state	= 1, 
+				log_state_keys 	= ['all'],
+				n_log_state		= 1, 
 				n_log_metric	= 5, 
 				sync_step		= 5,
 			),

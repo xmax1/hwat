@@ -78,7 +78,10 @@ with TryImportThis('wandb') as _wb:
 			try:
 				ii.run.finish()
 			except Exception as e:
-				print('logger:end: ', e)
+				print('logger:end:error: (iz ok) ', e)
+				
+
+
 			
 			
 		

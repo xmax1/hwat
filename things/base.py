@@ -240,9 +240,10 @@ class PyfigBase:
 			assert ii.submit == False
 
 			if not ii.exp_id:
-				if not ii.paths.exp_dir.exists():
-					print('pyfig:start: creating exp_dir, current exp_id= ', ii.exp_id)
-					ii.setup_exp_dir(group_exp= ii.group_exp, force_new_id= False)
+				# if not ii.paths.exp_dir.exists():
+				print('pyfig:start: creating exp_dir, current exp_id= ', ii.exp_id)
+				ii.setup_exp_dir(group_exp= ii.group_exp, force_new_id= False)
+
 
 			ii._group_i += 1
 			ii.run_id = ii.exp_id + '.' + ii.mode + '.' + str(ii._group_i) + '.' + str(ii.dist.rank)
@@ -254,7 +255,7 @@ class PyfigBase:
 			tags = [str(s) for s in [*ii.mode.split('-'), ii.exp_id, ii._group_i]]
 			print(f'pyfig:logger: tags- {tags}')
 
-			ii.logger.start(ii.d, tags=tags, run_id=ii.run_id)
+			ii.logger.start(ii.d, tags= tags, run_id= ii.run_id)
 
 	def end(ii, plugin: str= None):
 		if plugin is None:

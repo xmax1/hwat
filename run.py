@@ -59,9 +59,16 @@ def init_exp(c: Pyfig, state: dict= None):
 	c.to(framework='torch')
 	print('IMPORTANT', c.device, c.dtype, c.seed, c.dist.rank, '\n')
 
-	model: torch.nn.Module = c.partial(Model)
-	if state.get('model'):
-		model.load_state_dict(state['model']).to(dtype= c.dtype)
+	model: torch.nn.Module = c.partial(Model, device= 'cpu')
+	print(state.get('model', None))
+	if state.get('model', None):
+		try:
+			print(state['model'])
+			model.load_state_dict(state['model']).to(dtype= c.dtype)	
+		except Exception as e:
+			print('did not load model', e) 
+
+		
 		
 	model_to_fn: torch.nn.Module = c.partial(Model, mol=None).to(dtype= c.dtype)
 	model_fn, param, buffer = make_functional_with_buffers(model_to_fn)
@@ -72,7 +79,7 @@ def init_exp(c: Pyfig, state: dict= None):
 
 	opt: Optimizer = get_opt(**c.opt.d_flat)(model.parameters())
 	if state.get('opt'):
-		opt.load_state_dict(state['opt'])
+		opt.load_state_dict(state.get('opt'))
 
 	### under construction ###
 	# pre_opt = get_opt(**c.opt.pre_opt.d_flat)(model.named_parameters())
@@ -97,6 +104,7 @@ def init_exp(c: Pyfig, state: dict= None):
 
 
 def loss_fn(
+	step: int,
 	data: torch.Tensor=None,
 	model:torch.nn.Module=None,
 	model_fn: Callable=None,
@@ -112,13 +120,13 @@ def loss_fn(
 			pe = compute_pe_b(data, c.app.a, c.app.a_z)
 			e = pe + ke
 			e_mean_dist = torch.mean(torch.absolute(torch.median(e) - e))
-			e_clip = torch.clip(e, min=e-5*e_mean_dist, max=e+5*e_mean_dist)
+			e_clip = torch.clip(e, min= e-5*e_mean_dist, max= e+5*e_mean_dist)
 			energy = (e_clip - e_clip.mean())
 		
 		v_d |= dict(e= e, pe= pe, ke= ke)
 		
 
-	if c.app.loss=='orb_mse':
+	if c.app.loss=='orb_mse' or (c.mode==c.opt_hypam_tag and step<50):
 
 		model = c.dist.unwrap(model)
 		m_orb_ud = model.compute_hf_orb(data.detach())
@@ -215,13 +223,25 @@ def this_is_noop(step, n_step, n= None, every= None):
 	else:
 		raise ValueError('should_log: n or every must be set')
 
+from pathlib import Path
+from things.core import mkdir
 
 def run(c: Pyfig=None, c_update: dict= None, **kw):
 
 	c.update((c_update or {}) | (kw or {}))
 
-	state: dict = lo_ve(path= c.lo_ve_path) if c.lo_ve_path else None
-	state = {k:torch.tensor(v) if isinstance(v, np.ndarray) else v for k,v in (state or {}).items()}
+	if c.lo_ve_path:
+		state: dict = lo_ve(path= c.lo_ve_path / 'd.state')
+		model_path = c.lo_ve_path / 'model.state'
+		if model_path.exists():
+			print('loading model ', c.lo_ve_path)
+			state['model'] = torch.load(model_path, map_location='cpu')
+		state = {k:torch.tensor(v) if isinstance(v, np.ndarray) else v for k,v in (state or {}).items()}
+		if c.mode==c.opt_hypam_tag:
+			state = {}
+	else:
+		state = {}
+	
 
 	model, dataloader, compute_loss, opt, scheduler = init_exp(c, state)
 	model.requires_grad_(True)
@@ -230,8 +250,8 @@ def run(c: Pyfig=None, c_update: dict= None, **kw):
 
 	metrix = Metrix(c.mode, init_summary, c.opt_obj_key, opt_obj_op= c.opt_obj_op)
 
-	lo_ve_path_fn = lambda mode, group_i, step: c.paths.state_dir / f'{mode}_{group_i}_{step}.state'
-	
+	lo_ve_dir_fn = lambda mode, group_i, step: mkdir(c.paths.state_dir / f'{mode}_{group_i}_i{step}')
+
 	c.start()
 	
 	print('run:go: ', c.mode, 'c_update: ', c_update, sep='\n')
@@ -243,7 +263,7 @@ def run(c: Pyfig=None, c_update: dict= None, **kw):
 
 			model.zero_grad(set_to_none=True)
 
-			loss, v_d = compute_loss(**loader_d, model=model, debug=c.debug)
+			loss, v_d = compute_loss(step, **loader_d, model=model, debug=c.debug)
 
 			v_d = c.dist.sync(v_d, sync_method= c.mean_tag, this_is_noop= this_is_noop(step, c.n_step, every= c.dist.sync_step))
 
@@ -255,14 +275,16 @@ def run(c: Pyfig=None, c_update: dict= None, **kw):
 
 				v_cpu_d: dict = npify_tree(v_d)
 
-
 				if not this_is_noop(step, c.n_step, n= c.n_log_state):
-					if not c.log_state_keys:
-						c.log_state_keys = []
-					elif 'all' in c.log_state_keys:
-						c.log_state_keys = list(v_cpu_d.keys())
-					state = dict(filter(lambda kv: kv[0] in c.log_state_keys, v_cpu_d.items()))
-					lo_ve(path= lo_ve_path_fn(c.mode, c.group_i, step), data= state)
+					# if not c.log_state_keys:
+					# 	c.log_state_keys = []
+					# elif 'all' in c.log_state_keys:
+					# 	c.log_state_keys = list(v_cpu_d.keys())
+					# state = dict(filter(lambda kv: kv[0] in c.log_state_keys, v_cpu_d.items()))
+					print('run_loop: logging state', state.keys())
+					lo_ve(path= lo_ve_dir_fn(c.mode, c.group_i, step) / 'd.state', data= v_cpu_d)
+					if 'model' in c.log_state_keys or 'all' in c.log_state_keys:
+						torch.save(model.cpu().state_dict(), lo_ve_dir_fn(c.mode, c.group_i, step) / 'model.state')
 				
 				if not this_is_noop(step, c.n_step, n= c.n_log_metric):
 					v_metrix = metrix.tick(step, v_cpu_d= v_cpu_d)
@@ -284,7 +306,7 @@ def run(c: Pyfig=None, c_update: dict= None, **kw):
 	if c.dist.head:
 		c.app.record_summary(summary= metrix.summary, opt_obj_all= metrix.opt_obj_all)
 
-	c_update	= dict(lo_ve_path= lo_ve_path_fn(c.mode, c.group_i, c.n_step))
+	c_update	= dict(lo_ve_path= lo_ve_dir_fn(c.mode, c.group_i, c.n_step))
 	v_run 		= dict(c_update= c_update, v_cpu_d= v_cpu_d)
 
 	c.end()
@@ -306,13 +328,13 @@ if __name__ == "__main__":
 	class RunMode:
 
 		def __call__(ii, c: Pyfig, v_run_prev: dict=None):
-			
+			print('run:call:', 
+				f'mode={c.mode}', 
+				'c_update=', 
+				pprint.pformat(v_run_prev), sep='\n'
+			)
 			fn = getattr(ii, c.mode)
-
-			print('run:', c.mode, 'c_update', pprint.pformat(v_run_prev))
-
-			# guarantee a c_update input
-			v_run = fn(c=c, c_update= v_run_prev.get('c_update', {}))
+			v_run = fn(c= c, c_update= v_run_prev.get('c_update', {}))
 			return v_run
 
 		def opt_hypam(ii, c: Pyfig, c_update: dict):
@@ -328,7 +350,6 @@ if __name__ == "__main__":
 				return v_run 
 
 			v_run = c.sweep.opt_hypam(run_trial)
-
 			v_run.get('c_update').pop(c.lo_ve_path_tag, None)  # make sure no load passed on
 
 			print('passing on c_update from opt_hypam:')
@@ -370,6 +391,9 @@ if __name__ == "__main__":
 
 		def pre(ii, c: Pyfig, c_update: dict= None):
 			print('\nrun:pre:')
+			c.lo_ve_path = None
+			if c_update:
+				c_update.pop('lo_ve_path', None)
 			v_run = run(c=c, c_update= c_update)
 			return v_run
 			
@@ -384,10 +408,8 @@ if __name__ == "__main__":
 	res = dict()
 
 	from things.core import flat_any
-	# v_run: mode, c_update
 	v_run = dict(mode= None, c_update=dict(lo_ve_path= None))
  
-	
 	c.multimode = c.multimode or c.mode or c.train_tag
 	print('run.py:run_loop:mode: = \n ***', c.multimode, '***')
 	for mode_i, mode in enumerate(c.multimode.split(':')):

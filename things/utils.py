@@ -246,7 +246,8 @@ class Metrix:
 
 		ii.opt_obj_all = []
 
-		torch.cuda.reset_peak_memory_stats()
+		if torch.cuda.is_available():
+			torch.cuda.reset_peak_memory_stats()
 
 	def tick(ii, 
 		step: int, 
@@ -261,8 +262,11 @@ class Metrix:
 		ii.step = step
 
 		ii.t_per_it, ii.t0 = (time() - ii.t0)/dstep, time()
-		ii.max_mem_alloc = torch.cuda.max_memory_allocated() // 1024 // 1024
-		torch.cuda.reset_peak_memory_stats()
+		if torch.cuda.is_available():
+			ii.max_mem_alloc = torch.cuda.max_memory_allocated() // 1024 // 1024
+			torch.cuda.reset_peak_memory_stats()
+		else:
+			ii.max_mem_alloc = 0.0
 
 		ii.opt_obj = ii.opt_obj_op(v_cpu_d.get(ii.opt_obj_key, np.array([0.0, 0.0])))
 		ii.opt_obj_all += [ii.opt_obj,]

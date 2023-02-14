@@ -150,8 +150,6 @@ def type_check_v(name:str, v: Any, v_ref_type: type, default: Any):
 
 
 def lo_ve(path:Path=None, data: dict=None):
-
-	import torch
 	""" loads anything you want (add other interfaces as needed) 
 
 	1- str -> pathlib.Path
@@ -161,6 +159,7 @@ def lo_ve(path:Path=None, data: dict=None):
 	5- from filetype, encoding, save or load, get or dump the data 
 	"""
 
+	import torch
 	file_interface_all = dict(
 		pk = dict(
 			rb = pk.load,
@@ -195,6 +194,11 @@ def lo_ve(path:Path=None, data: dict=None):
 	if isinstance(data, dict) and len(data)==0:
 		print('lo_ve: data is empty dict- not dumping anything. Setting None and trying to load path.')
 		data = None
+
+	if data is None:
+		print(f'lo_ve: loading {path}')
+	else:
+		print(f'lo_ve: dumping {data.keys()} \n to {path}')
 
 	path = Path(path)
 	if not path.suffix:
