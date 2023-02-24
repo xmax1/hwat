@@ -43,58 +43,79 @@ def to_torch_safe(
 	
 	return torch.tensor(tensor, dtype= dtype, device= device).requires_grad_(requires_grad)
 
+from .core import flat_any
 
-def get_el0(tensor: AnyTensor):
-	if not np.isscalar(tensor):
-		tensor = get_el0(tensor[0])
+def get_el0(tensor: np.ndarray):
+	if isinstance(tensor, AnyTensor):
+		return tensor.item()
+	elif isinstance(tensor, list):
+		return flat_any(tensor)[0]
 	return tensor
 
-
 def convert_to(
-	tensor: np.ndarray | Tensor= None, *,
+	tensor: dict | np.ndarray | Tensor= None, *,
 	to= 'numpy', device= 'cpu', dtype: str|type= 'float64', requires_grad: bool= False,
 	like= None
 ):
+	if not isinstance(tensor, (dict, list, AnyTensor)):
+		return tensor
 
-	dtype_all = dict(
-		numpy= dict(
-			float64= np.float64,
-			float32= np.float32,
-			int64= np.int64,
-			int32= np.int32,
-			uint8= np.uint8,
-		),
-		torch= dict(
-			float64= torch.float64,
-			float32= torch.float32,
-			int64= torch.int64,
-			int32= torch.int32,
-			bool= torch.bool,
-			uint8= torch.uint8,
-		)
-	)
-
-
-
-	if like is not None:
-		if isinstance(like, Tensor):
-			to = 'torch'
-		elif isinstance(like, (np.ndarray, np.generic)):
-			to = 'numpy'
-	
-	if to == 'np':
-		to = 'numpy'
-	elif to == 'tc' or 'th' or 'T':
-		to = 'torch'
-
-	if isinstance(dtype, str):
-		dtype = dtype_all[to][dtype]
-
-	if to == 'numpy':
-		return to_numpy_safe(tensor, dtype= dtype, like= like)
-	elif to == 'torch':
-		if isinstance(get_el0(tensor), str):
-			return tensor
-		return to_torch_safe(tensor, dtype= dtype, device= device, requires_grad= requires_grad, like= like)
+	if isinstance(tensor, dict):
+		for k,v in tensor.items():
+			tensor[k] = convert_to(v, to= to, device= device, dtype= dtype, requires_grad= requires_grad, like= like)
 	else:
-		raise ValueError(f'convert_to: invalid to: {to}')
+		dtype_all = dict(
+			numpy= dict(
+				float64	= np.float64,
+				float32	= np.float32,
+				int64	= np.int64,
+				int32	= np.int32,
+				uint8	= np.uint8,
+			),
+			torch= dict(
+				float64	= torch.float64,
+				float32	= torch.float32,
+				int64	= torch.int64,
+				int32	= torch.int32,
+				bool	= torch.bool,
+				uint8	= torch.uint8,
+			)
+		)
+
+		if like is not None:
+			if isinstance(like, Tensor):
+				to = 'torch'
+			elif isinstance(like, (np.ndarray, np.generic)):
+				to = 'numpy'
+		
+		if to == 'np':
+			to = 'numpy'
+		elif to in ('tc', 'th', 'T'):
+			to = 'torch'
+
+		if isinstance(dtype, str):
+			dtype = dtype_all[to][dtype]
+
+		tensor = [] if tensor is None else tensor
+		if np.isscalar(tensor):
+			return tensor
+
+		if len(tensor) == 0:
+			if isinstance(tensor, dict):
+				return {}
+			elif isinstance(tensor, list):
+				return []
+		
+		t = tensor
+		if isinstance(t, (np.ndarray, np.generic, Tensor)):
+			t = t.flatten().tolist()
+		if isinstance(t, str):
+			return tensor
+
+		if to == 'numpy':
+			return to_numpy_safe(tensor, dtype= dtype, like= like)
+		elif to == 'torch':
+			return to_torch_safe(tensor, dtype= dtype, device= device, requires_grad= requires_grad, like= like)
+		else:
+			raise ValueError(f'convert_to: invalid to: {to}')
+	return tensor

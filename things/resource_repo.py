@@ -11,7 +11,7 @@ from .utils import PlugIn
 
 
 this_dir = Path(__file__).parent
-hostname = os.environ.get('HOSTNAME', None)
+hostname = os.environ.get('HOSTNAME', '')
 
 class ResourceBase(PlugIn):
 	n_gpu: int = 0

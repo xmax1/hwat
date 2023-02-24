@@ -104,16 +104,16 @@ def gen_alphanum(n: int = 7, test=False):
 def gen_time_id(n=7):
 	return str(round(time() * 1000))[-n:]
 
-def iterate_n_dir(folder: Path, group_exp: bool=False, n_max=1000) -> Path:
+
+def iterate_n_dir(folder: Path, group_exp: bool= False, n_max= 1000) -> Path:
 	if not group_exp:
-		if Path(folder).exists():
-			if not re.match(folder.name, '-[0-9]*'):
-				folder = add_to_Path(folder, '-0')
-			for i in range(n_max+1):
-				folder = folder.parent / folder.name.split('-')[0]
-				folder = add_to_Path(folder, f'-{i}')
-				if not folder.exists():
-					break   
+		folder = Path(folder)
+		folder = folder.parent / folder.name.split('-')[0]
+		for i in range(n_max+1):
+			folder_i = add_to_Path(folder, f'-{i}')
+			if not folder_i.exists():
+				folder = folder_i
+				break
 	return folder
 
 

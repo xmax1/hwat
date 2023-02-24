@@ -23,7 +23,10 @@ from copy import deepcopy
 import pprint
 
 from things.utils import Metrix
+from things.typfig import convert_to
 from things.core import lo_ve
+from things.aesthetic import print_table
+
 from pyfig import Pyfig
 
 # m_orb = model.full_det_from_spin_det(*m_orb_ud)
@@ -41,36 +44,45 @@ def custom_collate(batch):
 
 def init_exp(c: Pyfig, state: dict= None):
 
-	state = state or {}
+	_ = state or {}
 
 	torch.cuda.empty_cache()
 	torch.backends.cudnn.benchmark = c.cudnn_benchmark
 
 	if not c.dist.ready:
 		c.dist.init()
-
-	pprint.pprint(c.d_flat)
 	
-	print('IMPORTANT', c.device, c.dtype, c.seed, c.dist.rank, '\n')
+	print_table(data= dict(seed= c.seed, dtype= c.dtype, device= c.device, rank= c.dist.rank))
+
 	c.seed = c.dist.set_seed()
 	c.dtype = c.dist.set_dtype()
 	c.device = c.dist.set_device()
 	c.app.init_app()
 	c.to(framework='torch')
-	print('IMPORTANT', c.device, c.dtype, c.seed, c.dist.rank, '\n')
+	
+	print_table(data= dict(seed= c.seed, dtype= c.dtype, device= c.device, rank= c.dist.rank))
 
 	model: torch.nn.Module = c.partial(Model, device= 'cpu')
-	print(state.get('model', None))
-	if state.get('model', None):
-		try:
-			print(state['model'])
-			model.load_state_dict(state['model']).to(dtype= c.dtype)	
-		except Exception as e:
-			print('did not load model', e) 
 
-		
-		
-	model_to_fn: torch.nn.Module = c.partial(Model, mol=None).to(dtype= c.dtype)
+	if c.lo_ve_path:
+		d_path = c.lo_ve_path / 'd.state'
+		if d_path.exists():
+			print('\n\nLoading state')
+			state = lo_ve(path= d_path)
+			state = convert_to(state, to= 'torch', device= c.device, dtype= c.dtype)
+		else:
+			state = {}
+
+		model_path = c.lo_ve_path / 'model.state'
+		if model_path.exists():
+			print('\n\nLoading Model')
+			model_state_dict = torch.load(model_path, map_location= 'cpu')
+			model.load_state_dict(model_state_dict)
+			model.eval()
+	
+	model = model.to(dtype= c.dtype)
+
+	model_to_fn: torch.nn.Module = c.partial(Model, mol= None).to(dtype= c.dtype)
 	model_fn, param, buffer = make_functional_with_buffers(model_to_fn)
 	model_fn_vmap = vmap(model_fn, in_dims=(None, None, 0))
 	
@@ -97,7 +109,7 @@ def init_exp(c: Pyfig, state: dict= None):
 
 	compute_loss = partial(loss_fn, mode= c.mode, model_fn= model_fn_vmap, model= model)
 
-	print('IMPORTANT', c.device, c.dtype, c.seed, c.dist.rank, '\n')
+
 	dataloader.dataset.init_dataset(c, device= c.device, dtype= c.dtype, model= model)
 
 	return model, dataloader, compute_loss, opt, scheduler
@@ -145,9 +157,7 @@ def loss_fn(
 
 		v_d |= dict(loss= loss.item())
 
-
 		create_graph = c.opt.opt_name.lower() == 'AdaHessian'.lower()
-		# print(create_graph)
 		c.dist.backward(loss, create_graph=create_graph)
 		v_d.setdefault('grads', {k: (p.grad.detach()) for k,p in model.named_parameters()})
 
@@ -196,7 +206,7 @@ def smrz(**kw):
 
 def this_is_noop(step, n_step, n= None, every= None):
 	if os.environ.get('debug', False) and step<10:
-		print('this_is_noop: step, n_step, n, every: ', step, n_step, n, every)
+		# print('this_is_noop: step, n_step, n, every: ', step, n_step, n, every)
 		if n:
 			n = min(n, n_step)
 			print('n_min: ', n)
@@ -226,23 +236,11 @@ def this_is_noop(step, n_step, n= None, every= None):
 from pathlib import Path
 from things.core import mkdir
 
-def run(c: Pyfig=None, c_update: dict= None, **kw):
+def run(c: Pyfig= None, c_update: dict= None, **kw):
 
 	c.update((c_update or {}) | (kw or {}))
 
-	if c.lo_ve_path:
-		state: dict = lo_ve(path= c.lo_ve_path / 'd.state')
-		model_path = c.lo_ve_path / 'model.state'
-		if model_path.exists():
-			print('loading model ', c.lo_ve_path)
-			state['model'] = torch.load(model_path, map_location='cpu')
-		state = {k:torch.tensor(v) if isinstance(v, np.ndarray) else v for k,v in (state or {}).items()}
-		if c.mode==c.opt_hypam_tag:
-			state = {}
-	else:
-		state = {}
-	
-
+	state = {}
 	model, dataloader, compute_loss, opt, scheduler = init_exp(c, state)
 	model.requires_grad_(True)
 
@@ -345,6 +343,10 @@ if __name__ == "__main__":
 
 			def run_trial(c: Pyfig= None, c_update_trial: dict= None):
 				c_mem = c._memory()
+				c.mode = c.pre_tag
+				v_run = run(c= c, c_update= c_update_trial)
+				c.lo_ve_path = v_run.get('c_update', {}).get('lo_ve_path')
+				c.mode = c.opt_hypam_tag
 				v_run = run(c= c, c_update= c_update_trial)
 				c.update(c_mem)
 				return v_run 

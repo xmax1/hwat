@@ -11,6 +11,12 @@ from dump.user_secret import user
 
 
 """
+todo
+
+
+
+
+
 base classes contain the following:
 - globals (variables that are used across the entire project)
 
@@ -125,13 +131,14 @@ You can think of world as a group containing all the processes for your distribu
 - each gpu must have a unique rank env variable
 
 
-
-
 # very basic test
 - python run.py
 
 # other test
-python run.py --submit --n_gpu 2 --n_b 2 --mode train --_debug --plugin_name naive --exp_name test
+python run.py --exp_name debug --mode train --debug --n_b 2 -n_sv 8 --n_pv 4 --n_fb 2  --n_trials 10 --n_train_step 5 --n_eval_step 5 --n_opt_hypam_step 5  --n_pre_step 5
+python run.py --submit --n_gpu 2 --mode pre:opt_hypam:pre:train:eval --exp_name debug --mode train --debug --n_b 2 --n_sv 8 --n_pv 4 --n_fb 2  --n_trials 10 --n_train_step 5 --n_eval_step 5 --n_opt_hypam_step 5  --n_pre_step 5
+python run.py --multimode pre:opt_hypam:pre:train:eval --exp_name debug --debug --n_b 2 --n_sv 8 --n_pv 4 --n_fb 2  --n_trials 10 --n_train_step 5 --n_eval_step 5 --n_opt_hypam_step 5  --n_pre_step 5
+
 
 # debug 1 
 python run.py --submit --time 01:00:00 --n_gpu 2 --debug --multimode pre:opt_hypam:pre:train:eval \
@@ -141,9 +148,25 @@ python run.py --submit --time 01:00:00 --n_gpu 2 --debug --multimode pre:opt_hyp
 python run.py --submit --time 01:00:00 --n_gpu 2 --multimode pre:opt_hypam:pre:train:eval \
 --log_metric_keys ['all'] 
 
+
+did not load model '_IncompatibleKeys' object has no attribute 'to'
+
 # run 
+python run.py --submit --time 01:00:00 --n_gpu 1 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
+--system_name O2_neutral_triplet --exp_name ~ScaleO2_v8_test --n_b 4 --n_fb 2 --n_sv 16 --n_pv 8 --n_trials 4 --n_train_step 10 --n_eval_step 10 --n_opt_hypam_step 10 --debug
+
 python run.py --submit --time 01:00:00 --n_gpu 2 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
 --system_name O2_neutral_triplet --exp_name ~ScaleO2_v8_test --n_b 4 --n_fb 2 --n_sv 16 --n_pv 8 --n_trials 4 --n_train_step 10 --n_eval_step 10 --n_opt_hypam_step 10 --debug
+
+python run.py --submit --time 01:00:00 --n_gpu 1 --multimode pre:train:eval --log_metric_keys ['all'] \
+--system_name O2_neutral_triplet --exp_name ~n_b_sweep --zweep n_b-4-8-16-32-64-128-256-512-1024-int
+
+python run.py --submit --time 01:00:00 --n_gpu 1 --multimode pre:train:eval --log_metric_keys ['all'] \
+--system_name O2_neutral_triplet --exp_name ~n_b_sweep --zweep n_gpu-1-2-4-8-10-int --n_b 1024
+
+# run
+python run.py --submit --time 01:00:00 --n_gpu 1 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
+--system_name O2_neutral_triplet --exp_name ~ScaleO2_v10_test --n_b 256
 
 python run.py --submit --time 02:00:00 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
 --system_name O2_neutral_triplet --exp_name ~ScaleO2_v6 --zweep n_gpu-1-2-4-8-10-int --n_b 128 --n_trials 10
@@ -197,7 +220,7 @@ class Pyfig(PyfigBase):
 
 	cudnn_benchmark: 	bool 	= True
 
-	n_log_metric:		int  	= 25
+	n_log_metric:		int  	= 50
 	n_log_state:		int  	= 1
 
 	@property
@@ -206,7 +229,7 @@ class Pyfig(PyfigBase):
 	# is_logging_process: bool 	= property(def(ii: PyfigBase): ; return ii.mode==ii.opt_hypam_tag or ii.dist.head)
 
 	log_state_keys:     list 	= [] # ['opt_obj', 'r', 'grads', 'params', ...] 'all' is all
-	log_metric_keys: 	str		= [] # ['opt_obj', 't_per_it', 'max_mem_alloc']
+	log_metric_keys: 	list	= [] # ['opt_obj', 't_per_it', 'max_mem_alloc']
  
 	opt_obj_key:			str		= 'e'
 	opt_obj_op: Callable = property(lambda _: lambda x: x.std())
@@ -307,42 +330,46 @@ class Pyfig(PyfigBase):
 		_mode_c: dict = dict(
 			pre= dict(
 				n_b 			= 512,
-				n_pre_step 		= 500,
+				n_pre_step 		= 1000,
 				loss 			= 'orb_mse',
 				log_state_keys 	= ['all'],
 				n_log_state		= 1, 
 				n_log_metric	= 5, 
 				sync_step		= 5,
 			),
+
 			train= dict(
 				n_b 				= 512,
-				n_train_step 		= 1000,
-				log_metric_keys		=  ['all'] ,
+				n_train_step 		= 10000,
+				log_metric_keys		= ['all'] ,
 				log_state_keys 		= ['all'],
 				n_log_state			= 1,
-				n_log_metric		= 20,
+				n_log_metric		= 100,
 				loss 			 	= 'vmc', # energy computed by default,
 				sync_step			= 5,
 			),
+
 			eval= dict(
 				n_b 				= 512,
 				n_eval_step 		= 50,
-				n_log_metric 		= -1, # special case never log,
-				log_metric_keys	= ['opt_obj'],
+				n_log_metric 		= 1e10, # special case log all 
+				log_metric_keys		= ['opt_obj'],
 				compute_energy  	= True,
 				sync_step			= -1, # special case never log,
 			),
+
 			opt_hypam= dict(
 				n_b 				= 512,
-				n_opt_hypam_step	= 200,
+				n_opt_hypam_step	= 1000,
 				plugin_name 		= 'naive',
 				loss 			 	= 'vmc', # energy computed by default,
 				sync_step 			= -1, # special case never log,
-				n_log_metric 		= 50, # special case log every 1,
-				n_log_state 		= -1, # special case never log,
+				n_log_metric 		= 50, 
+				n_log_state 		= 1, # special case never log,
 				n_trials 			= 20,
 			)
 		)
+
 		# debug_c: dict = dict(
 		# 	n_default_step=  	30,
 		# 	n_pre_step= 	 	0,

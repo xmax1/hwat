@@ -169,7 +169,7 @@ class PyfigBase:
 		
 		# """
 
-		ii.init_sub_cls(sweep=sweep)
+		ii.init_sub_cls(sweep= sweep)
 
 		if not notebook:
 			ref_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore)
@@ -177,17 +177,18 @@ class PyfigBase:
 
 
 		print('\npyfig:post_init')
-
 		ii.c_init = deepcopy((c_init or {}) | (other_arg or {}) | (sys_arg or {}))
 		ii.update(ii.c_init)
 		
 		# because you suck
 		app_post_init = ii.app.post_init_update()
 		ii.update(app_post_init)
-		ii.c_init |= app_post_init
+		ii.setup_exp_dir(group_exp= False, force_new_id= False)
+		ii.c_init |= app_post_init | dict(exp_name= ii.exp_name, exp_id= ii.exp_id)
 
+		print('\n\npyfig:post_init:post_init_arg')
 		pprint.pprint(ii.d)
-		
+
 		if ii.debug:
 			os.environ['debug'] = 'True'
 
@@ -197,7 +198,6 @@ class PyfigBase:
 		import atexit
 		from time import sleep 
 		
-
 		def exit_handler():
 			""" function to catch the traceback at exit """	
 			job_id = os.environ.get('SLURM_JOB_ID', False)
@@ -213,19 +213,6 @@ class PyfigBase:
 				run_cmds(f'scancel {job_id}')
 		atexit.register(exit_handler)
 
-		# def exit_handler():
-			# job_id = os.environ.get('SLURM_JOB_ID', False)		
-			# print('exit: job_id', job_id)
-			# exc_type, exc_value, exc_traceback = sys.exc_info()
-			# traceback_string = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
-			# print(exc_type, exc_value, exc_traceback)
-			# if traceback_string:
-				# err_path.write_text(str(traceback_string))
-				# if job_id:
-					# sleep(100)
-					# run_cmds(f'scancel {job_id}')
-		# atexit.register(exit_handler)
-		
 		ii.if_debug_log([sys_arg, dict(os.environ.items()), ii.d], 
 		[f'log_sys_arg_{ii.dist.pid}.log', f'log_env_run_{ii.dist.pid}.log', f'log_d_{ii.dist.pid}.log'])
 
@@ -239,20 +226,13 @@ class PyfigBase:
 			print('pyfig:start: logging process creating logger')
 			assert ii.submit == False
 
-			if not ii.exp_id:
-				# if not ii.paths.exp_dir.exists():
-				print('pyfig:start: creating exp_dir, current exp_id= ', ii.exp_id)
-				ii.setup_exp_dir(group_exp= ii.group_exp, force_new_id= False)
-
-
 			ii._group_i += 1
 			ii.run_id = ii.exp_id + '.' + ii.mode + '.' + str(ii._group_i) + '.' + str(ii.dist.rank)
 		
-			# ii.run_id = '.'.join(ii.run_id.split('.'))  
-			
 			print('pyfig:start: exp_dir = \n ***', ii.paths.exp_dir, '***')
 			print('pyfig:start: run_id = \n ***', ii.run_id, '***')
 			tags = [str(s) for s in [*ii.mode.split('-'), ii.exp_id, ii._group_i]]
+			tags = [s for s in tags if s]  # wb crashes if tags is empty
 			print(f'pyfig:logger: tags- {tags}')
 
 			ii.logger.start(ii.d, tags= tags, run_id= ii.run_id)
@@ -339,19 +319,18 @@ class PyfigBase:
 		for k,v in (sweep or {}).items():
 			setattr(ii.sweep, k, v)
 
-	def setup_exp_dir(ii, group_exp=False, force_new_id=False):
+	def setup_exp_dir(ii, group_exp= False, force_new_id= False):
 
 		if (not ii.exp_id) or force_new_id:
 			ii.exp_id = gen_time_id(7)
-
 			exp_name = ii.exp_name or 'junk'
 			group_exp = group_exp or ('~' in exp_name)
-			print('here')
 			exp_group_dir = Path(ii.paths.dump_exp_dir, exp_name)
 			exp_group_dir = iterate_n_dir(exp_group_dir, group_exp= group_exp) # pyfig:setup_exp_dir does not append -{i} if group allowed
 			ii.exp_name = exp_group_dir.name
 
-		print('exp_dir: ', ii.paths.exp_dir) 
+		print('pyfig:setup_exp_dir: ', ii.paths.exp_dir)
+		print('\nexp_dir:mkdir ', ii.paths.exp_dir) 
 		[mkdir(p) for _, p in ii.paths.d.items()]
 		return ii.exp_name, ii.exp_id
 	
@@ -450,23 +429,31 @@ class PyfigBase:
 
 		# write a function to filter lists out of a dictionary
 		def get_numerical_arrays():
-			d = {k:np.array(v) for k,v in base_d.items() if isinstance(v, list) and len(v)>0}
-			d = {k:v for k,v in d.items() if not isinstance(v.flatten().tolist()[0], str)}
-			d = {k:np.array(list(v)).astype(np.float64) for k,v in d.items() if not isinstance(v.flatten().tolist()[0], str)}
-			d_arr = {k:np.array(v).astype(np.float64) for k,v in base_d.items() if isinstance(v, (np.ndarray, np.generic))}
-			return d | d_arr
+			from torch import Tensor
+			d = {}
+			print('HERE')
+			for k,v in base_d.items():
+				if isinstance(v, (np.ndarray, np.generic, Tensor, list)):
+					if isinstance(v, (np.ndarray, np.generic, Tensor)):
+						v = v.tolist()
+					if len(v) == 0:
+						continue
+					else:
+						v_flat0 = flat_any(v)[0]
+						is_str = isinstance(v_flat0, str)
+						if not is_str:
+							d[k] = np.array(v).astype(np.float64)
+			return d
 
 		d = get_numerical_arrays()
 		ii.if_debug_print_d(d, msg='pyfig:to: d')
 
 		if 'torch' in framework.lower():
 			d = {k:torch.tensor(v, requires_grad=False).to(device= ii.device, dtype= ii.dtype) for k,v in d.items()}
-			d |= {k:v.to(device= ii.device, dtype= ii.dtype).requires_grad_(False) for k,v in base_d.items() if isinstance(v, torch.Tensor)}
 
 		if 'numpy' in framework.lower():
 			d = {k:v.detach().cpu().numpy() for k,v in d.items() if isinstance(v, torch.Tensor)}
 
-		pprint.pprint(d)
 		ii.update(d)
 
 	def _memory(ii, sub_ins=True, attr=True, _prop=False, _ignore=[]):

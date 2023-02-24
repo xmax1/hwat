@@ -26,45 +26,38 @@ def get_slice(start, end, step= 1):
 	# return slice(start, end)
 	return list(range(start, end, step))
 
-@try_this_wrap(msg='print_tensor')
+def print_mat(mat):
+	for b in mat:
+		print(*[f'{x:.3f}' for x in b], sep='\t|\t', end='\n')
+
+@try_this_wrap(msg= 'print_tensor')
 def print_tensor(tensor: AnyTensor, k: str= None, fmt='%.3f', sep=' ', end='\n', n_lead= 2, n_batch= 2, n_feat= 8):
 	""" 2nd last and last dim resolved as matrix, everything else new line, batch ----- separator """
-	if k is not None:
-		print(k)
+	k = k or 'no-name'
 	
 	tensor = convert_to(tensor= tensor, to= 'numpy')
 
 	shape = tensor.shape
 	tensor_rank = tensor.ndim
-
-	if tensor_rank == 0:
-		return print(tensor)
-	elif tensor_rank == 1:
-		print(tensor[:n_feat])
-	else:
-		pass
-
-	n_batch = min(n_batch, tensor.shape[0])
-	n_feat = min(n_feat, tensor.shape[-1])
-	n_lead_rank = tensor_rank - 2
-	n_lead_all = [min(n_lead, s) for s in range(n_lead_rank)]
 	
-	lead_idxs = [get_slice(0, n) for n in n_lead_all]
-	print_dim = [get_slice(0, n_batch), *lead_idxs, get_slice(0, n_feat)]
+	if tensor_rank == 0:
+		print(tensor)
 
-	def print_mat(mat):
-		for b in mat:
-			print(*[f'{x:.3f}' for x in b], sep='\t|\t', end='\n')
-			
-	last_mat_print = print_dim[-2:]
-	leading_rank = print_dim[:-2]
-	if len(leading_rank) == 0:
+	if tensor_rank == 1:
+		print(tensor[:n_feat])
+
+	if tensor_rank == 2:
+		print_mat(tensor[:n_batch, :n_feat])
+	
+	if tensor_rank > 3:
 		lead_idxs = []
-	else:
-		lead_idxs = get_cartesian_product(*leading_rank)
-	for i in range(n_batch):
-		idx = [i, *lead_idxs]
-		print_mat(tensor[idx])
+		for i in range(1, tensor_rank-2):
+			n_lead_i = min(n_lead, shape[i])
+			lead_idxs.append(get_slice(0, n_lead_i))
+		lead_idxs = get_cartesian_product(lead_idxs[:-2])
+		print(lead_idxs)
+		for idx in lead_idxs:
+			print_mat(tensor[idx])
 		print('-'*50)
 	return tensor
 

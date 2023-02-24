@@ -483,16 +483,14 @@ class PyfigDataset(Dataset):
 		ii.data = data.requires_grad_(False).to(device, dtype)
 
 		deltar_loaded = state.get('deltar', None)
-		if deltar_loaded is not None: 
+		# if deltar_loaded is not None: 
+		if False:
 			print('dataset: loading deltar from state')
 			deltar = deltar_loaded
 		else:
-			deltar = torch.tensor([0.02, ])
+			deltar = torch.tensor([0.02,])
 		ii.deltar = deltar.requires_grad_(False).to(device, dtype)
 
-		tmp = {'data': ii.data, 'deltar': ii.deltar, 'center_points': center_points, 'a': c.app.a}
-
-		print('dataset:init_dataset', [[k, v.shape, v.device, v.dtype] for k, v in tmp.items()])
 		print('dataset:len ', c.n_step)
 
 		ii.wait = c.dist.wait_for_everyone
@@ -504,19 +502,16 @@ class PyfigDataset(Dataset):
 
 		ii.v_d = {'data': ii.data, 'deltar': ii.deltar}
 		
-		sample_equil = partial(sample_b, model= model, n_corr=ii.n_corr, pre= True, unwrap= c.dist.unwrap)
 		ii.sample = partial(sample_b, model= model, n_corr=ii.n_corr, pre= ii.mode==c.pre_tag, unwrap= c.dist.unwrap)
 		print('dataset:init_dataset sampler is pretraining ', ii.mode==c.pre_tag) 
 
 		for equil_i in range(100):
-			if not c.mode=='opt_hypam':
-				ii.v_d = ii.sample(**ii.v_d)
-			else:
-				ii.v_d = sample_equil(**ii.v_d)
+			ii.v_d = ii.sample(**ii.v_d)
 			if equil_i % 10 == 0:
 				print('equil ', equil_i, ' acc ', torch.mean(ii.v_d['acc'], dim=0, keepdim=True).detach().cpu().numpy())
 
-		print('dataset:init_dataset', [[k, v.shape, v.device, v.dtype] for k, v in ii.v_d.items()], sep='\n')
+		print('dataset:init_dataset')
+		[print(k, v.shape, v.device, v.dtype, v.mean(), v.std()) for k, v in ii.v_d.items()]
 
 	def __len__(ii):
 		return ii.n_step

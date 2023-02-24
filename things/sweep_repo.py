@@ -183,7 +183,9 @@ with TryImportThis('optuna') as _optuna:
 				study = optuna.load_study(study_name= ii.sweep_name, storage= ii.storage)
 
 			else:
-				print('opt_hypam:creating_study rank,head', ii.p.dist.rank, ii.p.dist.head)
+				print('opt_hypam:creating_study rank,head')
+				from .aesthetic import print_table
+				print_table([('storage', ii.storage), ('sweep_name', ii.sweep_name)])
 				study = optuna.create_study(
 					direction 		= "minimize",
 					study_name		= ii.sweep_name,
@@ -196,10 +198,10 @@ with TryImportThis('optuna') as _optuna:
 			_objective = partial(objective, run_trial= run_trial, c= ii.p)
 			study.optimize(
 				_objective, 
-				n_trials= ii.n_trials, 
-				timeout=None, 
-				callbacks=[MaxTrialsCallback(ii.n_trials, states=(TrialState.COMPLETE,))],
-				gc_after_trial=True
+				n_trials	   = ii.n_trials, 
+				timeout		   = None, 
+				callbacks	   = [MaxTrialsCallback(ii.n_trials, states=(TrialState.COMPLETE,))],
+				gc_after_trial = True
 			)
   
 			v_run = dict(c_update= study.best_params)

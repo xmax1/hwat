@@ -15,6 +15,7 @@ class PathsBase(PlugIn):
 	@property
 	def exp_dir(ii) -> Path:
 		return Path(ii.dump_exp_dir, ii.p.exp_name, ii.p.exp_id)
+
 	@property
 	def dump_exp_dir(ii) -> Path:
 		return Path(ii.dump_dir, 'exp')

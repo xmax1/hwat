@@ -16,7 +16,7 @@ from .utils import PlugIn
 from torch import nn
 
 this_dir = Path(__file__).parent
-hostname = os.environ.get('HOSTNAME', None) # if n node > 1 this is 
+hostname = os.environ.get('HOSTNAME', '') # if n node > 1 this is 
 
 class DistBase(PlugIn):
 	
