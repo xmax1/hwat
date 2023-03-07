@@ -105,8 +105,8 @@ with TryImportThis('optuna') as _optuna:
 
 
 	def objective(trial: Trial, run_trial: Callable, c):
-		
 		print('trial: ', trial.number)
+
 		c_update = get_hypam_from_study(trial, c.sweep.parameters)
 		pprint.pprint(c_update)
 
@@ -162,7 +162,6 @@ with TryImportThis('optuna') as _optuna:
 					c_update.pop(k)
 
 		print('optuna:get_hypam_from_study \n')
-		pprint.pprint(c_update)
 		return c_update
 
 	class Optuna(SweepBase):
@@ -172,10 +171,11 @@ with TryImportThis('optuna') as _optuna:
 		n_trials: 		int		= 20
 		storage: 		Path = property(lambda _: 'sqlite:///'+str(_.p.paths.exp_dir / 'hypam_opt.db'))
 
+
 		def opt_hypam(ii, run_trial: Callable):
 			print('opt_hypam:create_study rank,head,is_logging_process', ii.p.dist.rank, ii.p.dist.head, ii.p.is_logging_process)
 
-			if ii.p.dist.rank and not ii.p.dist.rank==-1:
+			if ii.p.dist.rank and not ii.p.dist.rank == -1:
 				print('opt_hypam:waiting_for_storage rank,head,is_logging_process', ii.p.dist.rank, ii.p.dist.head, ii.p.is_logging_process)
 				while not len(list(ii.p.paths.exp_dir.glob('*.db'))):
 					sleep(5.)
@@ -186,6 +186,7 @@ with TryImportThis('optuna') as _optuna:
 				print('opt_hypam:creating_study rank,head')
 				from .aesthetic import print_table
 				print_table([('storage', ii.storage), ('sweep_name', ii.sweep_name)])
+				
 				study = optuna.create_study(
 					direction 		= "minimize",
 					study_name		= ii.sweep_name,
@@ -196,6 +197,7 @@ with TryImportThis('optuna') as _optuna:
 				)
 
 			_objective = partial(objective, run_trial= run_trial, c= ii.p)
+			
 			study.optimize(
 				_objective, 
 				n_trials	   = ii.n_trials, 
@@ -205,7 +207,7 @@ with TryImportThis('optuna') as _optuna:
 			)
   
 			v_run = dict(c_update= study.best_params)
-			path = ii.p.paths.exp_dir/'best_params.json'
+			path = ii.p.paths.exp_dir / 'best_params.json'
 			path.write_text(json.dumps(study.best_params, indent= 4))
 			print('\nstudy:best_params')
 			pprint.pprint(v_run)

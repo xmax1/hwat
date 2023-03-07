@@ -155,6 +155,7 @@ def get_opt(
 			weight_decay = weight_decay,
 			hessian_power= hessian_power
     	)
+	
 	else:
 		print(f'!!! opt {opt_name} not available, returning {default}')
 		opt_for_model = get_opt(opt_name=default, lr=0.001)
@@ -176,6 +177,11 @@ def get_scheduler(
 		scheduler = partial(
 			torch.optim.lr_scheduler.OneCycleLR, max_lr=sch_max_lr, steps_per_epoch=n_scheduler_step, epochs=sch_epochs
 		)
+
+	# elif sch_name.lower() == 'LambdaLR'.lower():
+	# 	print('get_scheduler: LambdaLR')
+	# 	lambda_1 = lambda epoch: epoch // 30
+	# 	scheduler = LambdaLR(optimizer, lr_lambda=[lambda_1])
 
 	else:
 		print(f'!!! Scheduler {sch_name} not available, returning OneCycleLR ')

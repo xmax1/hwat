@@ -78,6 +78,7 @@ class Scf:
         return self._mean_field
 
     def eval_molecular_orbitals(self, electrons: np.ndarray, deriv: bool = False) -> Tuple[np.ndarray, np.ndarray]:
+        
         if self.restricted:
             coeffs = (self._mean_field.mo_coeff,)
         else:

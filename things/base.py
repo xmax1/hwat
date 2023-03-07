@@ -43,9 +43,6 @@ class PyfigBase:
 	dtype:          	str   	= ''
 	device: 		int|str 	= ''
 
-	n_step:         	int   	= 0
-	n_eval_step:        int   	= 0
-	n_pre_step:    		int   	= 0
 
 	n_log_metric:		int  	= 100
 	n_log_state:		int  	= 4
@@ -60,7 +57,7 @@ class PyfigBase:
 
 	zweep: str = ''
 
-	n_default_step: 	int 	= 1000
+	n_default_step: 	int 	= 10
 	n_train_step:   	int   	= 0
 	n_pre_step:    		int   	= 0
 	n_eval_step:        int   	= 0
@@ -69,13 +66,16 @@ class PyfigBase:
 
 	@property
 	def n_step(ii):
-		return dict(
+		n_step = dict(
 			train		= ii.n_train_step, 
 			pre			= ii.n_pre_step, 
 			eval		= ii.n_eval_step, 
 			opt_hypam	= ii.n_opt_hypam_step, 
 			max_mem		= ii.n_max_mem_step
-		).get(ii.mode) or ii.n_default_step
+		).get(ii.mode)
+		if not n_step: 
+			n_step = ii.n_default_step
+		return n_step
   
 	class model(ModelBase):
 		pass
@@ -169,12 +169,12 @@ class PyfigBase:
 		
 		# """
 
+
 		ii.init_sub_cls(sweep= sweep)
 
 		if not notebook:
 			ref_d = ins_to_dict(ii, attr=True, sub_ins=True, flat=True, ignore=ii.ignore)
 			sys_arg = cmd_to_dict(sys.argv[1:], ref_d)
-
 
 		print('\npyfig:post_init')
 		ii.c_init = deepcopy((c_init or {}) | (other_arg or {}) | (sys_arg or {}))
@@ -187,7 +187,10 @@ class PyfigBase:
 		ii.c_init |= app_post_init | dict(exp_name= ii.exp_name, exp_id= ii.exp_id)
 
 		print('\n\npyfig:post_init:post_init_arg')
-		pprint.pprint(ii.d)
+		pprint.pprint(ii.d, sort_dicts=True)
+		print('\n\npyfig:post_init:c_init')
+		pprint.pprint(ii.c_init, sort_dicts=True)
+
 
 		if ii.debug:
 			os.environ['debug'] = 'True'
@@ -238,12 +241,20 @@ class PyfigBase:
 			ii.logger.start(ii.d, tags= tags, run_id= ii.run_id)
 
 	def end(ii, plugin: str= None):
+		import torch
+		import gc
+		gc.collect()
+
+		with torch.no_grad(): # https://stackoverflow.com/questions/57858433/how-to-clear-gpu-memory-after-pytorch-model-training-without-restarting-kernel
+			torch.cuda.empty_cache()
+
 		if plugin is None:
 			ii.dist.wait_for_everyone()
 			ii.logger.end()
 			ii.dist.end()
 		else:
 			plugin = getattr(ii, plugin).end()
+
 
 	def run_submit(ii):
 		try: 
@@ -270,7 +281,6 @@ class PyfigBase:
 				print('log_group_url: \t\t\t',  ii.logger.log_run_url)
 				print('exp_dir: \t\t\t', ii.paths.exp_dir)
 				print('exp_log: \t\t\t', ii.resource.device_log_path(0))
-
 
 			sys.exit('Success, exiting from submit.')
 		
@@ -363,14 +373,12 @@ class PyfigBase:
 		d: dict = flat_any(args if args else {}) | ii.d_flat | (kw or {})
 		d_k = inspect.signature(f.__init__).parameters.keys()
 		d = {k:v for k,v in d.items() if k in d_k} 
-		print('pyfig:partial setting for ', f.__name__, )
-		pprint.pprint(d)
+		ii.if_debug_print_d(d, f'pyfig:partial setting for {f.__name__}')
 		return f(**d)
 
 	def update(ii, _arg: dict=None, c_update: dict=None, silent: bool= False, **kw):
-		silent = silent or ii.debug
-
 		print('\npyfig:update')
+		silent = silent or ii.debug
 
 		c_update = (_arg or {}) | (c_update or {}) | (kw or {})
 		c_update = flat_any(c_update)
@@ -382,9 +390,8 @@ class PyfigBase:
 			if k_update=='dtype': # !!! pyfig:fix: Special case, generalify
 				ii.dtype = v_update
 				if not silent:
-					print('dtype: ---> ', v_update)
+					print('dtype: ---> \t\t\t\t\t', v_update)
 			elif k_update in ii.repo.keys():
-				print('adding plugin:')
 				plugin = ii.repo[k_update][v_update]
 				plugin_name = k_update.split('_')[0]
 				if not silent:
@@ -404,7 +411,8 @@ class PyfigBase:
 		from .typfig import AnyTensor
 		from .utils import print_tensor
 		from torch import Tensor
-		if ii.debug:
+
+		if ii.debug and d:
 			if isinstance(d, dict):
 				print('-'*50, msg, sep='\n')
 				for k,v in d.items():
@@ -430,8 +438,8 @@ class PyfigBase:
 		# write a function to filter lists out of a dictionary
 		def get_numerical_arrays():
 			from torch import Tensor
+
 			d = {}
-			print('HERE')
 			for k,v in base_d.items():
 				if isinstance(v, (np.ndarray, np.generic, Tensor, list)):
 					if isinstance(v, (np.ndarray, np.generic, Tensor)):

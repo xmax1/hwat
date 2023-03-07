@@ -28,13 +28,14 @@ def get_kpath_v(d: dict, parent: str= None):
 			items.append((label, value))
 	return items
 
-def print_table(data: dict | list):
+def print_table(data: dict | list, header: list=None):
 	if not isinstance(data, list):
 		depth = dict_depth(data)
-		headers = [f'depth-{i}' for i in range(depth)] + ['value']
+		if header is None:
+			header = [f'depth-{i}' for i in range(depth)] + ['value']
 		data = get_kpath_v(data)
-	else:
-		headers = ['setting', 'value']
-	table = PrettyTable(headers)
+	if header is None:
+		header = ['setting', 'value']
+	table = PrettyTable(header)
 	table.add_rows(data)
 	print(table)

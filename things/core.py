@@ -21,6 +21,42 @@ import re
 from itertools import product
 
 
+
+def this_is_noop(step, n_step, n= None, every= None):
+	"""
+	convert n to every
+	every    | n 
+
+	n negative log every 1
+	n 0 log every 0
+	n positive log every n_step//n
+
+	every negative log last step
+	every 0 log every 0
+	every positive log every
+	"""
+
+	if n is not None:
+		if n == 0:
+			every = 0
+		elif n < 0:
+			every = 1
+		else:
+			every = n_step//n
+
+	if step == 1:
+		print(f'every: {every}' )
+	
+	if every < 0 and n_step == step:
+		return False
+	elif every == 0:
+		return True
+	elif step % every == 0:
+		return False
+	else:
+		return True
+
+
 def try_this_wrap(msg= ':x:'):
 	def try_this(fn):
 		def new_fn(*args, **kw):
@@ -551,7 +587,9 @@ def walk_ins_tree(
 			v_ref = getattr(ins, k_update)
 			v_update = type_me(v_update, k= k_update, v_ref= v_ref)
 			setattr(ins, k_update, v_update)
-			print(f'updated {k_update}: \t {v_ref} ----> {v_update} (ref new type= {type(v_ref)}, {type(v_update)})')
+			print_string = f'update {k_update}: \t\t {v_ref} \t\t ---> {v_update}'.split('\n')
+			print('\n'.join([p for i, p in enumerate(print_string) if i<5]))
+			print(f'type: {type(v_ref)} ---> {type(v_update)}')
 			return True
 		else:
 			sub_ins = ins_to_dict(ins, sub_ins_ins=True)

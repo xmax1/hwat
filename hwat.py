@@ -85,6 +85,7 @@ class Ansatz_fb(nn.Module):
 		ii.w_spin = [ii.w_spin_u, ii.w_spin_d]
 
 		ii.w_final = nn.Linear(ii.n_det, ii.n_final_out, bias=False)
+		ii.w_final.weight.data.fill_(1.0 / ii.n_det)
 
 		device, dtype = a.device, a.dtype
 		a = a.detach()
@@ -141,6 +142,7 @@ class Ansatz_fb(nn.Module):
 		return log_psi
 
 	def compute_orb(ii, r: Tensor) -> tuple[Tensor, Tensor]:
+
 		ra = r[:, :, None, :] - ii.a[:, :] # (n_b, n_e, n_a, 3)
 		ra_u, ra_d = torch.split(ra, [ii.n_u, ii.n_d], dim=1) # (n_b, n_u(r), n_a, 3), (n_b, n_d(r), n_a, 3)
 		s_v, p_v = ii.compute_embedding(r, ra)
@@ -149,13 +151,14 @@ class Ansatz_fb(nn.Module):
 
 		orb_u = ii.compute_orb_from_stream(s_u, ra_u, spin=0) # (n_b, det, n_u, n_u)
 		orb_d = ii.compute_orb_from_stream(s_d, ra_d, spin=1) # (n_b, det, n_d, n_d)
+
 		### under construction ###
 		# makes sure the final weight is in the preing loop for distribution
 		zero = ((orb_u*0.0).sum(dim=(-1,-2)) + (orb_d*0.0).sum(dim=(-1,-2)))
 		zero = ii.w_final(zero)[..., None, None]
 		### under construction ###
 
-		return orb_u+zero, orb_d+zero
+		return orb_u + zero, orb_d + zero
 
 	def compute_embedding(ii, r: Tensor, ra: Tensor) -> tuple[Tensor, Tensor]:
 		n_b, n_e, _ = r.shape
@@ -198,22 +201,45 @@ class Ansatz_fb(nn.Module):
 		orb = s_w * sum_a_exp # (n_b, n_u(r), n_u(orb), n_det) 
 		return orb.transpose(-1, 1) # (n_b, n_det, n_u(r), n_u(orb))
 
-	def compute_hf_orb(ii, r: Tensor):
+	def compute_hf_orb(ii, r: Tensor) -> np.ndarray:
+		"""
+		r: 		(n_b, n_e, 3)
+		r_hf: 	(n_b*n_e, 3)
+		mo_coef: (2, n_mo, n_ao)
+		ao: 	(n_b*n_e, n_ao)
+		mo: 	(n_b, n_e, n_mo)
+		"""
 		n_b, n_e, _ = r.shape
+
+		# https://github.com/deepmind/ferminet/blob/7d4ef0ad52f84792c2a5e0c64a9cd15e282724aa/ferminet/pretrain.py
+		# - orbitals are the orbitals 
 
 		r_hf = r.detach().cpu().numpy().reshape(-1, 3)
 
-		# gto_op = 'GTOval_sph_deriv1' if deriv else 'GTOval_sph'
-		ao = ii.mol.eval_gto('GTOval_sph', r_hf) # (n_b*n_e, n_ao)
-		ao = ao.reshape(n_b, n_e, -1) # (n_b, n_e, n_ao)
-		ao = torch.tensor(ao).to(device= r.device, dtype= r.dtype) # (n_b, n_e, n_mo)
-		
-		# mo_coef: rows are atomic orbitals, columns are molecular orbitals
-		# ao: (n_b, n_e, n_ao) 
-		mo = [ao @ torch.transpose(c, 0, 1)[None] for c in ii.mo_coef] # (n_b, n_e, n_orb)
-		mo = [m[:, None, :, :].tile((1, ii.n_det, 1, 1)).detach() for m in mo] # n_spin, n_b, n_det, n_mo, n_mo
-		return mo[0][..., :ii.n_u, :ii.n_u], mo[1][..., :ii.n_d, :ii.n_d]
+		ao = ii.mol.eval_gto('GTOval_cart', r_hf) # (n_b*n_e, n_ao)
 
+		mo_coef = ii.mo_coef.detach().cpu().numpy().astype(np.float64) # (2, n_mo, n_ao)
+		
+		mo = ao[None] @ mo_coef # (2, n_e*n_b, n_mo)
+		mo = mo.reshape(mo.shape[0], n_b, n_e, mo.shape[-1]) # (2, n_b, n_e, n_mo)
+		mo = mo[:, :, None, :, :].repeat(ii.n_det, axis= 2) # n_spin, n_b, n_det, n_mo, n_mo
+		
+		return mo[0][..., :ii.n_u, :ii.n_u], mo[1][..., ii.n_u:, :ii.n_d]
+	
+	# def hf_orb_to_prob(ii, mo: np.ndarray):
+	# 	"""
+	# 	mo: 	(n_spin, n_b, n_det, n_e, n_mo)
+	# 	"""
+	# 	mo_u = diag_prod(mo[0][...,  :ii.n_u, :ii.n_u])
+	# 	mo_d = diag_prod(mo[1][..., ii.n_u: , :ii.n_d])
+	# 	psi_det = mo_u * mo_d
+	# 	psi = psi_det.sum(axis= 1) # (n_spin, n_b, n_det)
+	# 	prob = psi**2
+	# 	return prob**2
+		
+
+# def diag_prod(tensor: np.ndarray) -> np.ndarray:
+# 	return np.diagonal(tensor, axis1=-2, axis2=-1).prod(axis=-1) # (n, n)
 
 
 compute_vv = lambda v_i, v_j: torch.unsqueeze(v_i, dim=-2)-torch.unsqueeze(v_j, dim=-3)
@@ -332,7 +358,6 @@ def compute_ke_b(
 	return -0.5 * e_jvp.sum(-1)
 
 
-### sampling ###
 def keep_around_points(r, points, l=1.):
 	""" points = center of box each particle kept inside. """
 	""" l = length side of box """
@@ -344,14 +369,29 @@ def keep_around_points(r, points, l=1.):
 	return r
 
 
-def get_center_points(n_e, center: np.ndarray|Tensor, _r_cen=None):
+def get_center_points(a: Tensor, a_z: Tensor, charge: int):
 	""" from a set of centers, selects in order where each electron will start """
 	""" loop concatenate pattern """
-	for r_i in range(n_e):
-		r_i = center[[r_i % len(center)]]
-		_r_cen = r_i if _r_cen is None else torch.concatenate([_r_cen, r_i])
-	return _r_cen
-
+	n_atom = len(a)
+	
+	assert len(a_z) == n_atom, "a_z must be same length as a"
+	
+	charge = torch.tensor(charge, dtype= a_z.dtype, device= a_z.device)
+	sign = torch.sign(charge)
+	for i in range(torch.abs(charge.to(torch.int64)).item()):
+		idx = i % n_atom
+		a_z[idx] -= sign 
+	
+	r_cen = None
+	placed = torch.zeros_like(a_z)
+	idx = 0
+	while torch.any(placed < a_z):
+		if placed[idx] < a_z[idx]:
+			center = a[idx][None]
+			r_cen = center if r_cen is None else torch.cat([r_cen, center])
+			placed[idx] += 1
+		idx = (idx+1) % n_atom
+	return r_cen
 
 def init_r(center_points: Tensor, std=0.1):
 	""" init r on different gpus with different rngs """
@@ -363,34 +403,10 @@ def init_r(center_points: Tensor, std=0.1):
 
 def is_a_larger(a: Tensor, b: Tensor) -> Tensor:
 	""" given a condition a > b returns 1 if true and 0 if not """
-	v = a - b # +ve when a bigger
-	a_is_larger = (torch.sign(v) + 1.) / 2. # 1. when a bigger
+	v = a - b # + ve when a bigger
+	a_is_larger = torch.where(torch.isnan(a), 1., (torch.sign(v) + 1.) / 2.) # 1. when a bigger
 	b_is_larger = (a_is_larger - 1.) * -1. # 1. when b bigger
 	return a_is_larger, b_is_larger
-
-
-def sample_pre(model: Ansatz_fb, data: Tensor, p_1: Tensor):
-	"""
-	data: (n_b, n_e, 3)
-	p_1: (n_b, n_e)
-
-	NB: Probability can be zero (eg initial walkers way out field)
-	NB: Set wf prob to zero and hf to 1 to encourage hf sampling
-	"""
-	# if the probability is zero... 
-	# increase the prob of accepting the move
-	# which makes sense
-	# so just catch the infs and replace with 0
-	m_orb = model.compute_hf_orb(data) # (2, n_b, n_det, n_e, n_e)
-	m_diag_prob = [torch.diagonal(m, dim1=-2, dim2=-1)**2 for m in m_orb]
-	p_pre = [p.prod(-1).mean(1) for p in m_diag_prob]
-	p_prod = p_pre[0]*p_pre[1]
-	norm = p_prod.sum()
-	p_prod = torch.where(norm==0., torch.ones_like(norm), p_prod/norm)
-	p_1_norm = p_1.sum()
-	p_1 = torch.where(p_1_norm==0., torch.zeros_like(p_1_norm), p_1/p_1_norm)
-	return (p_1 + p_prod) / 2.
-
 
 @torch.no_grad()
 def sample_b(
@@ -401,6 +417,7 @@ def sample_b(
 	pre: bool = False,
 	unwrap: Callable = None,
 	acc_target: float = 0.5,
+	eps: float = 1e-12,
 	**kw
 ):
 
@@ -408,48 +425,117 @@ def sample_b(
 	!!upgrade .round() to .floor() for safe masking """
 	device, dtype = data.device, data.dtype
 
-	p_0 = torch.exp(model(data))**2
-	if pre:
-		unwrap_model = unwrap(model)
-		p_0 = sample_pre(unwrap_model, data, p_0)
+	p_0 = 2. * model(data) # logprob
+	pre_0 = torch.zeros_like(p_0)
+	p_start = p_0.detach()
+	
+	# if pre:
+	# 	unwrap_model = unwrap(model)
+	# 	mo_u, mo_d = unwrap_model.compute_hf_orb(data) # (2, n_b, n_det, n_e, n_e)
+	# 	mo_u = torch.tensor(mo_u, device= device, dtype= dtype)
+	# 	mo_d = torch.tensor(mo_d, device= device, dtype= dtype)
+	# 	us, u = torch.slogdet(mo_u) # (n_b,)
+	# 	ds, d = torch.slogdet(mo_d) # (n_b,)
+	# 	pre_psi = us * ds * torch.exp(u + d) # (n_b,)
+	# 	pre_0 = (pre_psi.sum(1))**2
+	# 	# pre_0 = unwrap_model.hf_orb_to_prob(m_orb) # (n_b,)
+	# 	p_0 += pre_0
 
-	deltar_1 = torch.clip(deltar + 0.01 * torch.randn_like(deltar), min=0.005, max=0.5)
+	deltar = torch.clip(deltar, 0.01, 1.)
+	deltar_1 = deltar + 0.01 * torch.randn_like(deltar)
 	
 	acc = torch.zeros_like(deltar_1)
 	acc_all = torch.zeros_like(deltar_1)
 
 	for dr_test in [deltar, deltar_1]:
-		for _ in torch.arange(1, n_corr+1):
+
+		acc_test_all = []
+
+		for _ in torch.arange(1, n_corr + 1):
 			
-			data_1 = data + torch.randn_like(data, device=device, dtype=dtype, layout=torch.strided)*dr_test
-			p_1 = torch.exp(model(data_1))**2
-			if pre:
-				p_1 = sample_pre(unwrap_model, data_1, p_1)
+			data_1 = data + torch.randn_like(data, device= device, dtype= dtype, layout= torch.strided) * dr_test
+			# p_1 = torch.exp(model(data_1))**2
+			p_1 = 2. * model(data_1)
 			
-			alpha = torch.rand_like(p_1, device=device, dtype=dtype, layout=torch.strided)
+			# what are atomic orbitals? What are molecular orbitals? How do you get the ampliutude from the MOs? q
 
-			a_larger, b_larger = is_a_larger(p_1/(p_0+1e-12), alpha)
+			# if pre:
+			# 	mo_u, mo_d = unwrap_model.compute_hf_orb(data_1) # (2, n_b, n_det, n_e, n_e)
+			# 	mo_u = torch.tensor(mo_u, device= device, dtype= dtype)
+			# 	mo_d = torch.tensor(mo_d, device= device, dtype= dtype)
+			# 	us, u = torch.slogdet(mo_u) # (n_b,)
+			# 	ds, d = torch.slogdet(mo_d) # (n_b,)
+			# 	pre_psi = us * ds * torch.exp(u + d) # (n_b,)
+			# 	pre_1 = (pre_psi.sum(1))**2
+			# 	# pre_1 = unwrap_model.hf_orb_to_prob(m_orb) # (n_b,)
+			# 	p_1 += pre_1
 
-			p_0 = a_larger*p_1 + b_larger*p_0
-			data = a_larger.unsqueeze(-1).unsqueeze(-1)*data_1 + b_larger.unsqueeze(-1).unsqueeze(-1)*data
+			# alpha = torch.rand_like(p_1, device= device, dtype= dtype)
+			# ratio = p_1 / p_0
 
-			acc_test = torch.mean(a_larger.to(dtype), dim=0, keepdim=True) # docs:torch:knowledge keepdim requires dim=int|tuple[int]
+			alpha = torch.log(torch.rand_like(p_1, device= device, dtype= dtype))
+			ratio = p_1 - p_0
+			
+			a_larger, b_larger = is_a_larger(ratio, alpha)
+			# print(a_larger, b_larger, ratio, alpha, p_1, p_0, sep= '\n')
+			
+			p_0		= p_1 		* a_larger	 				+ p_0	* b_larger
+			data 	= data_1 	* a_larger[:, None, None] 	+ data	* b_larger[:, None, None]
+
+			acc_test_all += [torch.mean(a_larger, dim= 0, keepdim= True)] # docs:torch:knowledge keepdim requires dim=int|tuple[int]
+
+		acc_test = torch.mean(torch.stack(acc_test_all), dim= 0)
 
 		del data_1
 		del p_1
+		del alpha
 		del a_larger
 		del b_larger
+		del acc_test_all
+
+		a_larger, b_larger = is_a_larger((acc_target - acc).abs(), (acc_target - acc_test).abs())
+
+		acc 	= acc_test	* a_larger + acc	* b_larger
+		deltar 	= dr_test	* a_larger + deltar	* b_larger
 
 		acc_all += acc_test
-
-		a_larger, b_larger = is_a_larger(torch.absolute(acc_target-acc), torch.absolute(acc_target-acc_test))
-
-		acc = a_larger*acc_test + b_larger*acc
-
-		deltar = a_larger*dr_test + b_larger*deltar
 	
-	return dict(data=data, acc=acc_all/2., deltar=deltar)
+	return dict(data= data, acc= acc_all/2., deltar= deltar, pre_0= pre_0, p_start= p_start)
 
+from things.aesthetic import print_table
+from things.utils import print_tensor
+
+def get_starting_deltar(sample_b: Callable, data: Tensor, acc_target: float= 0.5):
+	
+	# from base^start to base^end in delta_steps 
+	deltar_domain = torch.logspace(
+		-3, 1, steps= 10, base= 10.,
+		device= data.device, dtype= data.dtype, requires_grad= False,
+	)[:, None]
+	
+	acc_all = torch.zeros_like(deltar_domain)
+	diff_acc_all = torch.zeros_like(deltar_domain)
+	for i, deltar in enumerate(deltar_domain):
+		v_d = dict(data= data, deltar= deltar)
+		for n in range(1, 11):
+			v_d = sample_b(**v_d)
+			acc_all[i] += v_d['acc'].mean()
+			diff_acc_all[i] += (acc_target - v_d['acc']).abs().mean()
+
+	def pretty_table(data: list, header: list):
+		from prettytable import PrettyTable
+		t = PrettyTable(header)
+		for row in data:
+			t.add_row(row)
+		print(t)
+	
+	pretty_table(
+		[[dr.item(), acc.item(), diff.item()] 
+	    for dr,acc,diff in zip(deltar_domain, acc_all/float(n), diff_acc_all/float(n))], 
+		header= ['deltar', 'acc', 'diff']
+	)
+	
+	return deltar_domain[torch.argmin(diff_acc_all)]
 
 from torch.utils.data import Dataset
 from functools import partial
@@ -467,49 +553,55 @@ class PyfigDataset(Dataset):
 		ii.n_b = c.data.n_b
 
 		print('hwat:dataset: init')
-		center_points = get_center_points(c.app.n_e, c.app.a).detach()
+		center_points = get_center_points(c.app.a, c.app.a_z, c.app.charge).detach()
 		device, dtype = center_points.device, center_points.dtype
+		print('hwat:dataset:init: center_points')
+		print_tensor(center_points, 'center_points')
+		print(center_points)
 
 		def init_data(n_b, trailing_shape) -> torch.Tensor:
-			shift = c.app.init_data_scale * torch.randn(size=(n_b, *trailing_shape)).requires_grad_(False).to(device, dtype)
-			return center_points + shift 
+			shift = torch.randn(size=(n_b, *trailing_shape)).requires_grad_(False).to(device, dtype)
+			return center_points + c.app.init_data_scale * shift 
+
+		data = init_data(ii.n_b, center_points.shape)
 
 		data_loaded = state.get('data', None)
 		if data_loaded is not None: 
 			print('dataset: loading data from state')
 			data = data_loaded
-		else:
-			data = init_data(ii.n_b, center_points.shape)
 		ii.data = data.requires_grad_(False).to(device, dtype)
 
-		deltar_loaded = state.get('deltar', None)
+		# deltar = torch.tensor([0.02,])
+		# deltar_loaded = state.get('deltar', None)
 		# if deltar_loaded is not None: 
-		if False:
-			print('dataset: loading deltar from state')
-			deltar = deltar_loaded
-		else:
-			deltar = torch.tensor([0.02,])
-		ii.deltar = deltar.requires_grad_(False).to(device, dtype)
+		# 	print('dataset: loading deltar from state')
+		# 	deltar = deltar_loaded
+		# ii.deltar = deltar.requires_grad_(False).to(device, dtype)
 
 		print('dataset:len ', c.n_step)
-
 		ii.wait = c.dist.wait_for_everyone
 
 	def init_dataset(ii, c: Pyfig, device= None, dtype= None, model= None, **kw) -> torch.Tensor:
 
 		ii.data = ii.data.to(device= device, dtype= dtype)
-		ii.deltar = ii.deltar.to(device= device, dtype= dtype)
+		
+		ii.sample = partial(sample_b, model= model, n_corr= ii.n_corr, pre= (ii.mode==c.pre_tag), unwrap= c.dist.unwrap)
+
+		from hwat import get_starting_deltar
+		deltar = get_starting_deltar(ii.sample, ii.data, acc_target= 0.5)
+		ii.deltar = deltar.to(device= device, dtype= dtype)
+		print('dataset:init_dataset deltar ', ii.deltar)
 
 		ii.v_d = {'data': ii.data, 'deltar': ii.deltar}
-		
-		ii.sample = partial(sample_b, model= model, n_corr=ii.n_corr, pre= ii.mode==c.pre_tag, unwrap= c.dist.unwrap)
-		print('dataset:init_dataset sampler is pretraining ', ii.mode==c.pre_tag) 
 
-		for equil_i in range(100):
+		for equil_i in range(c.app.n_equil_step):
 			ii.v_d = ii.sample(**ii.v_d)
-			if equil_i % 10 == 0:
-				print('equil ', equil_i, ' acc ', torch.mean(ii.v_d['acc'], dim=0, keepdim=True).detach().cpu().numpy())
+			if equil_i % 100 == 0:
+				acc = torch.mean(ii.v_d['acc'])
+				deltar = torch.mean(ii.v_d['deltar'])
+				print('equil ', equil_i, ' acc ', acc.item(), ' deltar ', deltar.item())
 
+		print('dataset:init_dataset sampler is pretraining ', ii.mode==c.pre_tag) 
 		print('dataset:init_dataset')
 		[print(k, v.shape, v.device, v.dtype, v.mean(), v.std()) for k, v in ii.v_d.items()]
 

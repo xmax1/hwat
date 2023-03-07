@@ -87,7 +87,7 @@ Distributed GPUs:
                         Maximum number of worker group restarts before failing.
   --monitor_interval MONITOR_INTERVAL
                         Interval, in seconds, to monitor the state of workers.
-- -2 to switch off sync_step / logging etc 
+- -2 to switch off sync_every / logging etc 
 
 - pyfig 'create_new' needed to pass a deepcopy object to a run mode ** 
 
@@ -130,52 +130,36 @@ You can think of world as a group containing all the processes for your distribu
 ## distribution
 - each gpu must have a unique rank env variable
 
-
-# very basic test
-- python run.py
-
-# other test
-python run.py --exp_name debug --mode train --debug --n_b 2 -n_sv 8 --n_pv 4 --n_fb 2  --n_trials 10 --n_train_step 5 --n_eval_step 5 --n_opt_hypam_step 5  --n_pre_step 5
-python run.py --submit --n_gpu 2 --mode pre:opt_hypam:pre:train:eval --exp_name debug --mode train --debug --n_b 2 --n_sv 8 --n_pv 4 --n_fb 2  --n_trials 10 --n_train_step 5 --n_eval_step 5 --n_opt_hypam_step 5  --n_pre_step 5
-python run.py --multimode pre:opt_hypam:pre:train:eval --exp_name debug --debug --n_b 2 --n_sv 8 --n_pv 4 --n_fb 2  --n_trials 10 --n_train_step 5 --n_eval_step 5 --n_opt_hypam_step 5  --n_pre_step 5
-
-
 # debug 1 
-python run.py --submit --time 01:00:00 --n_gpu 2 --debug --multimode pre:opt_hypam:pre:train:eval \
---log_metric_keys ['all'] --n_pre_step 20 --n_opt_hypam_step 20 --n_trials 4 --n_train_step 20 --n_eval_step 20
+python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 20 --n_b 128 --n_gpu 1 --mode train
+python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 1000 --n_pre_step 500 --n_b 128 --n_gpu 1 --multimode pre:train
+python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 20 --n_b 128 --n_gpu 1 --multimode pre:opt_hypam --n_trials 3
+python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 20 --n_b 128 --n_gpu 2 --mode train
+python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 20 --n_b 128 --n_gpu 2 --multimode pre:train
+python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 20 --n_b 128 --n_gpu 2 --multimode pre:opt_hypam --n_trials 3
 
 # debug 2
-python run.py --submit --time 01:00:00 --n_gpu 2 --multimode pre:opt_hypam:pre:train:eval \
---log_metric_keys ['all'] 
+python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 20 --n_b 128 --n_gpu 2 --multimode pre:train --a_z [10,]
+python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 100 --n_b 512 --n_gpu 1 --multimode pre:train --a_z [8,8] --a [[0.0,0.0,0.0], [0.0,0.0,2.3087]]
+python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_trials 2 --n_default_step 1000 --n_b 256 --n_gpu 2 --multimode opt_hypam:pre:train --a_z [8,8] --a [[0.0000,0.0000,0.0000], [0.0000,0.0000,2.3087]]
+python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_trials 2 --n_default_step 1000 --n_b 256 --n_gpu 2 --multimode opt_hypam:pre:train --a_z [8,8] --a [[0.    ,0.    ,0.    ], [0.    ,0.    ,2.3087]]
 
+# debug 3
+python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 20 --n_b 128 --n_gpu 2 \
+	--multimode opt_hypam:pre:train:eval --n_trials 3 --system_name O2_neutral_triplet --n_sv 32 --n_pv 32 --n_fb 3 --n_det 4
 
-did not load model '_IncompatibleKeys' object has no attribute 'to'
+# debug 4
+python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_b 256 --n_gpu 2 \
+	--multimode pre:train:eval --n_pre_step 500 --n_train_step 1000 --n_eval_step 100 --system_name O2_neutral_triplet --n_sv 32 --n_pv 32 --n_fb 3 --n_det 4
 
-# run 
-python run.py --submit --time 01:00:00 --n_gpu 1 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
---system_name O2_neutral_triplet --exp_name ~ScaleO2_v8_test --n_b 4 --n_fb 2 --n_sv 16 --n_pv 8 --n_trials 4 --n_train_step 10 --n_eval_step 10 --n_opt_hypam_step 10 --debug
-
-python run.py --submit --time 01:00:00 --n_gpu 2 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
---system_name O2_neutral_triplet --exp_name ~ScaleO2_v8_test --n_b 4 --n_fb 2 --n_sv 16 --n_pv 8 --n_trials 4 --n_train_step 10 --n_eval_step 10 --n_opt_hypam_step 10 --debug
-
-python run.py --submit --time 01:00:00 --n_gpu 1 --multimode pre:train:eval --log_metric_keys ['all'] \
---system_name O2_neutral_triplet --exp_name ~n_b_sweep --zweep n_b-4-8-16-32-64-128-256-512-1024-int
-
-python run.py --submit --time 01:00:00 --n_gpu 1 --multimode pre:train:eval --log_metric_keys ['all'] \
---system_name O2_neutral_triplet --exp_name ~n_b_sweep --zweep n_gpu-1-2-4-8-10-int --n_b 1024
+python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_b 256 --n_gpu 2 \
+	--multimode opt_hypam:pre:train:eval --n_pre_step 500 --n_train_step 1000 --n_opt_hypam_step 100 --n_trials 5 --n_eval_step 100 --system_name O2_neutral_triplet --n_sv 32 --n_pv 32 --n_fb 3 --n_det 4
 
 # run
-python run.py --submit --time 01:00:00 --n_gpu 1 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
---system_name O2_neutral_triplet --exp_name ~ScaleO2_v10_test --n_b 256
-
-python run.py --submit --time 02:00:00 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
---system_name O2_neutral_triplet --exp_name ~ScaleO2_v6 --zweep n_gpu-1-2-4-8-10-int --n_b 128 --n_trials 10
-
-python run.py --submit --time 01:00:00 --multimode pre:opt_hypam:pre:train:eval --log_metric_keys ['all'] \
---system_name O2_neutral_triplet --exp_name ~ScaleO2_v6 --n_gpu 20 --n_b 128 --n_trials 10
-
-scancel \
-
+python run.py --debug --submit --exp_name ~o2_neutral --time 06:00:00 \
+	--n_b 256 --n_sv 32 --n_pv 32 --n_fb 3 \
+	--n_pre_step 1000 --n_train_step 2000 --n_eval_step 100 --n_opt_hypam_step 500 \
+	--multimode opt_hypam:pre:train:eval --n_trials 10 --system_name O2_neutral_triplet --zweep n_gpu-1-2-4-8-10-20-int
 
 
 """
@@ -201,18 +185,18 @@ class Pyfig(PyfigBase):
 	lo_ve_path: 		str 	= '' # for LOad & saVE -> lo_ve
 
 	mode: 				str		= '' # one or the other
-	multimode: 			str		= 'pre:train:eval'
+	multimode: 			str		= '' # pre:train:eval
 
 	debug: 				bool    = False
 	
 	seed:           	int   	= 808017424 # grr
-
 
 	_dtype_str:   		str 	= 'float32'
 	@property
 	def dtype(ii): 
 		import torch
 		return dict(float64= torch.float64, float32= torch.float32, cpu= 'cpu')[ii._dtype_str]
+
 	@dtype.setter
 	def dtype(ii, val):
 		if val is not None:
@@ -226,17 +210,9 @@ class Pyfig(PyfigBase):
 	@property
 	def is_logging_process(ii: PyfigBase):
 		return ii.mode==ii.opt_hypam_tag or ii.dist.head or ii.dist.rank==-1
-	# is_logging_process: bool 	= property(def(ii: PyfigBase): ; return ii.mode==ii.opt_hypam_tag or ii.dist.head)
 
-	log_state_keys:     list 	= [] # ['opt_obj', 'r', 'grads', 'params', ...] 'all' is all
-	log_metric_keys: 	list	= [] # ['opt_obj', 't_per_it', 'max_mem_alloc']
- 
-	opt_obj_key:			str		= 'e'
-	opt_obj_op: Callable = property(lambda _: lambda x: x.std())
-
-	class data(DataBase):
-		n_b: int = 1024
-		loader_n_b: int = 1
+	opt_obj_key:		str		= 'e'
+	opt_obj_op: 	Callable 	= property(lambda _: lambda x: x.std())
 	
 	class app(PlugIn):
 		
@@ -250,7 +226,6 @@ class Pyfig(PyfigBase):
 		a_z:        np.ndarray  = np.array([4,])
 
 		n_corr:     int         = 10
-		n_equil_step:int		= 0
 		acc_target: int         = 0.5
 		init_data_scale: float  = 1.
 
@@ -263,7 +238,7 @@ class Pyfig(PyfigBase):
 		n_u:        int         = property(lambda _: (_.spin + _.n_e)//2)
 		n_d:        int         = property(lambda _: _.n_e - _.n_u)
 		
-		n_equil_step:int        = property(lambda _: 1000//_.n_corr)
+		n_equil_step:int        = property(lambda _: 10000//_.n_corr)
 
 		# modes of operation
 		loss: str        = ''  # orb_mse, vmc
@@ -278,24 +253,21 @@ class Pyfig(PyfigBase):
 
 			mol: gto.Mole = gto.Mole(
 				atom	= ii.system_id, 
-				basis	='sto3g', 
+				basis	='sto-3g', 
 				charge	= ii.charge, 
 				spin 	= ii.spin, 
-				unit	= 'Bohr'
+				unit	= 'bohr'
 			)
 			mol.build()
-
 			mean_field_obj = scf.UHF(mol)
-			# mean_field_obj.run()
 			mean_field_obj.kernel()
-			mean_field_obj.analyze()
-
 			ii._hf = mean_field_obj
 			ii._mol = mol
+			# Molecular orbital (MO) coefficients 
+			# matrix where rows are atomic orbitals (AO) and columns are MOs
 			ii.mo_coef = np.array(mean_field_obj.mo_coeff)
-			# Molecular orbital (MO) coefficients (matrix where rows are atomic orbitals (AO) and columns are MOs)
-			
-			# print(ii.mo_coef, ii.mo_coef.shape, sep='\n')
+			print('app:init_app: mo_coef shape:', ii.mo_coef.shape)
+			mean_field_obj.analyze()
 			ii.p.if_debug_print_d({'mean_field_obj': mean_field_obj, 'mol': mol, 'mo_coef': ii.mo_coef})
 
 		def record_summary(ii, summary: dict=None, opt_obj_all: list=None) -> None:
@@ -310,6 +282,7 @@ class Pyfig(PyfigBase):
 			if len(opt_obj_all)==0:
 				opt_obj_all = [0.0]
 				print('no opt_obj_all, setting to 0.0')
+
 			else:
 				data = [exp_metaid, np.array(opt_obj_all).mean(), np.array(opt_obj_all).std()]
 
@@ -323,80 +296,54 @@ class Pyfig(PyfigBase):
 		def post_init_update(ii):
 			return systems.get(ii.system_name, {})
 
-		# pyfig:docs:log
-		# n_log -1 special case never
-		# n_log 1 special case log last
+	def update_mode(ii, mode: str, c_update: dict= None, **kw):
+		print('pyfig:update_mode\n')
+		c_update = c_update or {}
 
-		_mode_c: dict = dict(
-			pre= dict(
-				n_b 			= 512,
-				n_pre_step 		= 1000,
-				loss 			= 'orb_mse',
-				log_state_keys 	= ['all'],
-				n_log_state		= 1, 
-				n_log_metric	= 5, 
-				sync_step		= 5,
-			),
+		mode_c: dict = dict(
+			train = dict(
+				mode 				= 'train',
+				loss				= 'vmc',
+			),	
 
-			train= dict(
-				n_b 				= 512,
-				n_train_step 		= 10000,
-				log_metric_keys		= ['all'] ,
-				log_state_keys 		= ['all'],
+
+			pre = dict(	
+				mode 				= 'pre',
+				loss 				= 'orb_mse',
 				n_log_state			= 1,
-				n_log_metric		= 100,
-				loss 			 	= 'vmc', # energy computed by default,
-				sync_step			= 5,
-			),
-
-			eval= dict(
-				n_b 				= 512,
-				n_eval_step 		= 50,
-				n_log_metric 		= 1e10, # special case log all 
-				log_metric_keys		= ['opt_obj'],
+				n_log_metric		= 5, 
+				sync_every			= 5,
+				lo_ve_path      	= None,
 				compute_energy  	= True,
-				sync_step			= -1, # special case never log,
+				# sch_name 	= 'LambdaLR',
+				# sch_max_lr = 0.01,
+				# sch_epochs	= 1,
+			),	
+
+
+			eval= dict(	
+				mode 				= 'eval',
+				compute_energy  	= True,
+				sync_every			= 0,
 			),
 
 			opt_hypam= dict(
-				n_b 				= 512,
-				n_opt_hypam_step	= 1000,
+				mode 				= 'opt_hypam',	
+				loss				= 'vmc',
 				plugin_name 		= 'naive',
-				loss 			 	= 'vmc', # energy computed by default,
-				sync_step 			= -1, # special case never log,
-				n_log_metric 		= 50, 
-				n_log_state 		= 1, # special case never log,
-				n_trials 			= 20,
+				sync_every 			= 0, 
+				n_log_state 		= 0, 
 			)
 		)
+		
+		update = mode_c.get(mode, {}) | c_update | kw
+		ii.update(update)
+		return update
 
-		# debug_c: dict = dict(
-		# 	n_default_step=  	30,
-		# 	n_pre_step= 	 	0,
-		# 	n_train_step= 	 	0,
-		# 	n_eval_step= 	 	0,
-		# 	n_opt_hypam_step=   0,
-		# 	n_trials=   		6,
-
-		# 	exp_name= 		 '~debug',
-		# 	time= 			 '00:10:00',
-		# 	multimode= 		 'pre:opt_hypam:pre:train:eval',
-
-		# 	n_b= 	 		 4,
-			
-		# 	max_power=	     8,
-			
-		# 	n_sv=     		 16,
-		# 	n_pv=     		 8,
-		# 	n_fb=     		 2,
-		# 	n_det=    		 2,
-			
-		# 	debug=			 True,
-		# 	# n_log_metric=	 10,  # can't set things important to specific runs
-		# 	# n_log_state=     1,
-		# )
-
-
+	class data(DataBase):
+		n_b: int = 4
+		loader_n_b: int = 1
+		
 	class model(ModelBase):
 		compile_ts: 	bool	= False
 		compile_func:	bool	= False
@@ -416,11 +363,10 @@ class Pyfig(PyfigBase):
 		
 		n_fbv:          int     = property(lambda _: _.n_sv*3+_.n_pv*2)
 
-
 	class opt(PyfigBase.opt):
 		available_opt:  list 	= ['AdaHessian', 'RAdam']
 		opt_name: 		str		= 'RAdam'
-		lr:  			float 	= 0.01
+		lr:  			float 	= 0.001
 		betas:			list	= [0.9, 0.999]
 		eps: 			float 	= 1e-4
 		weight_decay: 	float 	= 0.0
@@ -436,13 +382,21 @@ class Pyfig(PyfigBase):
 		sweep_name: 	str		= 'study'	
 		n_trials: 		int		= 20
 		parameters: 	dict 	= dict(
-			# dtype			=	Param(values=[torch.float32, torch.float64], dtype=str), # !! will not work
-			opt_name		=	Param(values=['AdaHessian',  'RAdam'], dtype=str),
-			weight_decay	= 	Param(domain=[0.01, 1.], dtype=float, condition=['AdaHessian',]),
+			opt_name		=	Param(values=['AdaHessian', 'RAdam'], dtype=str),
 			hessian_power	= 	Param(values=[0.5, 0.75, 1.], dtype=float, condition=['AdaHessian',]),
+			weight_decay	= 	Param(domain=(0.0001, 1.), dtype=float, condition=['AdaHessian',]),
 			lr				=	Param(domain=(0.0001, 1.), log=True, dtype=float),
-			sch_max_lr		=	Param(values=[0.1, 0.01, 0.001], dtype=float),
-			n_det			=	Param(values=[4,], dtype=int),
+
+			# sch_max_lr	=	Param(values=[0.1, 0.01, 0.001], dtype=float),
+			# n_det			=	Param(values=[1, 2, 4, 8], dtype=int),
+
+			# dtype			=	Param(values=[torch.float32, torch.float64], dtype=str), # !! will not work
+			# opt_name		=	Param(values=['AdaHessian',  'RAdam'], dtype=str),
+			# weight_decay	= 	Param(domain=[0.01, 1.], dtype=float, condition=['AdaHessian',]),
+			# hessian_power	= 	Param(values=[0.5, 0.75, 1.], dtype=float, condition=['AdaHessian',]),
+			# lr			=	Param(domain=(0.0001, 1.), log=True, dtype=float),
+			# sch_max_lr	=	Param(values=[0.1, 0.01, 0.001], dtype=float),
+			# n_det			=	Param(values=[1, 2, 4, 8], dtype=int),
 			
 			# n_sv			= 	Param(values=[16, 32, 64], dtype=int),
 			# n_pv			= 	Param(values=[16, 32], dtype=int),
@@ -546,85 +500,6 @@ class Pyfig(PyfigBase):
 		# - todo
 		# - run scaling exp
 
-
-		"""
-
-		c_test = dict(
-			n_sv     = 16,
-			n_pv     = 8,
-			n_fb     = 2,
-			n_det    = 2,
-			n_b 	 = 4,
-			multimode = 'max_mem-record:opt_hypam-record:train-record:eval-record',  # profile
-			n_step   = 50,
-			n_pre_step   = 50,
-			n_eval_step   = 50,
-			debug	= True,
-
-		)
-
-		parameters = dict(
-			n_gpu			=	Param(values=[1,  2], dtype=int),
-			plugin_name		= 	Param(values=['naive', 'hf_accel'], dtype=str), 
-			
-			
-		)
-
-		python run.py --submit --time 00:05:00 --n_b 32 --n_gpu 1 --mode train --plugin_name hf_accel
-
-
-
-		python run.py --submit --mode opt_hypam
-
-		python run.py --time 01:00:00 --submit --plugin_name hf_accel \
-		--mode max_mem --system O2_neutral_triplet --exp_name show~max_mem_sweep \
-		--n_pre_step 50 --n_step 200 --n_gpu 2
-		
-		--zweep n_gpu-1-2-4-8-10-int
-
-
-		### dummy everything
-		python run.py --time 01:00:00 --submit --multimode train:eval:max_mem:opt_hypam \
-		--exp_name ~debug --n_step 40 --n_pre_step 20 --dist naive --n_gpu 2 --n_b 128 --a_z [4]
-
-		### dummy accelerate
-		python run.py --time 00:10:00 --submit --plugin_name hf_accel \
-		--mode train --system O2_neutral_triplet --exp_name ~debug \
-		--n_pre_step 10 --n_step 100 --n_gpu 2
-
-		### dummy dist
-		python run.py --time 00:10:00 --submit --plugin_name naive \
-		--mode train --exp_name ~debug \
-		--n_pre_step 100 --n_step 1000 --n_gpu 2 --a_z [4]
-
-		### real accelerate 
-		python run.py --time 01:00:00 --submit --plugin_name hf_accel \
-		--mode train --system O2_neutral_triplet --exp_name show~n_gpu_sweep \
-		--n_pre_step 1000 --n_step 2000 --zweep n_gpu-1-2-4-8-int
-
-		python run.py --time 02:00:00 --submit --dist naive \
-		--multimode train-record:eval --system O2_neutral_triplet --exp_name share~n_gpu \
-		--n_pre_step 1000 --n_step 10000 --zweep n_gpu-1-2-4-8-int
-				
-		### dummy opt
-		python run.py --time 00:05:00 --submit --plugin_name naive \
-		--mode opt_hypam --a_z [4] --exp_name ~debug \
-		--n_pre_step 50 --n_step 100 --n_gpu 1 --n_trials 10
-
-		### real opt
-		python run.py --time 04:00:00 --submit --system O2_neutral_triplet --plugin_name naive \
-		--mode opt_hypam --exp_name show~opt \
-		--n_pre_step 100 --n_step 500 --n_gpu 1 --n_trials 1000
-
-		
-		### big
-		python run.py --time 02:00:00 --submit --plugin_name hf_accel \
-		--mode train --exp_name show~50e \
-		--n_pre_step 1000 --n_step 10000 --n_gpu 8 --a_z [50]
-
-
-		"""
-
 """  
 # pyfig
 ## pyfig:todo
@@ -635,20 +510,6 @@ class Pyfig(PyfigBase):
 - generalisation refactor 
 
 - https://jvmc.readthedocs.io/en/latest/index.html
-
-- normalised preing
-- save eval r and stats compressed (5 min)
-
-- estimated time until finished from # electrons, batch size 
-- wandb reports
-- distributed metrics: e_std_across_nodes
-
-- buy food 
-- call rents
-- cook dinner
-- buy cigarettes 
-- look at week
-- save best mem for c in dump 
 
 - # size_param: 	list	= property(lambda _: [datetime.now().strftime("%d-%m-%y:%H-%M-%S"), _.n_b, _.n_e, _.n_fb, _.n_sv, _.n_pv])
 - for memory map

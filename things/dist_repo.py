@@ -9,29 +9,30 @@ from typing import Callable, Any
 import numpy as np
 import torch 
 import numpy as np
+from torch import nn
 
 from .core import dump, load, run_cmds, find_free_port, add_to_Path, dict_to_cmd
-from .utils import PlugIn	
+from .aesthetic import print_table
 
-from torch import nn
+from .utils import PlugIn	
 
 this_dir = Path(__file__).parent
 hostname = os.environ.get('HOSTNAME', '') # if n node > 1 this is 
 
 class DistBase(PlugIn):
 	
-	dist_name: str = 'Base'
-	n_launch: int = 1
-	n_worker:       int = property(lambda _: _.p.resource.n_gpu)
-	ready: bool = True
-	sync_step: int = 1
+	dist_name: 		str = 'Base'
+	n_launch: 		int = 1
+	n_worker:   	int = property(lambda _: _.p.resource.n_gpu)
+	ready: 			bool = True
+	sync_every: 	int = 1
 
 	rank_env_name: 	str		= 'RANK'
 	rank: 			int 	= property(lambda _: int(os.environ.get(_.rank_env_name, '-1')))
 	head: 			bool 	= property(lambda _: _.rank==0)
 	gpu_id: 		str		= property(lambda _: ''.join(run_cmds(_._gpu_id_cmd, silent=True)).split('.')[0])
 	dist_id: 		str 	= property(lambda _: _.gpu_id + '-' + hostname.split('.')[0])
-	pid: int = property(lambda _: _.rank)
+	pid: 			int = property(lambda _: _.rank)
 
 	_gpu_id_cmd:	str		= 'nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader'
 
@@ -57,12 +58,13 @@ class DistBase(PlugIn):
 	def prepare(ii, *arg, **kw):
 		from .for_torch.torch_utils import try_convert
 		print('\ndist:prepare: ')
+		
 		kw = {k:try_convert(k, v, ii.p.device, ii.p.dtype) for k,v in kw.items()}
 		return list([try_convert(v, v, ii.p.device, ii.p.dtype) for v in arg]) + list(kw.values())
 	
 	def set_seed(ii, seed= None) -> int:
 		seed = seed or int(ii.p.seed)
-		print('dist:set_seed: ', seed)
+		print('\ndist:set_seed: ', seed)
 		seed = seed + int(ii.rank)
 		torch.random.manual_seed(seed)
 		return seed
@@ -74,7 +76,7 @@ class DistBase(PlugIn):
 			device_int = torch.cuda.current_device()
 			torch_n_device = torch.cuda.device_count()
 			cuda_visible_devices = os.environ['CUDA_VISIBLE_DEVICES']
-			print('CUDA_VISIBLE_DEVICES: cuda_visible,device_int,n_devices_from_torch', cuda_visible_devices, device_int, torch_n_device)
+			print_table(dict(cuda_visible_devices=cuda_visible_devices, device_int=device_int, torch_n_device=torch_n_device))
 		print('Device is ', device)
 		return device
 		
@@ -90,7 +92,7 @@ class DistBase(PlugIn):
 class SingleProcess(DistBase):
 	
 	dist_name: str = 'SingleProcess'
-	sync_step: int = property(lambda _: -1) # no sync
+	sync_every: int = property(lambda _: 0) # no sync
 	head: int = property(lambda _: True)
 	launch_cmd: Callable 	= property(lambda _: 
 		lambda node_i, submit_i, cmd: 
@@ -104,7 +106,7 @@ class Naive(DistBase):
 	n_launch:       int = property(lambda _: _.p.resource.n_gpu)
 	n_worker:       int = property(lambda _: _.p.resource.n_gpu)
 	dist_name: 	str		= 'Naive'
-	sync_step:  int 	= 5
+	sync_every:  int 	= 5
 	head: 		bool 	= property(lambda _: _.rank==0 or (_.p.opt_hypam_tag in _.p.mode))
 	nsync:          int = 0
 
@@ -128,13 +130,12 @@ class Naive(DistBase):
 	@torch.no_grad()
 	def sync(ii, v_d: dict, sync_method: str, this_is_noop: bool= False) -> list[torch.Tensor]:
 		
-		if this_is_noop or ii.n_worker==1:
+		if this_is_noop or ii.n_worker == 1:
 			return v_d
 		
-		if ii.nsync < 2:
+		if ii.nsync < 2 and os.environ.get('debug', False) in ['True', 'true']:
 			ii.p.if_debug_print_d({'nsync': ii.nsync, 'this_is_noop': this_is_noop, 'ii.n_worker': ii.n_worker}, msg= 'sync Naive')
 		
-
 		v_path = (ii.p.paths.exchange_dir / f'step{ii.nsync}_rank{ii.rank}_{ii.dist_id}').with_suffix('.pk')
 		v_sync_path = add_to_Path(v_path, '-sync')
 		
@@ -208,7 +209,7 @@ with TryImportThis('accelerate') as _hf_accel:
 	import accelerate
 
 	class HFAccelerate(DistBase):
-		sync_step:  int 	= 5
+		sync_every:  int 	= 5
 		dist_name: str = 'HFAccelerate'
 
 		class dist_c(PlugIn):
