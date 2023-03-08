@@ -131,7 +131,11 @@ You can think of world as a group containing all the processes for your distribu
 - each gpu must have a unique rank env variable
 
 # debug 1 
-python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 20 --n_b 128 --n_gpu 1 --mode train
+python run.py --debug --submit --exp_name ~demo --time 04:00:00 --n_pre_step 1000 --n_train_step 10000 --n_b 1024 --n_gpu 1 --mode train --a_z [4,]
+python run.py --debug --submit --exp_name ~demo --time 04:00:00 --n_pre_step 1000 --n_train_step 10000 --n_b 1024 --n_gpu 1 --mode pre:train:eval --a_z [4]
+python run.py --debug --submit --exp_name ~demo --time 04:00:00 --n_pre_step 1000 --n_train_step 10000 --n_b 1024 --n_gpu 1 --mode pre:train:eval --a_z [3,3] --a [[0.    ,0.    ,0.    ],[0.    ,0.    ,5.0955]]
+
+
 python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 1000 --n_pre_step 500 --n_b 128 --n_gpu 1 --multimode pre:train
 python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 20 --n_b 128 --n_gpu 1 --multimode pre:opt_hypam --n_trials 3
 python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 20 --n_b 128 --n_gpu 2 --mode train
@@ -139,10 +143,11 @@ python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step
 python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 20 --n_b 128 --n_gpu 2 --multimode pre:opt_hypam --n_trials 3
 
 # debug 2
-python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 20 --n_b 128 --n_gpu 2 --multimode pre:train --a_z [10,]
-python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 100 --n_b 512 --n_gpu 1 --multimode pre:train --a_z [8,8] --a [[0.0,0.0,0.0], [0.0,0.0,2.3087]]
+python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 1000 --n_b 512 --n_gpu 1 --multimode pre:train
+python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 1000 --n_b 512 --n_gpu 1 --multimode pre:train --a_z [3,3] --a [[0.    ,0.    ,0.    ],[0.    ,0.    ,5.0955]]
+python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 1000 --n_b 512 --n_gpu 1 --multimode pre:train:eval --a_z [8,8] --a [[0.0,0.0,0.0], [0.0,0.0,2.3087]]
 python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_trials 2 --n_default_step 1000 --n_b 256 --n_gpu 2 --multimode opt_hypam:pre:train --a_z [8,8] --a [[0.0000,0.0000,0.0000], [0.0000,0.0000,2.3087]]
-python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_trials 2 --n_default_step 1000 --n_b 256 --n_gpu 2 --multimode opt_hypam:pre:train --a_z [8,8] --a [[0.    ,0.    ,0.    ], [0.    ,0.    ,2.3087]]
+python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_trials 2 --n_default_step 1000 --n_b 512 --n_gpu 2 --multimode opt_hypam:pre:train --a_z [8,8] --a [[0.    ,0.    ,0.    ], [0.    ,0.    ,2.3087]]
 
 # debug 3
 python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_default_step 20 --n_b 128 --n_gpu 2 \
@@ -156,6 +161,11 @@ python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_b 256 --n_gp
 	--multimode opt_hypam:pre:train:eval --n_pre_step 500 --n_train_step 1000 --n_opt_hypam_step 100 --n_trials 5 --n_eval_step 100 --system_name O2_neutral_triplet --n_sv 32 --n_pv 32 --n_fb 3 --n_det 4
 
 # run
+python run.py --debug --submit --exp_name ~o2_neutral --time 10:00:00 \
+	--n_b 512 --n_sv 64 --n_pv 32 --n_fb 3 --n_det 4 --n_gpu 1 \
+	--n_pre_step 1000 --n_train_step 10000 --n_eval_step 100 \
+	--multimode pre:train:eval --system_name O2_neutral_triplet --opt_name Apollo --exp_name ~opt_compare
+
 python run.py --debug --submit --exp_name ~o2_neutral --time 06:00:00 \
 	--n_b 256 --n_sv 32 --n_pv 32 --n_fb 3 \
 	--n_pre_step 1000 --n_train_step 2000 --n_eval_step 100 --n_opt_hypam_step 500 \
@@ -225,7 +235,7 @@ class Pyfig(PyfigBase):
 		a:          np.ndarray  = np.array([[0.0, 0.0, 0.0],])
 		a_z:        np.ndarray  = np.array([4,])
 
-		n_corr:     int         = 10
+		n_corr:     int         = 20
 		acc_target: int         = 0.5
 		init_data_scale: float  = 1.
 
@@ -240,7 +250,6 @@ class Pyfig(PyfigBase):
 		
 		n_equil_step:int        = property(lambda _: 10000//_.n_corr)
 
-		# modes of operation
 		loss: str        = ''  # orb_mse, vmc
 		compute_energy: bool = False  # true by default
 
@@ -263,6 +272,7 @@ class Pyfig(PyfigBase):
 			mean_field_obj.kernel()
 			ii._hf = mean_field_obj
 			ii._mol = mol
+
 			# Molecular orbital (MO) coefficients 
 			# matrix where rows are atomic orbitals (AO) and columns are MOs
 			ii.mo_coef = np.array(mean_field_obj.mo_coeff)
@@ -294,7 +304,22 @@ class Pyfig(PyfigBase):
 			return True
 		
 		def post_init_update(ii):
-			return systems.get(ii.system_name, {})
+			system = systems.get(ii.system_name, {})
+			if ii.system_name and not system:
+				print('pyfig:app:post_init_update: system not found')
+				return system
+			
+			def ang2bohr(tensor):
+				return np.array(tensor) * 1.889725989
+			
+			unit = system.get('unit', None)
+			if unit is None:
+				print('pyfig:app:post_init_update: unit not specified, assuming bohr')
+				unit = 'bohr'
+
+			if system and 'a' in system and unit.lower() == 'angstrom': 
+				system['a'] = ang2bohr(system['a'])
+			return system
 
 	def update_mode(ii, mode: str, c_update: dict= None, **kw):
 		print('pyfig:update_mode\n')
@@ -315,9 +340,6 @@ class Pyfig(PyfigBase):
 				sync_every			= 5,
 				lo_ve_path      	= None,
 				compute_energy  	= True,
-				# sch_name 	= 'LambdaLR',
-				# sch_max_lr = 0.01,
-				# sch_epochs	= 1,
 			),	
 
 
@@ -341,7 +363,7 @@ class Pyfig(PyfigBase):
 		return update
 
 	class data(DataBase):
-		n_b: int = 4
+		n_b: int = 128
 		loader_n_b: int = 1
 		
 	class model(ModelBase):
@@ -364,19 +386,26 @@ class Pyfig(PyfigBase):
 		n_fbv:          int     = property(lambda _: _.n_sv*3+_.n_pv*2)
 
 	class opt(PyfigBase.opt):
-		available_opt:  list 	= ['AdaHessian', 'RAdam']
-		opt_name: 		str		= 'RAdam'
-		lr:  			float 	= 0.001
-		betas:			list	= [0.9, 0.999]
+		available_opt:  list 	= ['AdaHessian', 'RAdam', 'Apollo', 'AdaBelief', 'LBFGS', 'Adam', 'AdamW']
+		
+		opt_name: 		str		= 'AdamW'
+		
+		lr:  			float 	= 1e-3
+		init_lr: 		float 	= 1e-3
+
+		betas:			tuple	= (0.9, 0.999)
+		beta: 			float 	= 0.9
+		warm_up: 		int 	= 100
 		eps: 			float 	= 1e-4
 		weight_decay: 	float 	= 0.0
 		hessian_power: 	float 	= 1.0
 		
 	class scheduler(PyfigBase.scheduler):
-		sch_default:str 	= 'OneCycleLR'
-		sch_name: 	str		= 'OneCycleLR'
+		sch_name: 	str		= 'ExponentialLR'
 		sch_max_lr:	float 	= 0.01
 		sch_epochs: int 	= 1
+		sch_gamma: 	float 	= 0.9999
+		sch_verbose: bool 	= False
 
 	class sweep(Optuna):
 		sweep_name: 	str		= 'study'	

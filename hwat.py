@@ -149,8 +149,8 @@ class Ansatz_fb(nn.Module):
 		s_v = ii.compute_stream(s_v, p_v) # (n_b, n_u, n_det), (n_b, n_d, n_det)
 		s_u, s_d = torch.split(s_v, [ii.n_u, ii.n_d], dim=1) # (n_b, n_u, 3n_sv+2n_pv), (n_b, n_d, 3n_sv+2n_pv)
 
-		orb_u = ii.compute_orb_from_stream(s_u, ra_u, spin=0) # (n_b, det, n_u, n_u)
-		orb_d = ii.compute_orb_from_stream(s_d, ra_d, spin=1) # (n_b, det, n_d, n_d)
+		orb_u = ii.compute_orb_from_stream(s_u, ra_u, spin= 0) # (n_b, det, n_u, n_u)
+		orb_d = ii.compute_orb_from_stream(s_d, ra_d, spin= 1) # (n_b, det, n_d, n_d)
 
 		### under construction ###
 		# makes sure the final weight is in the preing loop for distribution
@@ -196,7 +196,7 @@ class Ansatz_fb(nn.Module):
 		s_w = ii.w_spin[spin](s_v).reshape(n_b, n_spin, n_spin, ii.n_det) # (n_b, n_d, n_d, n_det)
 
 		exp = torch.exp(-torch.linalg.vector_norm(ra_v, dim=-1)) # (n_b, n_spin(r), n_a)
-		sum_a_exp = exp.sum(dim=-1, keepdim=True)[..., None] # n_b, n_u(r)
+		sum_a_exp = exp.sum(dim= -1, keepdim= True)[..., None] # n_b, n_u(r)
 		
 		orb = s_w * sum_a_exp # (n_b, n_u(r), n_u(orb), n_det) 
 		return orb.transpose(-1, 1) # (n_b, n_det, n_u(r), n_u(orb))
@@ -266,22 +266,22 @@ def compute_emb(r: Tensor, terms: list, a=None):
 
 ### energy ###
 
-def compute_pe_b(r, a=None, a_z=None):
+def compute_pe_b(r, a= None, a_z= None):
 
 	rr = torch.unsqueeze(r, -2) - torch.unsqueeze(r, -3)
-	rr_len = torch.linalg.norm(rr, dim=-1)
-	pe = torch.tril(1./rr_len, diagonal=-1).sum((-1,-2))
+	rr_len = torch.linalg.norm(rr, dim= -1)
+	pe = torch.tril(1./rr_len, diagonal= -1).sum((-1,-2))
 
 	if not a is None:
-		a, a_z = a[None, :, :], a_z[None, None, :]
-		ra = torch.unsqueeze(r, -2) - torch.unsqueeze(a, -3)
+		ra = r[:, :, None, :] - a[None, None, :, :]
 		ra_len = torch.linalg.norm(ra, dim=-1)
-		pe -= (a_z/ra_len).sum((-1,-2))
+		pe -= (a_z / ra_len).sum((-1,-2))
 
 		if len(a_z) > 1:
-			aa = torch.unsqueeze(a, -2) - torch.unsqueeze(a, -3)
-			aa_len = torch.linalg.norm(aa, dim=-1)
-			pe += torch.tril(1./aa_len, diagonal=-1).sum((-1,-2))
+			aa = a[:, None, :] - a[None, :, :]
+			a_z2 = a_z[:, None] * a_z[None, :]
+			aa_len = torch.linalg.norm(aa, dim= -1)
+			pe += torch.tril(a_z2 / aa_len, diagonal= -1).sum((-1,-2))
 
 	return pe.squeeze()  
 
@@ -404,9 +404,11 @@ def init_r(center_points: Tensor, std=0.1):
 def is_a_larger(a: Tensor, b: Tensor) -> Tensor:
 	""" given a condition a > b returns 1 if true and 0 if not """
 	v = a - b # + ve when a bigger
-	a_is_larger = torch.where(torch.isnan(a), 1., (torch.sign(v) + 1.) / 2.) # 1. when a bigger
+	a_is_larger = (torch.sign(v) + 1.) / 2. # 1. when a bigger
 	b_is_larger = (a_is_larger - 1.) * -1. # 1. when b bigger
 	return a_is_larger, b_is_larger
+
+
 
 @torch.no_grad()
 def sample_b(
@@ -425,21 +427,8 @@ def sample_b(
 	!!upgrade .round() to .floor() for safe masking """
 	device, dtype = data.device, data.dtype
 
-	p_0 = 2. * model(data) # logprob
-	pre_0 = torch.zeros_like(p_0)
-	p_start = p_0.detach()
-	
-	# if pre:
-	# 	unwrap_model = unwrap(model)
-	# 	mo_u, mo_d = unwrap_model.compute_hf_orb(data) # (2, n_b, n_det, n_e, n_e)
-	# 	mo_u = torch.tensor(mo_u, device= device, dtype= dtype)
-	# 	mo_d = torch.tensor(mo_d, device= device, dtype= dtype)
-	# 	us, u = torch.slogdet(mo_u) # (n_b,)
-	# 	ds, d = torch.slogdet(mo_d) # (n_b,)
-	# 	pre_psi = us * ds * torch.exp(u + d) # (n_b,)
-	# 	pre_0 = (pre_psi.sum(1))**2
-	# 	# pre_0 = unwrap_model.hf_orb_to_prob(m_orb) # (n_b,)
-	# 	p_0 += pre_0
+	p_0: Tensor = 2. * model(data) # logprob
+	p_start = torch.exp(p_0.detach())**2
 
 	deltar = torch.clip(deltar, 0.01, 1.)
 	deltar_1 = deltar + 0.01 * torch.randn_like(deltar)
@@ -454,30 +443,12 @@ def sample_b(
 		for _ in torch.arange(1, n_corr + 1):
 			
 			data_1 = data + torch.randn_like(data, device= device, dtype= dtype, layout= torch.strided) * dr_test
-			# p_1 = torch.exp(model(data_1))**2
 			p_1 = 2. * model(data_1)
-			
-			# what are atomic orbitals? What are molecular orbitals? How do you get the ampliutude from the MOs? q
-
-			# if pre:
-			# 	mo_u, mo_d = unwrap_model.compute_hf_orb(data_1) # (2, n_b, n_det, n_e, n_e)
-			# 	mo_u = torch.tensor(mo_u, device= device, dtype= dtype)
-			# 	mo_d = torch.tensor(mo_d, device= device, dtype= dtype)
-			# 	us, u = torch.slogdet(mo_u) # (n_b,)
-			# 	ds, d = torch.slogdet(mo_d) # (n_b,)
-			# 	pre_psi = us * ds * torch.exp(u + d) # (n_b,)
-			# 	pre_1 = (pre_psi.sum(1))**2
-			# 	# pre_1 = unwrap_model.hf_orb_to_prob(m_orb) # (n_b,)
-			# 	p_1 += pre_1
-
-			# alpha = torch.rand_like(p_1, device= device, dtype= dtype)
-			# ratio = p_1 / p_0
 
 			alpha = torch.log(torch.rand_like(p_1, device= device, dtype= dtype))
 			ratio = p_1 - p_0
 			
 			a_larger, b_larger = is_a_larger(ratio, alpha)
-			# print(a_larger, b_larger, ratio, alpha, p_1, p_0, sep= '\n')
 			
 			p_0		= p_1 		* a_larger	 				+ p_0	* b_larger
 			data 	= data_1 	* a_larger[:, None, None] 	+ data	* b_larger[:, None, None]
@@ -500,7 +471,7 @@ def sample_b(
 
 		acc_all += acc_test
 	
-	return dict(data= data, acc= acc_all/2., deltar= deltar, pre_0= pre_0, p_start= p_start)
+	return dict(data= data, acc= acc_all/2., deltar= deltar, p_start= p_start, )
 
 from things.aesthetic import print_table
 from things.utils import print_tensor
@@ -509,7 +480,7 @@ def get_starting_deltar(sample_b: Callable, data: Tensor, acc_target: float= 0.5
 	
 	# from base^start to base^end in delta_steps 
 	deltar_domain = torch.logspace(
-		-3, 1, steps= 10, base= 10.,
+		-3, 0, steps= 10, base= 10.,
 		device= data.device, dtype= data.dtype, requires_grad= False,
 	)[:, None]
 	
@@ -588,7 +559,7 @@ class PyfigDataset(Dataset):
 		ii.sample = partial(sample_b, model= model, n_corr= ii.n_corr, pre= (ii.mode==c.pre_tag), unwrap= c.dist.unwrap)
 
 		from hwat import get_starting_deltar
-		deltar = get_starting_deltar(ii.sample, ii.data, acc_target= 0.5)
+		deltar = get_starting_deltar(ii.sample, ii.data, acc_target= 0.66)
 		ii.deltar = deltar.to(device= device, dtype= dtype)
 		print('dataset:init_dataset deltar ', ii.deltar)
 

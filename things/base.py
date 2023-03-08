@@ -349,8 +349,14 @@ class PyfigBase:
 			zweep = ii.zweep.split('-')
 			zweep_v = zweep[0]
 			t = zweep[-1]
-			print('pyfig:zweep: ', zweep_v, t, zweep[1:-1])  # !!! include type me 
-			return [{zweep_v: ([i] if t=='list' else int(i))} for i in zweep[1:-1]] 
+			from things.core import cmd_to_dict
+			sweep_over = []
+			for v in zweep[1:-1]:
+				cmd = f'--{zweep_v} --{v}'
+				d = cmd_to_dict(cmd)
+				sweep_over.append(d)
+			print('pyfig:zweep: ', zweep_v, t, [d.values() for d in sweep_over])  # !!! include type me 
+			return sweep_over
 		
 		elif ii.run_sweep:
 			return ii.sweep.get_sweep()

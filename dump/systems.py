@@ -10,7 +10,7 @@ systems = dict(
         n_b = 64,
         n_pre_step = 20,
         n_step = 40,
-        
+        unit = 'angstrom',
         info = 'The ground state of oxygen with two unpaired electrons, i.e. spin multiplicity of 3',
     ),
 
@@ -41,6 +41,7 @@ systems = dict(
         spin = -2,
         a = [[0,0,0],[0,0,1.2075]],
         a_z = [8.,8.],
+        unit = 'angstrom',
         info = 'The ground state of oxygen with two unpaired electrons, i.e. spin multiplicity of 3',
     ),
 
@@ -51,6 +52,7 @@ systems = dict(
         spin = 0,
         a = [[0,0,0],[0,0,1.2255]],
         a_z = [8,8],
+        unit = 'angstrom',
         info = 'The first excited state of oxygen with no overall spin, i.e. spin multiplicity of 1',
     ),
 
@@ -61,6 +63,7 @@ systems = dict(
         spin = -1,
         a = [[0,0,0],[0,0,1.1164]],
         a_z = [8,8],
+        unit = 'angstrom',
         info = 'A singly oxidized molecular oxygen with one unpaired electron, i.e. spin multiplicity of 2',
     ),
 )

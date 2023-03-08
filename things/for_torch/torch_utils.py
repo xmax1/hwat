@@ -135,27 +135,57 @@ def get_opt(
 	opt_name: str = None,
 	lr: float = None,
 	betas: tuple[float] = None,
+	beta: float = None,
 	eps: float = None,
 	weight_decay: float = None,
 	hessian_power: float = None,
 	default: str = 'RAdam',
 	**kw, 
 ) -> torch.optim.Optimizer:
+	import torch_optimizer  # pip install torch_optimizer
 
 	if opt_name.lower() == 'RAdam'.lower():
 		opt_for_model = partial(torch.optim.RAdam, lr=lr)
 
 	elif opt_name.lower() == 'Adahessian'.lower():
-		import torch_optimizer  # pip install torch_optimizer
 		opt_for_model = partial(
-    		torch_optimizer.Adahessian,
+			torch_optimizer.Adahessian,
 			lr 			 = lr,
 			betas		 = betas,
 			eps			 = eps,
 			weight_decay = weight_decay,
 			hessian_power= hessian_power
-    	)
+		)
+	elif opt_name.lower() == 'AdaBelief'.lower():
+		opt_for_model = partial(torch_optimizer.AdaBelief,
+			lr				= lr,
+			betas			= betas,
+			eps				= eps,
+			weight_decay	= weight_decay,
+			amsgrad			= False,
+			weight_decouple	= False,
+			fixed_decay		= False,
+			rectify			= False,
+		)
+	elif opt_name.lower() == 'LBFGS'.lower():
+		opt_for_model = partial(torch.optim.LBFGS,
+			  lr 			 = lr,
+		)
 	
+	elif opt_name.lower() == 'LBFGS'.lower():
+		opt_for_model = partial(torch.optim.AdamW,
+			  lr 			 = lr,
+		)
+
+	elif opt_name.lower() == 'Apollo'.lower():
+		opt_for_model = partial(torch_optimizer.Apollo,
+			lr				= lr,
+			beta			= beta,
+			eps				= eps,
+			weight_decay	= weight_decay,
+			warmup 			= 50, 
+			init_lr 		= 1e-6,	
+		)
 	else:
 		print(f'!!! opt {opt_name} not available, returning {default}')
 		opt_for_model = get_opt(opt_name=default, lr=0.001)
@@ -167,24 +197,28 @@ def get_opt(
 def get_scheduler(
 	sch_name: str = None,
 	sch_max_lr: float = None,
+	sch_gamma: float = None,
 	sch_epochs: int = None, 
+	sch_verbose: bool = None,
 	n_scheduler_step: int = None,
-	default: str = 'OneCycleLR',
 	**kw,
 ) -> torch.optim.lr_scheduler._LRScheduler:
 
 	if sch_name.lower() == 'OneCycleLR'.lower():
 		scheduler = partial(
-			torch.optim.lr_scheduler.OneCycleLR, max_lr=sch_max_lr, steps_per_epoch=n_scheduler_step, epochs=sch_epochs
+			torch.optim.lr_scheduler.OneCycleLR, 
+			max_lr=sch_max_lr, steps_per_epoch= n_scheduler_step, epochs=sch_epochs
 		)
-
-	# elif sch_name.lower() == 'LambdaLR'.lower():
-	# 	print('get_scheduler: LambdaLR')
-	# 	lambda_1 = lambda epoch: epoch // 30
-	# 	scheduler = LambdaLR(optimizer, lr_lambda=[lambda_1])
-
+	elif sch_name.lower() == 'ExponentialLR'.lower():
+		scheduler = partial(
+			torch.optim.lr_scheduler.ExponentialLR, 
+			gamma= sch_gamma, last_epoch= -1, verbose= sch_verbose, 
+		)
 	else:
-		print(f'!!! Scheduler {sch_name} not available, returning OneCycleLR ')
-		return get_scheduler(scheduler_name=default, max_lr=sch_max_lr, epochs=sch_epochs, n_step=n_scheduler_step)
+		print(f'!!! Scheduler {sch_name} not available, returning DummyScheduler ')
+		class DummySchedule(torch.optim.lr_scheduler._LRScheduler):
+			def step(self, epoch= None):
+				pass
+		scheduler = DummySchedule()
 
 	return scheduler

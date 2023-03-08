@@ -92,7 +92,7 @@ def init_exp(c: Pyfig, state: dict = None):
 	# pre_opt = get_opt(**c.opt.pre_opt.d_flat)(model.named_parameters())
 	### under construction ###
 
-	scheduler = get_scheduler(**c.scheduler.d_flat, n_scheduler_step=c.n_step)(opt)
+	scheduler = get_scheduler(**c.scheduler.d_flat, n_scheduler_step= c.n_step)(opt)
 	if state.get('scheduler'):
 		scheduler.load_state_dict(state['scheduler'])
 
@@ -131,7 +131,7 @@ def loss_fn(
 		
 		v_d |= dict(e= e, pe= pe, ke= ke)
 		
-	if c.app.loss == 'orb_mse':
+	if c.app.loss=='orb_mse':
 
 		model = c.dist.unwrap(model)
 
@@ -151,13 +151,15 @@ def loss_fn(
 
 	if loss is not None:
 
-		if step < 100:
+		if step < 200:
 			p = torch.exp(model(data))**2
-			samples = (torch.randn_like(p) + 1.).clamp_min(1e-12)
+			std = (2. * p.std()).clamp_max(1.)
+			samples = torch.randn_like(p) * std + p.mean()
 			kl_div_loss = torch.nn.functional.kl_div(input= p, target= samples, reduction= 'batchmean')
+			
 			loss += (kl_div_loss * (0.5 * loss.detach()/kl_div_loss.detach()))
-
-			v_d |= dict(kl_div_loss= kl_div_loss.item())
+			
+			v_d |= dict(kl_div_loss= kl_div_loss.item(), kl_std= std.item(), kl_samples= samples.detach(), kl_p= p.detach())
 
 		create_graph = c.opt.opt_name.lower() == 'AdaHessian'.lower()
 		c.dist.backward(loss, create_graph=create_graph)
@@ -167,9 +169,27 @@ def loss_fn(
 
 	return loss, v_d 
 
+
+def gaussian_clip(g: Tensor, cutoff: float= 2.):
+	mean = g.mean()
+	std = g.std()
+	g = g - mean			# center
+	sign = g.sign()			
+	g_abs = g.abs()
+	g_max = cutoff * std
+	no_more_clip_here = g_max / 2.
+	g_diff = g_abs - g_max
+	g_diff.clamp_min_(0.)
+	cut = torch.randn(g.shape, device= g.device, dtype= g.dtype).abs() * (g_diff / 2.)**2
+	g_cut = g_max - cut
+	g_cut.clamp_min_(no_more_clip_here)
+	return dict(g= (g_cut * sign) + mean, g_og= g)
+
+
 @torch.no_grad()
 def update_grads(step: int, model: nn.Module, v_d: dict, debug= False, **kw):
-	
+	v_d['grads_clip'] = dict()
+
 	grads = v_d.get('grads', dict())
 
 	for i, (k, p) in enumerate(model.named_parameters()):
@@ -178,19 +198,21 @@ def update_grads(step: int, model: nn.Module, v_d: dict, debug= False, **kw):
 		if g is None: 
 			g = torch.zeros_like(p)
 		
+		g_d = gaussian_clip(g, cutoff= 1.+ 10.*float(step/c.n_step))
+		g = g_d['g']
+
 		if p.grad is None:
 			p.grad = torch.zeros_like(p)
 		else:
-			p.grad.copy_(g)	
+			p.grad.copy_(g)
 
-		if debug and (step == 1 or step == 10):
-			print('update: i,k,g,p.req_grad,p: ', i, k, g.mean(), p.requires_grad, p.mean(), sep='\n')
+		v_d['grads_clip'][k] = g
 
 	return v_d
 
 @torch.no_grad()
-def update_params(model, opt, scheduler, clip_grad_norm: float= 1., **kw):
-	torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
+def update_params(model: nn.Module, opt, scheduler, clip_grad_norm: float= 1., **kw):
+	# torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad_norm)
 	scheduler.step()
 	opt.step()
 	
@@ -234,7 +256,7 @@ def run(c: Pyfig= None, c_update: dict= None, **kw):
 			)
 
 			v_d = update_grads(step, model, v_d, debug= c.debug)
-			update_params(model, opt, scheduler, clip_grad_norm= 1.)
+			update_params(model, opt, scheduler)
 			
 			v_d.update( (('params', {k:p.detach() for k,p in model.named_parameters()}),) )
 

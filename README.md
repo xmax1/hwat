@@ -3,6 +3,32 @@
 # TODO
 - sweep / hypam_opt dict
 
+# github
+
+https://github.com/jettify/pytorch-optimizer
+https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch
+https://github.com/NVIDIA/apex
+https://github.com/jettify/pytorch-optimizer
+https://panel.holoviz.org/getting_started/installation.html
+
+LiH	3.015	-8.07050(1)	-8.0687	-8.0697	-8.070696	-7.98737	-8.07054846	99.94(1)
+Li2	5.051	-14.99475(1)	-14.9921	-14.9936	-14.99507	-14.87155	-14.995447	99.47(1)
+NH3	-	-56.56295(8)	-56.5535	-56.5591	-56.5644	-56.2247	-	99.57(2)
+CH4	-	-40.51400(7)	-40.5067	-40.511	-40.515	-40.2171	-	99.66(3)
+CO	2.173	-113.3218(1)	-113.3047	-113.3154	-113.3255	-112.7871	-	99.32(3)
+N2	2.068	-109.5388(1)	-109.5224	-109.5327	-109.5425	-108.994	-109.542347	99.36(2)
+Ethene	-	-78.5844(1)	-78.5733	-78.5812	-78.5888	-78.0705	-	99.16(2)
+Methylamine	-	-95.8554(2)	-95.8437	-	-95.8653	-95.2628	-	98.36(3)
+Ozone	-	-225.4145(3)	-225.3907	-225.4119	-225.4338	-224.3526	-	98.42(3)
+Ethanol	-	-155.0308(3)	-155.0205	-	-155.0545	-154.1573	-	97.36(4)
+Bicyclobutane	-	-155.9263(6)	-155.9216	-	-155.9575	-154.9372	-	96.94(5)
+
+
+
+
+
+
+
 # RunFlow
 
 - Add _user.py file with your details
