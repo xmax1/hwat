@@ -186,14 +186,12 @@ class PyfigBase:
 		ii.setup_exp_dir(group_exp= False, force_new_id= False)
 		ii.c_init |= app_post_init | dict(exp_name= ii.exp_name, exp_id= ii.exp_id)
 
-		print('\n\npyfig:post_init:post_init_arg')
-		pprint.pprint(ii.d, sort_dicts=True)
-		print('\n\npyfig:post_init:c_init')
-		pprint.pprint(ii.c_init, sort_dicts=True)
-
-
 		if ii.debug:
 			os.environ['debug'] = 'True'
+			print('\n\npyfig:post_init:post_init_arg')
+			pprint.pprint(ii.d, sort_dicts=True)
+			print('\n\npyfig:post_init:c_init')
+			pprint.pprint(ii.c_init, sort_dicts=True)
 
 		err_path = Path(ii.paths.exp_dir, str(ii.dist.rank) + '.pyferr')
 		os.environ['PYFERR_PATH'] = str(err_path)
@@ -352,8 +350,8 @@ class PyfigBase:
 			from things.core import cmd_to_dict
 			sweep_over = []
 			for v in zweep[1:-1]:
-				cmd = f'--{zweep_v} --{v}'
-				d = cmd_to_dict(cmd)
+				cmd = f' --{zweep_v} {v}'
+				d = cmd_to_dict(cmd, ref= ii.d_flat)
 				sweep_over.append(d)
 			print('pyfig:zweep: ', zweep_v, t, [d.values() for d in sweep_over])  # !!! include type me 
 			return sweep_over

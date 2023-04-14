@@ -8,6 +8,7 @@ import functorch
 from copy import deepcopy
 import numpy as np
 from typing import Callable, Any
+import pandas as pd
 
 
 def fb_block(s_v: Tensor, p_v: Tensor, n_u: int, n_d: int):
@@ -109,7 +110,7 @@ class Ansatz_fb(nn.Module):
 		
 		n_b = r.shape[0]
 
-		ra = r[:, :, None, :] - ii.a[:, :] # (n_b, n_e, n_a, 3)
+		ra = r[:, :, None, :] - ii.a[None, None, :, :] # (n_b, n_e, n_a, 3)
 		ra_u, ra_d = torch.split(ra, [ii.n_u, ii.n_d], dim=1) # (n_b, n_u(r), n_a, 3), (n_b, n_d(r), n_a, 3)
 
 		s_v, p_v = ii.compute_embedding(r, ra) # (n_b, n_e, n_sv), (n_b, n_e, n_pv)
@@ -143,7 +144,7 @@ class Ansatz_fb(nn.Module):
 
 	def compute_orb(ii, r: Tensor) -> tuple[Tensor, Tensor]:
 
-		ra = r[:, :, None, :] - ii.a[:, :] # (n_b, n_e, n_a, 3)
+		ra = r[:, :, None, :] - ii.a[None, None, :, :] # (n_b, n_e, n_a, 3)
 		ra_u, ra_d = torch.split(ra, [ii.n_u, ii.n_d], dim=1) # (n_b, n_u(r), n_a, 3), (n_b, n_d(r), n_a, 3)
 		s_v, p_v = ii.compute_embedding(r, ra)
 		s_v = ii.compute_stream(s_v, p_v) # (n_b, n_u, n_det), (n_b, n_d, n_det)
@@ -226,21 +227,6 @@ class Ansatz_fb(nn.Module):
 		
 		return mo[0][..., :ii.n_u, :ii.n_u], mo[1][..., ii.n_u:, :ii.n_d]
 	
-	# def hf_orb_to_prob(ii, mo: np.ndarray):
-	# 	"""
-	# 	mo: 	(n_spin, n_b, n_det, n_e, n_mo)
-	# 	"""
-	# 	mo_u = diag_prod(mo[0][...,  :ii.n_u, :ii.n_u])
-	# 	mo_d = diag_prod(mo[1][..., ii.n_u: , :ii.n_d])
-	# 	psi_det = mo_u * mo_d
-	# 	psi = psi_det.sum(axis= 1) # (n_spin, n_b, n_det)
-	# 	prob = psi**2
-	# 	return prob**2
-		
-
-# def diag_prod(tensor: np.ndarray) -> np.ndarray:
-# 	return np.diagonal(tensor, axis1=-2, axis2=-1).prod(axis=-1) # (n, n)
-
 
 compute_vv = lambda v_i, v_j: torch.unsqueeze(v_i, dim=-2)-torch.unsqueeze(v_j, dim=-3)
 
@@ -274,13 +260,13 @@ def compute_pe_b(r, a= None, a_z= None):
 
 	if not a is None:
 		ra = r[:, :, None, :] - a[None, None, :, :]
-		ra_len = torch.linalg.norm(ra, dim=-1)
+		ra_len = torch.linalg.norm(ra, dim= -1)
 		pe -= (a_z / ra_len).sum((-1,-2))
 
 		if len(a_z) > 1:
 			aa = a[:, None, :] - a[None, :, :]
-			a_z2 = a_z[:, None] * a_z[None, :]
 			aa_len = torch.linalg.norm(aa, dim= -1)
+			a_z2 = a_z[:, None] * a_z[None, :]
 			pe += torch.tril(a_z2 / aa_len, diagonal= -1).sum((-1,-2))
 
 	return pe.squeeze()  
@@ -317,7 +303,7 @@ def compute_ke_b(
 
 		def grad_fn(_r: Tensor):
 			lp: Tensor = model(_r)
-			g = torch.autograd.grad(lp.sum(), _r, create_graph=True)[0]
+			g = torch.autograd.grad(lp.sum(), _r, create_graph= True)[0]
 			return g
 
 		def grad_grad_fn(_r: Tensor):
@@ -403,6 +389,7 @@ def init_r(center_points: Tensor, std=0.1):
 
 def is_a_larger(a: Tensor, b: Tensor) -> Tensor:
 	""" given a condition a > b returns 1 if true and 0 if not """
+	a = torch.where(torch.isnan(a), 1., a)
 	v = a - b # + ve when a bigger
 	a_is_larger = (torch.sign(v) + 1.) / 2. # 1. when a bigger
 	b_is_larger = (a_is_larger - 1.) * -1. # 1. when b bigger
@@ -428,7 +415,7 @@ def sample_b(
 	device, dtype = data.device, data.dtype
 
 	p_0: Tensor = 2. * model(data) # logprob
-	p_start = torch.exp(p_0.detach())**2
+	p_start = torch.exp(p_0)**2
 
 	deltar = torch.clip(deltar, 0.01, 1.)
 	deltar_1 = deltar + 0.01 * torch.randn_like(deltar)
@@ -471,15 +458,13 @@ def sample_b(
 
 		acc_all += acc_test
 	
-	return dict(data= data, acc= acc_all/2., deltar= deltar, p_start= p_start, )
+	return dict(data= data, acc= acc_all/2., deltar= deltar, p_start= p_start)
 
-from things.aesthetic import print_table
 from things.utils import print_tensor
 
 def get_starting_deltar(sample_b: Callable, data: Tensor, acc_target: float= 0.5):
 	
-	# from base^start to base^end in delta_steps 
-	deltar_domain = torch.logspace(
+	deltar_domain = torch.logspace( # from base^start to base^end in delta_steps 
 		-3, 0, steps= 10, base= 10.,
 		device= data.device, dtype= data.dtype, requires_grad= False,
 	)[:, None]
@@ -493,18 +478,11 @@ def get_starting_deltar(sample_b: Callable, data: Tensor, acc_target: float= 0.5
 			acc_all[i] += v_d['acc'].mean()
 			diff_acc_all[i] += (acc_target - v_d['acc']).abs().mean()
 
-	def pretty_table(data: list, header: list):
-		from prettytable import PrettyTable
-		t = PrettyTable(header)
-		for row in data:
-			t.add_row(row)
-		print(t)
-	
-	pretty_table(
-		[[dr.item(), acc.item(), diff.item()] 
-	    for dr,acc,diff in zip(deltar_domain, acc_all/float(n), diff_acc_all/float(n))], 
-		header= ['deltar', 'acc', 'diff']
-	)
+	print(pd.DataFrame({
+		'deltar': deltar_domain.squeeze().detach().cpu().numpy(),
+		'acc': acc_all.squeeze().detach().cpu().numpy() / float(n),
+		'diff': diff_acc_all.squeeze().detach().cpu().numpy() / float(n),
+	}).to_markdown())
 	
 	return deltar_domain[torch.argmin(diff_acc_all)]
 
@@ -541,13 +519,6 @@ class PyfigDataset(Dataset):
 			print('dataset: loading data from state')
 			data = data_loaded
 		ii.data = data.requires_grad_(False).to(device, dtype)
-
-		# deltar = torch.tensor([0.02,])
-		# deltar_loaded = state.get('deltar', None)
-		# if deltar_loaded is not None: 
-		# 	print('dataset: loading deltar from state')
-		# 	deltar = deltar_loaded
-		# ii.deltar = deltar.requires_grad_(False).to(device, dtype)
 
 		print('dataset:len ', c.n_step)
 		ii.wait = c.dist.wait_for_everyone

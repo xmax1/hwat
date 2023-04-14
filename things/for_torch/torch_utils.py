@@ -172,7 +172,7 @@ def get_opt(
 			  lr 			 = lr,
 		)
 	
-	elif opt_name.lower() == 'LBFGS'.lower():
+	elif opt_name.lower() == 'AdamW'.lower():
 		opt_for_model = partial(torch.optim.AdamW,
 			  lr 			 = lr,
 		)

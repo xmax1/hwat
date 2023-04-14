@@ -2,6 +2,7 @@
 from typing import Callable, Any
 from pathlib import Path
 import numpy as np
+import pandas as pd
 
 from things.base import PyfigBase 
 from things.utils import PlugIn
@@ -9,11 +10,17 @@ from things.utils import PlugIn
 from dump.systems import systems
 from dump.user_secret import user
 
-
+""" philosophy
+- absolutes are bad
+- every variable is set at top level 
+- art is good for two things: enjoying and burning
+- everything communicated is a string
+"""
 """
 todo
-
-
+# !! TODO: numpify tree in a general way
+# !! TODO: auto-debug
+# !! TODO: everything that is communicated is a string
 
 
 
@@ -161,15 +168,20 @@ python run.py --debug --submit --exp_name ~test --time 00:30:00 --n_b 256 --n_gp
 	--multimode opt_hypam:pre:train:eval --n_pre_step 500 --n_train_step 1000 --n_opt_hypam_step 100 --n_trials 5 --n_eval_step 100 --system_name O2_neutral_triplet --n_sv 32 --n_pv 32 --n_fb 3 --n_det 4
 
 # run
-python run.py --debug --submit --exp_name ~o2_neutral --time 10:00:00 \
+python run.py --submit --time 10:00:00 \
+	--n_b 512 --n_sv 64 --n_pv 32 --n_fb 3 --n_det 4 --n_gpu 1 \
+	--n_default_step 20 \
+	--multimode pre:train:eval --system_name O2_neutral_triplet --opt_name AdamW --exp_name ~demos
+
+python run.py --submit --time 10:00:00 \
 	--n_b 512 --n_sv 64 --n_pv 32 --n_fb 3 --n_det 4 --n_gpu 1 \
 	--n_pre_step 1000 --n_train_step 10000 --n_eval_step 100 \
-	--multimode pre:train:eval --system_name O2_neutral_triplet --opt_name Apollo --exp_name ~opt_compare
+	--multimode pre:train:eval --system_name O2_neutral_triplet --opt_name AdamW --exp_name ~demos
 
-python run.py --debug --submit --exp_name ~o2_neutral --time 06:00:00 \
+python run.py --submit --exp_name ~zap --time 10:00:00 \
 	--n_b 256 --n_sv 32 --n_pv 32 --n_fb 3 \
 	--n_pre_step 1000 --n_train_step 2000 --n_eval_step 100 --n_opt_hypam_step 500 \
-	--multimode opt_hypam:pre:train:eval --n_trials 10 --system_name O2_neutral_triplet --zweep n_gpu-1-2-4-8-10-20-int
+	--multimode opt_hypam:pre:train:eval --n_trials 10 --system_name O2_neutral_triplet --zweep n_b-128-256-1024-int
 
 
 """
@@ -195,7 +207,7 @@ class Pyfig(PyfigBase):
 	lo_ve_path: 		str 	= '' # for LOad & saVE -> lo_ve
 
 	mode: 				str		= '' # one or the other
-	multimode: 			str		= '' # pre:train:eval
+	multimode: 			str		= '' # opt_hypam:pre:train:eval
 
 	debug: 				bool    = False
 	
@@ -280,26 +292,34 @@ class Pyfig(PyfigBase):
 			mean_field_obj.analyze()
 			ii.p.if_debug_print_d({'mean_field_obj': mean_field_obj, 'mol': mol, 'mo_coef': ii.mo_coef})
 
-		def record_summary(ii, summary: dict=None, opt_obj_all: list=None) -> None:
+		def record_summary(ii, summary: dict= None, opt_obj_all: list= None) -> None:
 			import wandb
+			summary = summary or {}
 
-			columns = ["charge_spin_az0-az1-...pmu", "Energy", "Error (+/- std)"]
 			atomic_id = "-".join([str(int(float(i))) for i in ii.a_z.flatten()])
 			spin_and_charge = f'{ii.charge}_{ii.spin}'
 			geometric_hash = f'{ii.a.mean():.0f}'
 			exp_metaid = '_'.join([atomic_id, spin_and_charge, geometric_hash])
 			
 			if len(opt_obj_all)==0:
-				opt_obj_all = [0.0]
 				print('no opt_obj_all, setting to 0.0')
+				opt_obj_all = np.array([0.0, 0.0])
+			
+			columns = ["charge_spin_az0-az1-...pmu", "opt_obj", "Error (+/- std)"]
+			data = [exp_metaid, np.array(opt_obj_all).mean(), np.array(opt_obj_all).std()]
+			
+			data += list(summary.values())
+			columns += list(summary.keys())
 
-			else:
-				data = [exp_metaid, np.array(opt_obj_all).mean(), np.array(opt_obj_all).std()]
+			print('pyfig:app:record_summary:Result ')
+			for i, j in zip(columns, data):
+				print(i, j)
+			print(summary)
+			# print(pd.DataFrame.from_dict(summary | dict(zip(columns, data))).to_markdown())
 
-			print('pyfig:app:record_summary:Result ', data, sep='\n')
-			Result = wandb.Table(columns=columns)
+			Result = wandb.Table(columns= columns)
 			Result.add_data(*data)
-			wandb.log(dict(Result=Result) | (summary or {}))
+			wandb.log(dict(Result= Result) | (summary or {}))
 
 			return True
 		
@@ -415,24 +435,6 @@ class Pyfig(PyfigBase):
 			hessian_power	= 	Param(values=[0.5, 0.75, 1.], dtype=float, condition=['AdaHessian',]),
 			weight_decay	= 	Param(domain=(0.0001, 1.), dtype=float, condition=['AdaHessian',]),
 			lr				=	Param(domain=(0.0001, 1.), log=True, dtype=float),
-
-			# sch_max_lr	=	Param(values=[0.1, 0.01, 0.001], dtype=float),
-			# n_det			=	Param(values=[1, 2, 4, 8], dtype=int),
-
-			# dtype			=	Param(values=[torch.float32, torch.float64], dtype=str), # !! will not work
-			# opt_name		=	Param(values=['AdaHessian',  'RAdam'], dtype=str),
-			# weight_decay	= 	Param(domain=[0.01, 1.], dtype=float, condition=['AdaHessian',]),
-			# hessian_power	= 	Param(values=[0.5, 0.75, 1.], dtype=float, condition=['AdaHessian',]),
-			# lr			=	Param(domain=(0.0001, 1.), log=True, dtype=float),
-			# sch_max_lr	=	Param(values=[0.1, 0.01, 0.001], dtype=float),
-			# n_det			=	Param(values=[1, 2, 4, 8], dtype=int),
-			
-			# n_sv			= 	Param(values=[16, 32, 64], dtype=int),
-			# n_pv			= 	Param(values=[16, 32], dtype=int),
-			# n_det			= 	Param(values=[1, 4, 8, 16], dtype=int),
-			# n_fb			= 	Param(values=[2, 3, 4], dtype=int),
-			# n_b				= 	Param(values=[512], dtype=int),  # 64000
-			# n_opt_hypam_step= 	Param(values=[500,], dtype=int),
 		)
 
 	class dist(Naive):

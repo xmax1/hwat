@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import wandb
 import os
 from pathlib import Path
@@ -121,13 +122,14 @@ def loss_fn(
 	v_d = dict(data= data.detach()) | {k:v.detach() for k,v in kw.items() if isinstance(v, torch.Tensor)}
 
 	if c.app.compute_energy or c.app.loss=='vmc':
-		ke = compute_ke_b(model, model_fn, data, ke_method=c.model.ke_method)
+
+		ke = compute_ke_b(model, model_fn, data, ke_method= c.model.ke_method)
 		with torch.no_grad():
 			pe = compute_pe_b(data, c.app.a, c.app.a_z)
 			e = pe + ke
 			e_mean_dist = torch.mean(torch.absolute(torch.median(e) - e))
 			e_clip = torch.clip(e, min= e-5*e_mean_dist, max= e+5*e_mean_dist)
-			energy = (e_clip - e_clip.mean())
+			energy_center = (e_clip - e_clip.mean())
 		
 		v_d |= dict(e= e, pe= pe, ke= ke)
 		
@@ -144,7 +146,7 @@ def loss_fn(
 
 	elif c.app.loss=='vmc':
 
-		loss = ((energy / c.app.a_z.sum()) * model(data)).mean()
+		loss = ((energy_center / c.app.a_z.sum()) * model(data)).mean()
 		
 	else: 
 		loss = None
@@ -152,17 +154,17 @@ def loss_fn(
 	if loss is not None:
 
 		if step < 200:
-			p = torch.exp(model(data))**2
-			std = (2. * p.std()).clamp_max(1.)
-			samples = torch.randn_like(p) * std + p.mean()
+			p = 2.*model(data)
+			samples = (torch.randn_like(p) + 1.).clamp_min(1e-8)
 			kl_div_loss = torch.nn.functional.kl_div(input= p, target= samples, reduction= 'batchmean')
 			
-			loss += (kl_div_loss * (0.5 * loss.detach()/kl_div_loss.detach()))
+			loss += kl_div_loss
 			
-			v_d |= dict(kl_div_loss= kl_div_loss.item(), kl_std= std.item(), kl_samples= samples.detach(), kl_p= p.detach())
+			kl_d = dict(kl_div_loss= kl_div_loss.item(), kl_std= p.std().item(), kl_samples= samples.detach(), kl_p= p.detach())
+			v_d |= kl_d
 
 		create_graph = c.opt.opt_name.lower() == 'AdaHessian'.lower()
-		c.dist.backward(loss, create_graph=create_graph)
+		c.dist.backward(loss, create_graph= create_graph)
 
 		grads = {k: p.grad.detach() for k,p in model.named_parameters()}
 		v_d |= dict(loss= loss.item(), grads= grads)
@@ -171,24 +173,23 @@ def loss_fn(
 
 
 def gaussian_clip(g: Tensor, cutoff: float= 2.):
-	mean = g.mean()
-	std = g.std()
-	g = g - mean			# center
-	sign = g.sign()			
-	g_abs = g.abs()
-	g_max = cutoff * std
-	no_more_clip_here = g_max / 2.
-	g_diff = g_abs - g_max
-	g_diff.clamp_min_(0.)
-	cut = torch.randn(g.shape, device= g.device, dtype= g.dtype).abs() * (g_diff / 2.)**2
-	g_cut = g_max - cut
-	g_cut.clamp_min_(no_more_clip_here)
-	return dict(g= (g_cut * sign) + mean, g_og= g)
+	mean = g.mean() 
+	std  = g.std() or 1e-10 # defines where to cut
+	cen  = g - mean
+	cen_abs = cen.abs()
+
+	g_diff 		= (cen_abs - std).clamp(0.)  # all the abs grads minus the max clip
+	cut_this 	= torch.randn_like(g).abs() * g_diff/2.  # random noise times the difference
+	
+	g_new 		= (cen - cut_this).clamp_min(std) * cen.sign() + mean  # the new grads
+	
+	return dict(g= g_new, g_og= g)
 
 
 @torch.no_grad()
 def update_grads(step: int, model: nn.Module, v_d: dict, debug= False, **kw):
-	v_d['grads_clip'] = dict()
+	
+	g_d = dict()
 
 	grads = v_d.get('grads', dict())
 
@@ -198,17 +199,14 @@ def update_grads(step: int, model: nn.Module, v_d: dict, debug= False, **kw):
 		if g is None: 
 			g = torch.zeros_like(p)
 		
-		g_d = gaussian_clip(g, cutoff= 1.+ 10.*float(step/c.n_step))
-		g = g_d['g']
+		g_d[k] = gaussian_clip(g, cutoff= 2.)
 
 		if p.grad is None:
 			p.grad = torch.zeros_like(p)
 		else:
-			p.grad.copy_(g)
+			p.grad.copy_(g_d[k]['g'])
 
-		v_d['grads_clip'][k] = g
-
-	return v_d
+	return g_d
 
 @torch.no_grad()
 def update_params(model: nn.Module, opt, scheduler, clip_grad_norm: float= 1., **kw):
@@ -255,10 +253,13 @@ def run(c: Pyfig= None, c_update: dict= None, **kw):
 				this_is_noop= this_is_noop(step, c.n_step, every= c.dist.sync_every)
 			)
 
-			v_d = update_grads(step, model, v_d, debug= c.debug)
+			grads_clipped = update_grads(step, model, v_d, debug= c.debug)
 			update_params(model, opt, scheduler)
 			
-			v_d.update( (('params', {k:p.detach() for k,p in model.named_parameters()}),) )
+			v_d.update((
+				('params', {k:p.detach() for k,p in model.named_parameters()}),
+				('grads_clipped', grads_clipped),
+			))
 
 			if c.is_logging_process:
 
@@ -296,11 +297,10 @@ def run(c: Pyfig= None, c_update: dict= None, **kw):
 
 if __name__ == "__main__":
 
-	c = Pyfig(notebook=False, sweep=None, c_update=None)
+	c = Pyfig(notebook= False, sweep= None, c_update= None)
 
 	v_run = dict(mode= None, c_update=dict(lo_ve_path= None))
  
-	
 	c.multimode = c.multimode or c.mode or c.train_tag
 	print('run.py:run_loop:mode: = \n ***', c.multimode, '***')
 
@@ -309,6 +309,7 @@ if __name__ == "__main__":
 	for mode_i, mode in enumerate(c.multimode.split(':')):
 		print('run.py:run_loop:mode: = \n ***', mode_i, mode, '***')
 
+		c.update(mem, silent= not c.debug)
 		c_update = v_run.get('c_update', {})
 		c.update_mode(mode= mode, c_update= c_update)
 
@@ -317,6 +318,8 @@ if __name__ == "__main__":
 				c.lo_ve_path = None
 
 			v_run = run(c= c)
+
+
 
 		elif mode == 'opt_hypam':
 
@@ -345,8 +348,6 @@ if __name__ == "__main__":
 
 			print('passing on c_update from opt_hypam:')
 			pprint.pprint(v_run.get('c_update', {}))
-		
-		c.update(mem)
 			
 
 

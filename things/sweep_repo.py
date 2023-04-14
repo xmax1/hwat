@@ -92,8 +92,8 @@ class SweepBase(PlugIn):
 		return [{k:v for k,v in zip(sweep_keys, v_set)} for v_set in sweep_vals]
 
 
+Optuna = None
 from .core import TryImportThis
-
 with TryImportThis('optuna') as _optuna:
 	
 	from optuna import Trial

@@ -1,4 +1,4 @@
-
+import pprint
 import subprocess
 from ast import literal_eval
 from copy import deepcopy
@@ -157,7 +157,7 @@ if torch:
 
 	fancy = dict()
 
-	def compute_metrix(v: dict|list|torch.Tensor|np.ndarray, parent='', sep='/', debug=False):
+	def compute_metrix(v: dict|list|torch.Tensor|np.ndarray, parent='', sep='/', debug= False):
 
 		items = {}
 
@@ -171,16 +171,18 @@ if torch:
 		if isinstance(v, dict):
 			for k_item, v_item in v.items():
 				k = ((parent + sep) if parent else '') + k_item
-				items |= compute_metrix(v_item, parent=k, sep=sep)
+				items |= compute_metrix(v_item, parent= k)
 
 		elif isinstance(v, torch.Tensor):
 			v = v.detach().cpu().numpy()
+
+		if isinstance(v, (np.ndarray, np.generic)):
+			v = np.squeeze(v)
 
 		if np.isscalar(v):
 			items[parent] = v
 
 		elif isinstance(v, (np.ndarray, np.generic)):
-			
 			items[parent + r'_\mu$'] = v.mean()
 			if v.std() and debug:
 				items['std'+sep+parent + r'_\sigma$'] = v.std()
@@ -197,7 +199,19 @@ if torch:
 				for v, ref in zip(leaves, leaves_ref)]
 		return optree.tree_unflatten(treespec=tree_spec, leaves=leaves)
 
-
+def print_markdown(data: dict, msg= 'Table'):
+	try:
+		import pandas as pd
+		print(msg)
+		if not isinstance(data, dict):
+			print('data is not a dict')
+		
+		# !! TODO: numpify tree in a general way
+		markdown = pd.DataFrame.from_dict(data).to_markdown()
+	except Exception as e:
+		markdown = 'could not print markdown\n' + str(e)
+	print(markdown)
+	return markdown
 
 import numpy as np
 from typing import Callable
@@ -251,7 +265,17 @@ class Metrix:
 		if this_is_noop:
 			return {}
 
+		v_cpu_d.pop('grads', None)
+		v_cpu_d.pop('params', None)	
+
 		dstep = step - ii.step
+
+		## !! under construction- remove me ##
+		if dstep < 1:
+			dstep = 1
+			print_markdown({'step': step, 'dstep': dstep, 'metrix.step': ii.step}, msg= 'Metrix.tick:debug')
+		## !! under construction- remove me ##
+
 		ii.step = step
 
 		ii.t_per_it, ii.t0 = (time() - ii.t0)/dstep, time()
@@ -265,10 +289,10 @@ class Metrix:
 		ii.opt_obj_all += [ii.opt_obj,]
 
 		ii.overview = dict(
-			opt_obj= ii.opt_obj, 
-			t_per_it= ii.t_per_it,
-			max_mem_alloc= ii.max_mem_alloc,
-			opt_obj_all= ii.opt_obj_all,
+			opt_obj			= ii.opt_obj, 
+			t_per_it		= ii.t_per_it,
+			max_mem_alloc	= ii.max_mem_alloc,
+			opt_obj_all		= ii.opt_obj_all,
 		)
 
 		if ii.log_exp_stats_keys is None:
@@ -276,15 +300,23 @@ class Metrix:
 
 		log_kv = dict(filter(lambda kv: kv[0] in log_exp_stats_keys, deepcopy(v_cpu_d).items()))
 
-		ii.exp_stats = {'exp_stats': dict(all=(log_kv or {}), overview= ii.overview)}
+		ii.exp_stats = {'exp_stats': dict(all= (log_kv or {}), overview= ii.overview)}
 
 		return ii.exp_stats
 
-	def tock(ii, step, v_cpu_d):
-		import pprint
-		if step==ii.step:
-			ii.step -= 1
-		_ = ii.tick(step, v_cpu_d, this_is_noop=False)
+	def tock(ii, step, v_cpu_d: dict):
+		try: 
+			dummy = np.array([0.0, 0.0])
+
+			ii.summary = {
+				'E_{\\mu}': v_cpu_d.get('e', dummy).mean(), 
+				'E_{\\sigma}': v_cpu_d.get('e', dummy).std(),
+			}
+			print_markdown(ii.summary, msg= 'Summary')
+		except Exception as e:
+			print('could not print summary', e)
+			pprint.pprint(v_cpu_d)
+		_ = ii.tick(step, v_cpu_d, this_is_noop= False)
 		print('', 'overview (t_per_it possibly wrong print, dist issue):', sep='\n')
 		pprint.pprint({k:np.asarray(v).mean() for k,v in ii.overview.items()})
 		return ii.overview

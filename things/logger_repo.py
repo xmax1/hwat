@@ -37,7 +37,7 @@ def d_to_wb(d:dict, parent='', sep='.', items:list=None)->dict:
 		items.append((name, v))
 	return dict(items)
 
-
+Wandb = None
 with TryImportThis('wandb') as _wb:
 	
 	import wandb
@@ -45,7 +45,7 @@ with TryImportThis('wandb') as _wb:
 	class Wandb(PlugIn):
 		
 		run = None
-		entity:			str		= property(lambda _: _.p.project)
+		entity:			str		= property(lambda _: 'qm-hwat')
 		program: 		Path	= property(lambda _: Path( _.p.paths.project_dir, _.p.run_name))
 		
 		job_type:		str		= ''		

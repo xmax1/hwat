@@ -202,6 +202,7 @@ class Naive(DistBase):
 		ii.nsync += 1
 		return v_sync
 
+HFAccelerate = None
 
 from .core import TryImportThis
 with TryImportThis('accelerate') as _hf_accel:
