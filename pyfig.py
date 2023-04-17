@@ -193,10 +193,13 @@ from things.sweep_repo import SweepBase, Optuna, Param
 from things.other_repo import OptBase, DataBase, SchedulerBase, PathsBase, ModelBase
 
 
+from dump.user_secret import user, project, entity
+
 class Pyfig(PyfigBase):
 
 	user: 				str 	= user
-	project:            str     = 'hwat'
+	project:            str     = project
+	entity: 		   	str     = entity
 	env: 				str     = 'zen'
  
 	run_name:       	Path	= 'run.py'

@@ -11,6 +11,7 @@ user_secret.py
 *tmp*
 *.vscode
 papers/
+.venv
 
 # filetypes
 *.ppt

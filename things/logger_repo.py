@@ -45,14 +45,14 @@ with TryImportThis('wandb') as _wb:
 	class Wandb(PlugIn):
 		
 		run = None
-		entity:			str		= property(lambda _: 'qm-hwat')
+		entity:			str		= property(lambda _: _.p.entity)
 		program: 		Path	= property(lambda _: Path( _.p.paths.project_dir, _.p.run_name))
 		
 		job_type:		str		= ''		
 		log_mode: 		str		= ''
 		log_run_path:	str 	= ''
 		log_run_type: 	str		= property(lambda _: f'groups/{_.p.exp_name}/workspace') 
-		log_run_url: 		str		= property(lambda _: f'https://wandb.ai/{_.entity}/{_.p.project}/{_.log_run_type}')
+		log_run_url: 		str		= property(lambda _: f'https://wandb.ai/{_.p.entity}/{_.p.project}/{_.log_run_type}')
 
 
 		def get_c(ii, d:dict, parent='', sep='.', items:list=None)->dict:
